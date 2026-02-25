@@ -27,6 +27,8 @@ public struct SystemRetryClock: RetryClock {
 public struct RetryPolicy: Sendable {
     public let maxAttempts: Int
     public let retryBudget: Int?
+    public let retryNonIdempotentRequests: Bool
+    public let idempotencyHeaderNames: Set<String>
     public let baseDelayNanoseconds: UInt64
     public let maxDelayNanoseconds: UInt64
     public let maxRetryAfterNanoseconds: UInt64
@@ -38,6 +40,8 @@ public struct RetryPolicy: Sendable {
     public init(
         maxAttempts: Int = 1,
         retryBudget: Int? = nil,
+        retryNonIdempotentRequests: Bool = false,
+        idempotencyHeaderNames: Set<String> = ["Idempotency-Key"],
         baseDelayNanoseconds: UInt64 = 200_000_000,
         maxDelayNanoseconds: UInt64 = 3_000_000_000,
         maxRetryAfterNanoseconds: UInt64 = 60_000_000_000,
@@ -48,6 +52,8 @@ public struct RetryPolicy: Sendable {
     ) {
         self.maxAttempts = max(1, maxAttempts)
         self.retryBudget = retryBudget.map { max(0, $0) }
+        self.retryNonIdempotentRequests = retryNonIdempotentRequests
+        self.idempotencyHeaderNames = Set(idempotencyHeaderNames.map { $0.lowercased() })
         self.baseDelayNanoseconds = baseDelayNanoseconds
         self.maxDelayNanoseconds = max(baseDelayNanoseconds, maxDelayNanoseconds)
         self.maxRetryAfterNanoseconds = max(baseDelayNanoseconds, maxRetryAfterNanoseconds)
@@ -70,6 +76,11 @@ public struct RetryPolicy: Sendable {
         default:
             return false
         }
+    }
+
+    func shouldRetry(error: NetworkError, request: APIRequest) -> Bool {
+        guard shouldRetry(error: error) else { return false }
+        return requestIsRetryEligible(request)
     }
 
     func delayNanoseconds(
@@ -126,6 +137,18 @@ public struct RetryPolicy: Sendable {
         }
         return true
     }
+
+    private func requestIsRetryEligible(_ request: APIRequest) -> Bool {
+        if retryNonIdempotentRequests {
+            return true
+        }
+        if request.method.isRetryIdempotent {
+            return true
+        }
+
+        let requestHeaderNames = Set(request.headers.keys.map { $0.lowercased() })
+        return !idempotencyHeaderNames.isDisjoint(with: requestHeaderNames)
+    }
 }
 
 private extension RetryPolicy {
@@ -149,5 +172,16 @@ private extension UInt64 {
     func saturatingMultiply(_ rhs: UInt64) -> UInt64 {
         let (value, overflow) = multipliedReportingOverflow(by: rhs)
         return overflow ? UInt64.max : value
+    }
+}
+
+private extension URLMethod {
+    var isRetryIdempotent: Bool {
+        switch self {
+        case .get, .head, .put, .delete, .options:
+            return true
+        case .post, .patch:
+            return false
+        }
     }
 }
