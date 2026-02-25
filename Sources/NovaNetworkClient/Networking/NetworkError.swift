@@ -7,6 +7,7 @@ public enum NetworkFailureReason: Sendable, Equatable {
     case transport
     case cancelled
     case timedOut
+    case timeoutBudgetExhausted
     case rateLimited
     case coalescerLimitExceeded
     case cacheMiss
@@ -19,6 +20,7 @@ public enum NetworkError: Error {
     case decoding(underlying: any Error)
     case transport(underlying: any Error)
     case cancelled
+    case timeoutBudgetExceeded
     case circuitBreakerOpen
     case clientRateLimited(retryAfterSeconds: TimeInterval?)
 }
@@ -64,6 +66,8 @@ public extension NetworkError {
             return .transport
         case .cancelled:
             return .cancelled
+        case .timeoutBudgetExceeded:
+            return .timeoutBudgetExhausted
         case .circuitBreakerOpen:
             return .circuitBreakerOpen
         case .clientRateLimited:

@@ -70,6 +70,56 @@ private actor HeaderCapturingTransport: NetworkTransport {
     func headers() -> [String: String] { lastHeaders }
 }
 
+private final class StubStreamingTransport: StreamingNetworkTransport, @unchecked Sendable {
+    private let stateQueue = DispatchQueue(label: "StubStreamingTransport.state")
+    private let chunks: [Data]
+    private let streamError: (any Error)?
+    private var executeCalls = 0
+    private var streamCalls = 0
+    private var lastHeaders: [String: String] = [:]
+
+    init(chunks: [Data], streamError: (any Error)? = nil) {
+        self.chunks = chunks
+        self.streamError = streamError
+    }
+
+    func execute(_ request: APIRequest) async throws -> NetworkResponse {
+        stateQueue.sync {
+            executeCalls += 1
+        }
+        return NetworkResponse(statusCode: 200, headers: [:], body: Data())
+    }
+
+    func stream(_ request: APIRequest, authScope: String?) -> AsyncThrowingStream<Data, Error> {
+        stateQueue.sync {
+            streamCalls += 1
+            lastHeaders = request.headers
+        }
+        return AsyncThrowingStream { continuation in
+            for chunk in chunks {
+                continuation.yield(chunk)
+            }
+            if let streamError {
+                continuation.finish(throwing: streamError)
+            } else {
+                continuation.finish()
+            }
+        }
+    }
+
+    func streamCount() -> Int {
+        stateQueue.sync { streamCalls }
+    }
+
+    func executeCount() -> Int {
+        stateQueue.sync { executeCalls }
+    }
+
+    func headers() -> [String: String] {
+        stateQueue.sync { lastHeaders }
+    }
+}
+
 private actor EventRecorder {
     private(set) var events: [NetworkClientEvent] = []
 
@@ -204,6 +254,7 @@ struct NetworkingCoverageTests {
         #expect(NetworkError.invalidResponse.statusCode == nil)
         #expect(decoding.underlyingError != nil)
         #expect(NetworkError.cancelled.failureReason == .cancelled)
+        #expect(NetworkError.timeoutBudgetExceeded.failureReason == .timeoutBudgetExhausted)
         #expect(NetworkError.circuitBreakerOpen.failureReason == .circuitBreakerOpen)
     }
 
@@ -697,15 +748,181 @@ struct NetworkingCoverageTests {
     }
 
     @Test
+    func deadlineBudgetExhaustionStopsRetryLoop() async {
+        let transport = SequenceThrowingTransport(remainingFailures: 1, error: URLError(.timedOut))
+        let recorder = EventRecorder()
+        let client = NetworkClient(
+            transport: transport,
+            retryPolicy: .init(maxAttempts: 2, baseDelayNanoseconds: 1_000_000_000, jitterRange: nil),
+            networkObserver: { event in Task { await recorder.append(event) } }
+        )
+        let request = APIRequest(method: .get, url: URL(string: "https://example.com/deadline-budget")!)
+
+        do {
+            _ = try await client.load(
+                request: request,
+                authScope: nil,
+                options: .init(deadlineBudgetSeconds: 0.001)
+            )
+            Issue.record("Expected timeout budget exhaustion")
+        } catch let error as NetworkError {
+            #expect(error.failureReason == .timeoutBudgetExhausted)
+        } catch {
+            Issue.record("Unexpected error type")
+        }
+
+        #expect(await transport.calls() == 1)
+        let events = await recorder.snapshot()
+        #expect(events.contains { event in
+            if case .requestFailed(_, _, let reason, _) = event {
+                return reason == "timeout_budget_exhausted"
+            }
+            return false
+        })
+    }
+
+    @Test
+    func coalescingModeOverridesSupportDisabledAndCustomKeys() async throws {
+        let disabledTransport = StubNetworkTransport(delayNanos: 120_000_000, response: .success(Data("ok".utf8)))
+        let disabledClient = NetworkClient(transport: disabledTransport)
+        let request = APIRequest(method: .get, url: URL(string: "https://example.com/coalescing-disabled")!)
+
+        async let disabledA = disabledClient.load(
+            request: request,
+            authScope: nil,
+            options: .init(coalescingMode: .disabled)
+        )
+        async let disabledB = disabledClient.load(
+            request: request,
+            authScope: nil,
+            options: .init(coalescingMode: .disabled)
+        )
+        _ = try await (disabledA, disabledB)
+        #expect(await disabledTransport.calls() == 2)
+
+        let customTransport = StubNetworkTransport(delayNanos: 120_000_000, response: .success(Data("ok".utf8)))
+        let customClient = NetworkClient(transport: customTransport)
+        let first = APIRequest(
+            method: .get,
+            url: URL(string: "https://example.com/coalescing-custom")!,
+            headers: ["Accept": "application/json"]
+        )
+        let second = APIRequest(
+            method: .get,
+            url: URL(string: "https://example.com/coalescing-custom")!,
+            headers: ["Accept": "text/plain"]
+        )
+
+        async let customA = customClient.load(
+            request: first,
+            authScope: nil,
+            options: .init(coalescingMode: .custom("shared-key"))
+        )
+        async let customB = customClient.load(
+            request: second,
+            authScope: nil,
+            options: .init(coalescingMode: .custom("shared-key"))
+        )
+        _ = try await (customA, customB)
+        #expect(await customTransport.calls() == 1)
+    }
+
+    @Test
     func circuitBreakerStoreCoversDirectBranches() async {
         let store = CircuitBreakerStore()
         let policy = CircuitBreakerPolicy(scope: .host, failureThreshold: 3, cooldownSeconds: 0)
-        await store.recordFailure(identifier: "id", policy: policy)
-        await store.recordSuccess(identifier: "id")
+        _ = await store.recordFailure(identifier: "id", policy: policy)
+        _ = await store.recordSuccess(identifier: "id", policy: policy)
 
         let openPolicy = CircuitBreakerPolicy(scope: .host, failureThreshold: 1, cooldownSeconds: 0)
-        await store.recordFailure(identifier: "id2", policy: openPolicy)
-        #expect(await store.canExecute(identifier: "id2"))
+        _ = await store.recordFailure(identifier: "id2", policy: openPolicy)
+        let gate = await store.canExecute(identifier: "id2", policy: openPolicy)
+        #expect(gate.canExecute)
+    }
+
+    @Test
+    func circuitBreakerStoreCoversHalfOpenProbeAndReopenBranches() async {
+        let store = CircuitBreakerStore()
+        let policy = CircuitBreakerPolicy(scope: .host, failureThreshold: 1, cooldownSeconds: 0)
+
+        let firstOpen = await store.recordFailure(identifier: "k", policy: policy)
+        #expect(firstOpen?.fromState == .closed)
+        #expect(firstOpen?.toState == .open)
+
+        let halfOpenGate = await store.canExecute(identifier: "k", policy: policy)
+        #expect(halfOpenGate.canExecute)
+        #expect(halfOpenGate.transition?.toState == .halfOpen)
+
+        let blockedGate = await store.canExecute(identifier: "k", policy: policy)
+        #expect(!blockedGate.canExecute)
+
+        let reopen = await store.recordFailure(identifier: "k", policy: policy)
+        #expect(reopen?.fromState == .halfOpen)
+        #expect(reopen?.toState == .open)
+
+        let stillOpenNoTransition = await store.recordFailure(identifier: "k", policy: policy)
+        #expect(stillOpenNoTransition == nil)
+
+        let unknownSuccess = await store.recordSuccess(identifier: "unknown", policy: policy)
+        #expect(unknownSuccess == nil)
+    }
+
+    @Test
+    func networkObserverEmitsRetryExhaustedWhenAttemptsLimitReached() async {
+        let recorder = EventRecorder()
+        let transport = StubNetworkTransport(
+            response: Result<NetworkResponse, NetworkError>.failure(.httpStatus(code: 503, body: Data()))
+        )
+        let client = NetworkClient(
+            transport: transport,
+            retryPolicy: .init(maxAttempts: 1, jitterRange: nil),
+            networkObserver: { event in Task { await recorder.append(event) } }
+        )
+        let request = APIRequest(method: .get, url: URL(string: "https://example.com/retry-exhausted")!)
+
+        _ = try? await client.load(request: request, authScope: nil)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        let events = await recorder.snapshot()
+        let exhaustedCount = events.reduce(0) { count, event in
+            if case .retryExhausted = event { return count + 1 }
+            return count
+        }
+        #expect(exhaustedCount == 1)
+    }
+
+    @Test
+    func circuitBreakerTransitionsAreEmittedForOpenHalfOpenClosed() async {
+        let recorder = EventRecorder()
+        let transport = ScriptedNetworkTransport(
+            responses: [
+                .failure(.httpStatus(code: 503, body: Data())),
+                .success(Data("ok".utf8))
+            ]
+        )
+        let client = NetworkClient(
+            transport: transport,
+            networkObserver: { event in Task { await recorder.append(event) } }
+        )
+        let options = RequestExecutionOptions(
+            circuitBreakerPolicy: .init(scope: .host, failureThreshold: 1, cooldownSeconds: 0)
+        )
+        let request = APIRequest(method: .get, url: URL(string: "https://example.com/breaker-transitions")!)
+
+        _ = try? await client.load(request: request, authScope: nil, options: options)
+        _ = try? await client.load(request: request, authScope: nil, options: options)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        let events = await recorder.snapshot()
+        let transitions = events.compactMap { event -> (String, String)? in
+            if case .circuitBreakerTransition(_, let fromState, let toState, _, _) = event {
+                return (fromState, toState)
+            }
+            return nil
+        }
+        #expect(transitions.contains { $0.0 == "closed" && $0.1 == "open" })
+        #expect(transitions.contains { $0.0 == "open" && $0.1 == "half_open" })
+        #expect(transitions.contains { $0.0 == "half_open" && $0.1 == "closed" })
     }
 
     @Test
@@ -750,6 +967,39 @@ struct NetworkingCoverageTests {
         )
         let delay = policy.adaptiveDelayNanoseconds(forAttempt: 1, error: error, random: FixedRetryRandom(value: 1))
         #expect(delay == 2_000_000_000)
+    }
+
+    @Test
+    func retryPolicyHandlesRetryAfterHTTPDateAndRetryBudget() {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE',' dd MMM yyyy HH':'mm':'ss z"
+
+        let now = Date()
+        let retryAfterDate = now.addingTimeInterval(3)
+        let headerValue = formatter.string(from: retryAfterDate)
+        let error = NetworkError.httpStatus(
+            code: 503,
+            headers: ["Retry-After": headerValue],
+            body: Data()
+        )
+        let policy = RetryPolicy(
+            maxAttempts: 4,
+            retryBudget: 1,
+            baseDelayNanoseconds: 100_000_000,
+            maxDelayNanoseconds: 200_000_000,
+            jitterRange: nil
+        )
+
+        let delay = policy.adaptiveDelayNanoseconds(
+            forAttempt: 1,
+            error: error,
+            random: FixedRetryRandom(value: 1),
+            now: now
+        )
+        #expect(delay > 200_000_000)
+        #expect(policy.canRetry(attempt: 1, retriesUsed: 1) == false)
     }
 
     @Test
@@ -809,6 +1059,32 @@ struct NetworkingCoverageTests {
             Issue.record("Expected mapped error")
         } catch let error as DomainError {
             #expect(error == .remoteFailure)
+        } catch {
+            Issue.record("Unexpected error type")
+        }
+    }
+
+    @Test
+    func typedLoadWithErrorMapperMapsNetworkErrorPath() async {
+        enum DomainError: Error, Equatable { case mapped }
+        struct Value: Decodable, Sendable { let value: String }
+
+        let transport = StubNetworkTransport(
+            response: Result<NetworkResponse, NetworkError>.failure(.httpStatus(code: 500, body: Data()))
+        )
+        let client = NetworkClient(transport: transport)
+        let request = APIRequest(method: .get, url: URL(string: "https://example.com/mapped-typed-error")!)
+
+        do {
+            let _: Value = try await client.load(
+                request: request,
+                authScope: nil,
+                as: Value.self,
+                errorMapper: { _ in DomainError.mapped }
+            )
+            Issue.record("Expected mapped domain error")
+        } catch let error as DomainError {
+            #expect(error == .mapped)
         } catch {
             Issue.record("Unexpected error type")
         }
@@ -887,6 +1163,60 @@ struct NetworkingCoverageTests {
     }
 
     @Test
+    func loadStreamUsesStreamingTransportAndSurfacesErrors() async {
+        let transport = StubStreamingTransport(
+            chunks: [Data("a".utf8), Data("b".utf8)],
+            streamError: DummyError.boom
+        )
+        let client = NetworkClient(transport: transport)
+        let request = APIRequest(method: .post, url: URL(string: "https://example.com/streaming")!)
+        let options = RequestExecutionOptions(idempotencyPolicy: .init(keyStrategy: .fingerprintDigest))
+
+        var chunks: [Data] = []
+        do {
+            for try await chunk in client.loadStream(request: request, authScope: "scope", options: options) {
+                chunks.append(chunk)
+            }
+            Issue.record("Expected stream error")
+        } catch {
+            // expected
+        }
+
+        #expect(chunks == [Data("a".utf8), Data("b".utf8)])
+        #expect(transport.streamCount() == 1)
+        #expect(transport.executeCount() == 0)
+        #expect(transport.headers().keys.contains(where: { $0.lowercased() == "idempotency-key" }))
+    }
+
+    @Test
+    func idempotencyPolicySkipsHeaderWhenMethodUngardedOrAlreadyPresent() async throws {
+        let transport = HeaderCapturingTransport()
+        let client = NetworkClient(transport: transport)
+
+        let unguardedRequest = APIRequest(method: .get, url: URL(string: "https://example.com/idempotency-get")!)
+        _ = try await client.load(
+            request: unguardedRequest,
+            authScope: nil,
+            options: .init(idempotencyPolicy: .default)
+        )
+        let unguardedHeaders = await transport.headers()
+        #expect(!unguardedHeaders.keys.contains(where: { $0.lowercased() == "idempotency-key" }))
+
+        let existingHeaderRequest = APIRequest(
+            method: .post,
+            url: URL(string: "https://example.com/idempotency-existing")!,
+            headers: ["Idempotency-Key": "existing"]
+        )
+        _ = try await client.load(
+            request: existingHeaderRequest,
+            authScope: nil,
+            options: .init(idempotencyPolicy: .default)
+        )
+        let existingHeaders = await transport.headers()
+        #expect(existingHeaders["Idempotency-Key"] == "existing")
+    }
+
+    @Test
     func idempotencyPolicyAddsHeaderForGuardedMethod() async throws {
         let transport = HeaderCapturingTransport()
         let client = NetworkClient(transport: transport)
@@ -936,6 +1266,126 @@ struct NetworkingCoverageTests {
         #expect(coalescedJoinCount == 1)
         #expect(await recorder.retryCount() == 1)
         #expect(await recorder.cancellationReasons().contains("retrySleepCancelled"))
+    }
+
+    @Test
+    func telemetryTypesAndHookInitializerCoverExtendedContexts() {
+        let request = APIRequest(method: .get, url: URL(string: "https://example.com/telemetry-types")!)
+        let requestContext = TelemetryRequestContext(
+            key: "k",
+            attempt: 1,
+            coalescingMode: .custom,
+            request: request
+        )
+        let responseContext = TelemetryResponseContext(
+            request: requestContext,
+            response: nil,
+            error: .cancelled,
+            durationMilliseconds: 1
+        )
+        let retryExhausted = TelemetryRetryExhaustedContext(
+            key: "k",
+            attempts: 3,
+            reason: "http_status_503",
+            coalescingMode: .disabled,
+            request: request
+        )
+        let transition = TelemetryCircuitBreakerTransitionContext(
+            identifier: "host",
+            fromState: "open",
+            toState: "half_open",
+            failureCount: 3,
+            openDurationMilliseconds: 100
+        )
+
+        if case .cancelled? = responseContext.error {
+            #expect(Bool(true))
+        } else {
+            Issue.record("Expected cancelled error")
+        }
+        #expect(retryExhausted.coalescingMode == .disabled)
+        #expect(transition.toState == "half_open")
+
+        let hooks = NetworkTelemetryHooks(
+            onRequestStart: { _ in },
+            onRequestEnd: { _ in },
+            onCoalescerEvent: { _ in },
+            onRetryScheduled: { _ in },
+            onRetryExhausted: { _ in },
+            onRequestCancelled: { _ in },
+            onQueueMetrics: { _ in },
+            onCircuitBreakerTransition: { _ in }
+        )
+        #expect(hooks.onRetryExhausted != nil)
+        #expect(hooks.onCircuitBreakerTransition != nil)
+    }
+
+    @Test
+    func cachePolicyBranchesCoverVaryAndServerCacheDirectives() async throws {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE',' dd MMM yyyy HH':'mm':'ss z"
+        let expires = formatter.string(from: Date().addingTimeInterval(120))
+        let transport = ScriptedNetworkTransport(
+            responses: [
+                .success(
+                    NetworkResponse(
+                        statusCode: 200,
+                        headers: [
+                            "Cache-Control": "max-age=0, stale-while-revalidate=30",
+                            "Vary": "Accept-Language",
+                            "Expires": expires
+                        ],
+                        body: Data("v1".utf8)
+                    )
+                ),
+                .success(
+                    NetworkResponse(
+                        statusCode: 200,
+                        headers: [
+                            "Cache-Control": "max-age=0, stale-while-revalidate=30",
+                            "Vary": "Accept-Language"
+                        ],
+                        body: Data("v2".utf8)
+                    )
+                ),
+                .success(
+                    NetworkResponse(
+                        statusCode: 200,
+                        headers: [
+                            "Cache-Control": "max-age=0, stale-while-revalidate=30",
+                            "Vary": "Accept-Language"
+                        ],
+                        body: Data("v2".utf8)
+                    )
+                )
+            ]
+        )
+        let client = NetworkClient(
+            transport: transport,
+            fingerprintPolicy: .init(headerInclusion: .none)
+        )
+        let url = URL(string: "https://example.com/cache-vary-branches")!
+        let en = APIRequest(method: .get, url: url, headers: ["Accept-Language": "en"])
+        let fr = APIRequest(method: .get, url: url, headers: ["Accept-Language": "fr"])
+
+        let first = try await client.load(request: en, authScope: nil as String?, cachePolicy: CachePolicy.cacheFirst(maxAge: 60))
+        let second = try await client.load(request: en, authScope: nil as String?, cachePolicy: CachePolicy.cacheFirst(maxAge: 0))
+        let third = try await client.load(request: fr, authScope: nil as String?, cachePolicy: CachePolicy.cacheFirst(maxAge: 60))
+        let fourth = try await client.load(
+            request: fr,
+            authScope: nil as String?,
+            cachePolicy: CachePolicy.cacheFirst(maxAge: 60)
+        )
+
+        #expect(first == Data("v1".utf8))
+        #expect(second == Data("v1".utf8))
+        #expect(third == Data("v2".utf8))
+        #expect(fourth == Data("v2".utf8))
+        let callCount = await transport.calls()
+        #expect(callCount >= 2)
+        #expect(callCount <= 3)
     }
 
     @Test

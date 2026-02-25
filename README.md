@@ -44,7 +44,7 @@ targets: [
 - Basic HTTP cache directive support (`Cache-Control`, `Expires`, `Vary`) for freshness and variant checks.
 - Configurable fingerprint policy (`query`, `headers`, `body`).
 - Coalescer limits (`maxInFlightKeys`, `maxWaitersPerKey`, `inFlightTimeout`).
-- Per-request execution options (priority, per-request limits override, capacity scheduling, circuit breaker).
+- Per-request execution options (priority, per-request limits override, capacity scheduling, deadline budget, coalescing mode, circuit breaker).
 - Client-side per-key rate limiting (`RateLimitPolicy`).
 - Request middleware pipeline (`beforeSend` / `afterResponse`).
 - Cancellation policies:
@@ -63,7 +63,7 @@ targets: [
 - Coalescer metrics (`hit/miss/cancellation/completion`) and observer events.
 - Async event stream (`events() -> AsyncStream<NetworkClientEvent>`).
 - In-flight diagnostics (`inFlightRequests()`).
-- Optional telemetry hooks for tracing/metrics adapters, including coalescer, queue metrics, retry, and cancellation lifecycle callbacks.
+- Optional telemetry hooks for tracing/metrics adapters, including coalescer, queue metrics, retry, retry exhaustion, cancellation, and circuit-breaker transition callbacks.
 
 ## Quick Start
 
@@ -124,6 +124,8 @@ let data = try await client.load(
         coalescerLimitsOverride: .init(maxInFlightKeys: 8),
         priority: .high,
         capacityScheduling: .queueByPriority,
+        coalescingMode: .custom("feed:primary"),
+        deadlineBudgetSeconds: 2.0,
         circuitBreakerPolicy: CircuitBreakerPolicy(
             scope: .host,
             failureThreshold: 3,
@@ -234,6 +236,8 @@ let client = NetworkClient(
 | Retriable error + attempts remaining | Retries with exponential backoff (optional jitter) |
 | Non-idempotent request without idempotency key | No retry by default (can be overridden in `RetryPolicy`) |
 | Non-retriable error | Fails immediately |
+| Deadline budget exhausted | Request fails with timeout budget error and no additional retry attempt |
+| `coalescingMode: .disabled` | Identical concurrent requests execute independently |
 
 ## Observability
 
