@@ -40,6 +40,7 @@ public final class NetworkClient: @unchecked Sendable {
     private let eventHub = NetworkClientEventHub()
     private let circuitBreakerStore = CircuitBreakerStore()
     private let rateLimiter = KeyRateLimiter()
+    private let runtimePolicyStore = RuntimePolicyStore()
 
     private struct RequestDeadline: Sendable {
         let deadlineNanoseconds: UInt64
@@ -82,7 +83,8 @@ public final class NetworkClient: @unchecked Sendable {
             policy: cancellationPolicy,
             limits: coalescerLimits,
             observer: combinedObserver,
-            queueMetricsObserver: queueMetricsObserver
+            queueMetricsObserver: queueMetricsObserver,
+            overflowFailureFactory: { NetworkError.coalescerLimitExceeded }
         )
         self.fingerprintPolicy = fingerprintPolicy
         self.retryPolicy = retryPolicy
@@ -106,6 +108,18 @@ public final class NetworkClient: @unchecked Sendable {
                 continuation.finish()
             }
         }
+    }
+
+    public func updateRuntimePolicy(
+        _ policy: NetworkClientRuntimePolicy,
+        scope: RuntimePolicyScope = .global
+    ) async {
+        let changedFields = await runtimePolicyStore.update(policy: policy, scope: scope)
+        let scopeName = runtimePolicyScopeName(scope)
+        emit(.requestPolicyUpdated(scope: scopeName, changedFields: changedFields))
+        telemetryHooks?.onPolicyUpdated?(
+            TelemetryPolicyUpdateContext(scope: scopeName, changedFields: changedFields)
+        )
     }
 
     public func load(
@@ -447,7 +461,13 @@ public final class NetworkClient: @unchecked Sendable {
         cachedETag: String?,
         options: RequestExecutionOptions
     ) async throws -> Data {
-        let requestDeadline = makeDeadline(from: options.deadlineBudgetSeconds)
+        let resolvedRuntimePolicy = await runtimePolicyStore.resolve(url: request.url)
+        let hasRequestOverrides = options.deadlineBudgetSeconds != nil || options.circuitBreakerPolicy != nil
+        let resolvedRetryPolicy = resolvedRuntimePolicy.policy.retryPolicy ?? retryPolicy
+        let resolvedDeadlineBudget = options.deadlineBudgetSeconds ?? resolvedRuntimePolicy.policy.deadlineBudgetSeconds
+        let resolvedBreakerPolicy = options.circuitBreakerPolicy ?? resolvedRuntimePolicy.policy.circuitBreakerPolicy
+        let policyScope = hasRequestOverrides ? RuntimePolicySource.requestOverride : resolvedRuntimePolicy.source
+        let requestDeadline = makeDeadline(from: resolvedDeadlineBudget)
         let telemetryCoalescingMode = telemetryCoalescingMode(for: options.coalescingMode)
         let coalescingKey = resolvedCoalescingKey(baseKey: key, mode: options.coalescingMode)
 
@@ -457,7 +477,7 @@ public final class NetworkClient: @unchecked Sendable {
             throw NetworkError.clientRateLimited(retryAfterSeconds: retryAfter)
         }
 
-        if let breakerPolicy = options.circuitBreakerPolicy {
+        if let breakerPolicy = resolvedBreakerPolicy {
             let identifier = circuitBreakerIdentifier(for: request, key: key, policy: breakerPolicy)
             let decision = await circuitBreakerStore.canExecute(identifier: identifier, policy: breakerPolicy)
             if let transition = decision.transition {
@@ -492,18 +512,19 @@ public final class NetworkClient: @unchecked Sendable {
                     request: preparedRequest,
                     authScope: authScope,
                     transport: self.transport,
-                    retryPolicy: self.retryPolicy,
+                    retryPolicy: resolvedRetryPolicy,
                     retryClock: self.retryClock,
                     retryRandomGenerator: self.retryRandomGenerator,
                     middlewares: self.middlewares,
                     telemetryHooks: self.telemetryHooks,
                     observer: self.networkObserver,
                     deadline: requestDeadline,
-                    coalescingMode: telemetryCoalescingMode
+                    coalescingMode: telemetryCoalescingMode,
+                    policyScope: policyScope.rawValue
                 )
             }
         } catch {
-            if let breakerPolicy = options.circuitBreakerPolicy,
+            if let breakerPolicy = resolvedBreakerPolicy,
                let networkError = error as? NetworkError,
                shouldCountFailureForCircuitBreaker(networkError) {
                 let identifier = circuitBreakerIdentifier(for: request, key: key, policy: breakerPolicy)
@@ -542,7 +563,7 @@ public final class NetworkClient: @unchecked Sendable {
             await cache.set(cached, forKey: key)
         }
 
-        if let breakerPolicy = options.circuitBreakerPolicy {
+        if let breakerPolicy = resolvedBreakerPolicy {
             let identifier = circuitBreakerIdentifier(for: request, key: key, policy: breakerPolicy)
             if let transition = await circuitBreakerStore.recordSuccess(identifier: identifier, policy: breakerPolicy) {
                 emitCircuitBreakerTransition(transition)
@@ -624,6 +645,17 @@ public final class NetworkClient: @unchecked Sendable {
         }
     }
 
+    private func runtimePolicyScopeName(_ scope: RuntimePolicyScope) -> String {
+        switch scope {
+        case .global:
+            return RuntimePolicySource.global.rawValue
+        case .host:
+            return RuntimePolicySource.host.rawValue
+        case .endpoint:
+            return RuntimePolicySource.endpoint.rawValue
+        }
+    }
+
     private func makeDeadline(from budgetSeconds: TimeInterval?) -> RequestDeadline? {
         guard let budgetSeconds else { return nil }
         let budgetNanoseconds = UInt64(budgetSeconds * 1_000_000_000)
@@ -676,7 +708,8 @@ public final class NetworkClient: @unchecked Sendable {
         telemetryHooks: NetworkTelemetryHooks?,
         observer: (@Sendable (NetworkClientEvent) -> Void)?,
         deadline: RequestDeadline?,
-        coalescingMode: TelemetryCoalescingMode
+        coalescingMode: TelemetryCoalescingMode,
+        policyScope: String
     ) async -> Result<NetworkResponse, NetworkError> {
         var attempt = 1
         var retriesUsed = 0
@@ -798,7 +831,7 @@ public final class NetworkClient: @unchecked Sendable {
                     )
                     return .failure(error)
                 }
-                if !retryPolicy.canRetry(attempt: attempt, retriesUsed: retriesUsed) {
+                if !retryPolicy.canRetry(attempt: attempt, retriesUsed: retriesUsed, error: error) {
                     observer?(.retryExhausted(key: key, attempts: attempt, reason: reason))
                     telemetryHooks?.onRetryExhausted?(
                         TelemetryRetryExhaustedContext(
@@ -820,12 +853,28 @@ public final class NetworkClient: @unchecked Sendable {
                     return .failure(error)
                 }
 
-                let delay = retryPolicy.adaptiveDelayNanoseconds(
+                let retryDecision = retryPolicy.delayDecision(
                     forAttempt: attempt,
                     error: error,
                     random: retryRandomGenerator
                 )
-                if !canScheduleRetry(withDelayNanoseconds: delay, deadline: deadline) {
+                if !canScheduleRetry(withDelayNanoseconds: retryDecision.delayNanoseconds, deadline: deadline) {
+                    observer?(
+                        .retrySkipped(
+                            key: key,
+                            attempt: attempt,
+                            reason: "budget_insufficient"
+                        )
+                    )
+                    telemetryHooks?.onRetrySkipped?(
+                        TelemetryRetrySkippedContext(
+                            key: key,
+                            attempt: attempt,
+                            reason: "budget_insufficient",
+                            coalescingMode: coalescingMode,
+                            request: request
+                        )
+                    )
                     observer?(
                         .requestFailed(
                             key: key,
@@ -840,7 +889,7 @@ public final class NetworkClient: @unchecked Sendable {
                     .retryScheduled(
                         key: key,
                         nextAttempt: attempt + 1,
-                        delayMilliseconds: Double(delay) / 1_000_000,
+                        delayMilliseconds: Double(retryDecision.delayNanoseconds) / 1_000_000,
                         reason: reason
                     )
                 )
@@ -849,14 +898,17 @@ public final class NetworkClient: @unchecked Sendable {
                         key: key,
                         attempt: attempt,
                         nextAttempt: attempt + 1,
-                        delayMilliseconds: Double(delay) / 1_000_000,
+                        delayMilliseconds: Double(retryDecision.delayNanoseconds) / 1_000_000,
                         reason: reason,
+                        scheduleSource: retryDecision.source.rawValue,
+                        retryProfile: retryDecision.category.rawValue,
+                        policyScope: policyScope,
                         coalescingMode: coalescingMode,
                         request: request
                     )
                 )
                 do {
-                    try await retryClock.sleep(nanoseconds: delay)
+                    try await retryClock.sleep(nanoseconds: retryDecision.delayNanoseconds)
                 } catch {
                     observer?(
                         .requestFailed(
@@ -925,7 +977,7 @@ public final class NetworkClient: @unchecked Sendable {
                     )
                     return .failure(wrapped)
                 }
-                if !retryPolicy.canRetry(attempt: attempt, retriesUsed: retriesUsed) {
+                if !retryPolicy.canRetry(attempt: attempt, retriesUsed: retriesUsed, error: wrapped) {
                     observer?(.retryExhausted(key: key, attempts: attempt, reason: reason))
                     telemetryHooks?.onRetryExhausted?(
                         TelemetryRetryExhaustedContext(
@@ -947,12 +999,28 @@ public final class NetworkClient: @unchecked Sendable {
                     return .failure(wrapped)
                 }
 
-                let delay = retryPolicy.adaptiveDelayNanoseconds(
+                let retryDecision = retryPolicy.delayDecision(
                     forAttempt: attempt,
                     error: wrapped,
                     random: retryRandomGenerator
                 )
-                if !canScheduleRetry(withDelayNanoseconds: delay, deadline: deadline) {
+                if !canScheduleRetry(withDelayNanoseconds: retryDecision.delayNanoseconds, deadline: deadline) {
+                    observer?(
+                        .retrySkipped(
+                            key: key,
+                            attempt: attempt,
+                            reason: "budget_insufficient"
+                        )
+                    )
+                    telemetryHooks?.onRetrySkipped?(
+                        TelemetryRetrySkippedContext(
+                            key: key,
+                            attempt: attempt,
+                            reason: "budget_insufficient",
+                            coalescingMode: coalescingMode,
+                            request: request
+                        )
+                    )
                     observer?(
                         .requestFailed(
                             key: key,
@@ -967,7 +1035,7 @@ public final class NetworkClient: @unchecked Sendable {
                     .retryScheduled(
                         key: key,
                         nextAttempt: attempt + 1,
-                        delayMilliseconds: Double(delay) / 1_000_000,
+                        delayMilliseconds: Double(retryDecision.delayNanoseconds) / 1_000_000,
                         reason: reason
                     )
                 )
@@ -976,14 +1044,17 @@ public final class NetworkClient: @unchecked Sendable {
                         key: key,
                         attempt: attempt,
                         nextAttempt: attempt + 1,
-                        delayMilliseconds: Double(delay) / 1_000_000,
+                        delayMilliseconds: Double(retryDecision.delayNanoseconds) / 1_000_000,
                         reason: reason,
+                        scheduleSource: retryDecision.source.rawValue,
+                        retryProfile: retryDecision.category.rawValue,
+                        policyScope: policyScope,
                         coalescingMode: coalescingMode,
                         request: request
                     )
                 )
                 do {
-                    try await retryClock.sleep(nanoseconds: delay)
+                    try await retryClock.sleep(nanoseconds: retryDecision.delayNanoseconds)
                 } catch {
                     observer?(
                         .requestFailed(
@@ -1075,6 +1146,8 @@ public final class NetworkClient: @unchecked Sendable {
             return "timeout_budget_exhausted"
         case .circuitBreakerOpen:
             return "circuit_open"
+        case .coalescerLimitExceeded:
+            return "coalescer_limit_exceeded"
         case .clientRateLimited:
             return "client_rate_limited"
         }

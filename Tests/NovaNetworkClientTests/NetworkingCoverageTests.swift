@@ -134,18 +134,24 @@ private actor EventRecorder {
 private actor TelemetryRecorder {
     private(set) var coalescerEvents: [TelemetryCoalescerContext] = []
     private(set) var retryEvents: [TelemetryRetryContext] = []
+    private(set) var retrySkippedEvents: [TelemetryRetrySkippedContext] = []
     private(set) var cancellationEvents: [TelemetryCancellationContext] = []
     private(set) var queueEvents: [TelemetryQueueContext] = []
+    private(set) var policyUpdatedEvents: [TelemetryPolicyUpdateContext] = []
 
     func appendCoalescer(_ event: TelemetryCoalescerContext) { coalescerEvents.append(event) }
     func appendRetry(_ event: TelemetryRetryContext) { retryEvents.append(event) }
+    func appendRetrySkipped(_ event: TelemetryRetrySkippedContext) { retrySkippedEvents.append(event) }
     func appendCancellation(_ event: TelemetryCancellationContext) { cancellationEvents.append(event) }
     func appendQueue(_ event: TelemetryQueueContext) { queueEvents.append(event) }
+    func appendPolicyUpdated(_ event: TelemetryPolicyUpdateContext) { policyUpdatedEvents.append(event) }
 
     func coalescerTypes() -> [TelemetryCoalescerEventType] { coalescerEvents.map(\.type) }
     func retryCount() -> Int { retryEvents.count }
     func cancellationReasons() -> [String] { cancellationEvents.map(\.reason) }
     func queueSnapshot() -> [TelemetryQueueContext] { queueEvents }
+    func retrySnapshot() -> [TelemetryRetryContext] { retryEvents }
+    func policyUpdatedSnapshot() -> [TelemetryPolicyUpdateContext] { policyUpdatedEvents }
 }
 
 private actor MiddlewareProbe {
@@ -970,6 +976,29 @@ struct NetworkingCoverageTests {
     }
 
     @Test
+    func retryDecisionUsesServerRetryAfterSourceWhenAvailable() {
+        let policy = RetryPolicy(
+            maxAttempts: 3,
+            baseDelayNanoseconds: 100_000_000,
+            maxDelayNanoseconds: 200_000_000,
+            jitterRange: nil
+        )
+        let error = NetworkError.httpStatus(
+            code: 429,
+            headers: ["Retry-After": "1"],
+            body: Data()
+        )
+        let decision = policy.delayDecision(
+            forAttempt: 1,
+            error: error,
+            random: FixedRetryRandom(value: 1)
+        )
+        #expect(decision.source == .serverRetryAfter)
+        #expect(decision.delayNanoseconds == 1_000_000_000)
+        #expect(decision.category == .rateLimited)
+    }
+
+    @Test
     func retryPolicyHandlesRetryAfterHTTPDateAndRetryBudget() {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -1297,6 +1326,17 @@ struct NetworkingCoverageTests {
             failureCount: 3,
             openDurationMilliseconds: 100
         )
+        let retrySkipped = TelemetryRetrySkippedContext(
+            key: "k",
+            attempt: 1,
+            reason: "budget_insufficient",
+            coalescingMode: .default,
+            request: request
+        )
+        let policyUpdated = TelemetryPolicyUpdateContext(
+            scope: "host",
+            changedFields: ["retry_policy"]
+        )
 
         if case .cancelled? = responseContext.error {
             #expect(Bool(true))
@@ -1305,6 +1345,8 @@ struct NetworkingCoverageTests {
         }
         #expect(retryExhausted.coalescingMode == .disabled)
         #expect(transition.toState == "half_open")
+        #expect(retrySkipped.reason == "budget_insufficient")
+        #expect(policyUpdated.scope == "host")
 
         let hooks = NetworkTelemetryHooks(
             onRequestStart: { _ in },
@@ -1312,12 +1354,108 @@ struct NetworkingCoverageTests {
             onCoalescerEvent: { _ in },
             onRetryScheduled: { _ in },
             onRetryExhausted: { _ in },
+            onRetrySkipped: { _ in },
             onRequestCancelled: { _ in },
             onQueueMetrics: { _ in },
-            onCircuitBreakerTransition: { _ in }
+            onCircuitBreakerTransition: { _ in },
+            onPolicyUpdated: { _ in }
         )
         #expect(hooks.onRetryExhausted != nil)
         #expect(hooks.onCircuitBreakerTransition != nil)
+        #expect(hooks.onRetrySkipped != nil)
+        #expect(hooks.onPolicyUpdated != nil)
+    }
+
+    @Test
+    func runtimePolicyUpdateCanBlockAndRestoreRequests() async throws {
+        let transport = StubNetworkTransport(response: .success(Data("ok".utf8)))
+        let client = NetworkClient(transport: transport)
+        let request = APIRequest(method: .get, url: URL(string: "https://example.com/runtime-global")!)
+
+        await client.updateRuntimePolicy(.init(deadlineBudgetSeconds: 0), scope: .global)
+        do {
+            _ = try await client.load(request: request, authScope: nil)
+            Issue.record("Expected deadline budget failure from runtime policy")
+        } catch let error as NetworkError {
+            #expect(error.failureReason == .timeoutBudgetExhausted)
+        } catch {
+            Issue.record("Unexpected error")
+        }
+
+        await client.updateRuntimePolicy(.init(), scope: .global)
+        let data = try await client.load(request: request, authScope: nil)
+        #expect(data == Data("ok".utf8))
+    }
+
+    @Test
+    func runtimePolicyEndpointOverridesHostAndGlobal() async throws {
+        let transport = StubNetworkTransport(response: .success(Data("ok".utf8)))
+        let client = NetworkClient(transport: transport)
+
+        await client.updateRuntimePolicy(.init(deadlineBudgetSeconds: 0), scope: .global)
+        await client.updateRuntimePolicy(.init(deadlineBudgetSeconds: 1), scope: .host("example.com"))
+        await client.updateRuntimePolicy(
+            .init(deadlineBudgetSeconds: 0),
+            scope: .endpoint(host: "example.com", pathPrefix: "/blocked")
+        )
+
+        let allowed = APIRequest(method: .get, url: URL(string: "https://example.com/allowed")!)
+        let blocked = APIRequest(method: .get, url: URL(string: "https://example.com/blocked/path")!)
+        let allowedData = try await client.load(request: allowed, authScope: nil)
+        #expect(allowedData == Data("ok".utf8))
+
+        do {
+            _ = try await client.load(request: blocked, authScope: nil)
+            Issue.record("Expected endpoint-scoped budget failure")
+        } catch let error as NetworkError {
+            #expect(error.failureReason == .timeoutBudgetExhausted)
+        } catch {
+            Issue.record("Unexpected error")
+        }
+    }
+
+    @Test
+    func telemetryRetryScheduledIncludesScopeSourceAndProfile() async throws {
+        let recorder = TelemetryRecorder()
+        let transport = SequenceThrowingTransport(remainingFailures: 1, error: URLError(.timedOut))
+        let client = NetworkClient(
+            transport: transport,
+            retryPolicy: .init(maxAttempts: 1, jitterRange: nil),
+            telemetryHooks: .init(
+                onRetryScheduled: { context in Task { await recorder.appendRetry(context) } },
+                onPolicyUpdated: { context in Task { await recorder.appendPolicyUpdated(context) } }
+            )
+        )
+        await client.updateRuntimePolicy(
+            .init(
+                retryPolicy: .init(
+                    maxAttempts: 2,
+                    jitterRange: nil,
+                    adaptiveProfiles: [
+                        .timeout: .init(maxAttempts: 2, baseDelayNanoseconds: 100_000_000, jitterRange: nil)
+                    ]
+                )
+            ),
+            scope: .host("example.com")
+        )
+
+        let request = APIRequest(method: .get, url: URL(string: "https://example.com/telemetry-runtime-retry")!)
+        _ = try await client.load(request: request, authScope: nil)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        let retryEvents = await recorder.retrySnapshot()
+        #expect(retryEvents.count == 1)
+        guard let retry = retryEvents.first else {
+            Issue.record("Expected one retry event")
+            return
+        }
+        #expect(retry.scheduleSource == RetryScheduleSource.policy.rawValue)
+        #expect(retry.retryProfile == RetryFailureCategory.timeout.rawValue)
+        #expect(retry.policyScope == RuntimePolicySource.host.rawValue)
+
+        let updateEvents = await recorder.policyUpdatedSnapshot()
+        #expect(updateEvents.count == 1)
+        #expect(updateEvents.first?.scope == RuntimePolicySource.host.rawValue)
     }
 
     @Test

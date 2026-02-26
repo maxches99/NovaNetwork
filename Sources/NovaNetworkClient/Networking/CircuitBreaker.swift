@@ -33,19 +33,22 @@ public struct CircuitBreakerTransition: Sendable {
     }
 }
 
-public struct CircuitBreakerPolicy: Sendable {
+public struct CircuitBreakerPolicy: Sendable, Equatable {
     public let scope: CircuitBreakerScope
     public let failureThreshold: Int
     public let cooldownSeconds: TimeInterval
+    public let halfOpenJitterSeconds: TimeInterval
 
     public init(
         scope: CircuitBreakerScope = .host,
         failureThreshold: Int = 3,
-        cooldownSeconds: TimeInterval = 10
+        cooldownSeconds: TimeInterval = 10,
+        halfOpenJitterSeconds: TimeInterval = 0
     ) {
         self.scope = scope
         self.failureThreshold = max(1, failureThreshold)
         self.cooldownSeconds = max(0, cooldownSeconds)
+        self.halfOpenJitterSeconds = max(0, halfOpenJitterSeconds)
     }
 }
 
@@ -63,6 +66,14 @@ actor CircuitBreakerStore {
     }
 
     private var entries: [String: Entry] = [:]
+
+    private func jitterNanoseconds(identifier: String, policy: CircuitBreakerPolicy) -> UInt64 {
+        guard policy.halfOpenJitterSeconds > 0 else { return 0 }
+        let maxJitterNanoseconds = UInt64(policy.halfOpenJitterSeconds * 1_000_000_000)
+        guard maxJitterNanoseconds > 0 else { return 0 }
+        let hash = UInt64(bitPattern: Int64(identifier.hashValue))
+        return hash % (maxJitterNanoseconds + 1)
+    }
 
     func canExecute(identifier: String, policy: CircuitBreakerPolicy) -> GateDecision {
         let now = DispatchTime.now().uptimeNanoseconds
@@ -138,13 +149,14 @@ actor CircuitBreakerStore {
         )
         let now = DispatchTime.now().uptimeNanoseconds
         let cooldownNanoseconds = UInt64(policy.cooldownSeconds * 1_000_000_000)
+        let jitterNanoseconds = jitterNanoseconds(identifier: identifier, policy: policy)
         let openDurationMilliseconds = policy.cooldownSeconds * 1_000
 
         switch current.state {
         case .halfOpen:
             current.state = .open
             current.failureCount = max(1, current.failureCount)
-            current.openUntilNanoseconds = now + cooldownNanoseconds
+            current.openUntilNanoseconds = now.saturatingAdd(cooldownNanoseconds).saturatingAdd(jitterNanoseconds)
             current.halfOpenProbeInFlight = false
             entries[identifier] = current
             return CircuitBreakerTransition(
@@ -155,7 +167,7 @@ actor CircuitBreakerStore {
                 openDurationMilliseconds: openDurationMilliseconds
             )
         case .open:
-            current.openUntilNanoseconds = now + cooldownNanoseconds
+            current.openUntilNanoseconds = now.saturatingAdd(cooldownNanoseconds).saturatingAdd(jitterNanoseconds)
             entries[identifier] = current
             return nil
         case .closed:
@@ -164,7 +176,7 @@ actor CircuitBreakerStore {
             current.halfOpenProbeInFlight = false
             if nextFailureCount >= policy.failureThreshold {
                 current.state = .open
-                current.openUntilNanoseconds = now + cooldownNanoseconds
+                current.openUntilNanoseconds = now.saturatingAdd(cooldownNanoseconds).saturatingAdd(jitterNanoseconds)
                 entries[identifier] = current
                 return CircuitBreakerTransition(
                     identifier: identifier,
@@ -177,5 +189,12 @@ actor CircuitBreakerStore {
             entries[identifier] = current
             return nil
         }
+    }
+}
+
+private extension UInt64 {
+    func saturatingAdd(_ rhs: UInt64) -> UInt64 {
+        let (value, overflow) = addingReportingOverflow(rhs)
+        return overflow ? UInt64.max : value
     }
 }

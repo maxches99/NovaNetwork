@@ -29,18 +29,26 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
     }
 
     public struct Limits: Sendable {
+        public enum WaiterOverflowBehavior: Sendable {
+            case bypass
+            case fail
+        }
+
         public let maxInFlightKeys: Int?
         public let maxWaitersPerKey: Int?
         public let inFlightTimeout: TimeInterval?
+        public let waiterOverflowBehavior: WaiterOverflowBehavior
 
         public init(
             maxInFlightKeys: Int? = nil,
             maxWaitersPerKey: Int? = nil,
-            inFlightTimeout: TimeInterval? = nil
+            inFlightTimeout: TimeInterval? = nil,
+            waiterOverflowBehavior: WaiterOverflowBehavior = .bypass
         ) {
             self.maxInFlightKeys = maxInFlightKeys.map { max(1, $0) }
             self.maxWaitersPerKey = maxWaitersPerKey.map { max(1, $0) }
             self.inFlightTimeout = inFlightTimeout.map { max(0, $0) }
+            self.waiterOverflowBehavior = waiterOverflowBehavior
         }
     }
 
@@ -135,6 +143,7 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
     private var entries: [String: Entry] = [:]
     private let policy: CancellationPolicy
     private let limits: Limits
+    private let overflowFailureFactory: (@Sendable () -> Failure)?
     private let observer: Observer?
     private let queueMetricsObserver: QueueMetricsObserver?
     private var coalescedHits = 0
@@ -158,12 +167,14 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
         policy: CancellationPolicy = .keepRunning,
         limits: Limits = Limits(),
         observer: Observer? = nil,
-        queueMetricsObserver: QueueMetricsObserver? = nil
+        queueMetricsObserver: QueueMetricsObserver? = nil,
+        overflowFailureFactory: (@Sendable () -> Failure)? = nil
     ) {
         self.policy = policy
         self.limits = limits
         self.observer = observer
         self.queueMetricsObserver = queueMetricsObserver
+        self.overflowFailureFactory = overflowFailureFactory
     }
 
     public func run(
@@ -204,9 +215,14 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
 
         if var existing = entries[key] {
             if let maxWaiters = resolvedLimits.maxWaitersPerKey, existing.waiters.count >= maxWaiters {
-                bypassedDueToWaiterLimit += 1
-                observer?(.bypassed(key: key, reason: .maxWaitersPerKeyReached))
-                return .standalone(task: Task { await operation() })
+                if resolvedLimits.waiterOverflowBehavior == .fail,
+                   let overflowFailureFactory {
+                    return .standalone(task: Task { .failure(overflowFailureFactory()) })
+                } else {
+                    bypassedDueToWaiterLimit += 1
+                    observer?(.bypassed(key: key, reason: .maxWaitersPerKeyReached))
+                    return .standalone(task: Task { await operation() })
+                }
             }
 
             existing.waiters.insert(waiterID)

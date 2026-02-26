@@ -579,6 +579,48 @@ struct RequestCoalescerTests {
     }
 
     @Test
+    func maxWaitersLimitCanFailWhenConfigured() async {
+        let transport = CountingTransport()
+        await transport.setDelay(100_000_000)
+        let coalescer = RequestCoalescer<Data, TestError>(
+            limits: .init(maxWaitersPerKey: 1, waiterOverflowBehavior: .fail),
+            overflowFailureFactory: { .failed }
+        )
+
+        async let first: Result<Data, Error> = {
+            do {
+                let value = try await coalescer.run(key: "limit") { await transport.execute() }
+                return .success(value)
+            } catch {
+                return .failure(error)
+            }
+        }()
+
+        try? await Task.sleep(nanoseconds: 10_000_000)
+        async let second: Result<Data, Error> = {
+            do {
+                let value = try await coalescer.run(key: "limit") { await transport.execute() }
+                return .success(value)
+            } catch {
+                return .failure(error)
+            }
+        }()
+
+        let (firstResult, secondResult) = await (first, second)
+        if case .success = firstResult {
+            #expect(Bool(true))
+        } else {
+            Issue.record("Expected first waiter to succeed")
+        }
+        if case .failure(let error) = secondResult {
+            #expect((error as? TestError) == .failed)
+        } else {
+            Issue.record("Expected second waiter to fail due to waiter overflow")
+        }
+        #expect(await transport.calls() == 1)
+    }
+
+    @Test
     func inFlightTimeoutEvictsHungEntries() async {
         let coalescer = RequestCoalescer<Data, TestError>(
             limits: .init(inFlightTimeout: 0.05)

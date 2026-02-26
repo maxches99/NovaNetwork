@@ -22,6 +22,7 @@ public enum NetworkError: Error {
     case cancelled
     case timeoutBudgetExceeded
     case circuitBreakerOpen
+    case coalescerLimitExceeded
     case clientRateLimited(retryAfterSeconds: TimeInterval?)
 }
 
@@ -70,6 +71,8 @@ public extension NetworkError {
             return .timeoutBudgetExhausted
         case .circuitBreakerOpen:
             return .circuitBreakerOpen
+        case .coalescerLimitExceeded:
+            return .coalescerLimitExceeded
         case .clientRateLimited:
             return .rateLimited
         }
