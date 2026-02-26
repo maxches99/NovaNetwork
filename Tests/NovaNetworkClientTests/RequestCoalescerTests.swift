@@ -782,6 +782,111 @@ struct RequestCoalescerTests {
     }
 
     @Test
+    func queueByPriorityPreservesFIFOWithinSamePriority() async throws {
+        actor StartRecorder {
+            private(set) var starts: [String] = []
+            func append(_ value: String) { starts.append(value) }
+            func values() -> [String] { starts }
+        }
+
+        let recorder = StartRecorder()
+        let coalescer = RequestCoalescer<Data, TestError>(limits: .init(maxInFlightKeys: 1))
+
+        async let first: Data = coalescer.run(
+            key: "k1",
+            options: .init(priority: .medium, capacityScheduling: .queueByPriority)
+        ) {
+            await recorder.append("k1")
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            return .success(Data("k1".utf8))
+        }
+
+        try? await Task.sleep(nanoseconds: 10_000_000)
+        async let second: Data = coalescer.run(
+            key: "k2",
+            options: .init(priority: .medium, capacityScheduling: .queueByPriority)
+        ) {
+            await recorder.append("k2")
+            return .success(Data("k2".utf8))
+        }
+
+        try? await Task.sleep(nanoseconds: 10_000_000)
+        async let third: Data = coalescer.run(
+            key: "k3",
+            options: .init(priority: .medium, capacityScheduling: .queueByPriority)
+        ) {
+            await recorder.append("k3")
+            return .success(Data("k3".utf8))
+        }
+
+        _ = try await (first, second, third)
+        let order = await recorder.values()
+        #expect(order == ["k1", "k2", "k3"])
+    }
+
+    @Test
+    func queueByPriorityAllowsLowPriorityProgressDuringHighPriorityBacklog() async throws {
+        actor StartRecorder {
+            private(set) var starts: [String] = []
+            func append(_ value: String) { starts.append(value) }
+            func values() -> [String] { starts }
+        }
+
+        let recorder = StartRecorder()
+        let coalescer = RequestCoalescer<Data, TestError>(limits: .init(maxInFlightKeys: 1))
+
+        async let blocker: Data = coalescer.run(
+            key: "blocker",
+            options: .init(priority: .low, capacityScheduling: .queueByPriority)
+        ) {
+            await recorder.append("blocker")
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            return .success(Data("blocker".utf8))
+        }
+
+        try? await Task.sleep(nanoseconds: 10_000_000)
+        let lowTask = Task<Data, Error> {
+            try await coalescer.run(
+                key: "low",
+                options: .init(priority: .low, capacityScheduling: .queueByPriority)
+            ) {
+                await recorder.append("low")
+                return .success(Data("low".utf8))
+            }
+        }
+
+        var highTasks: [Task<Data, Error>] = []
+        for index in 0..<8 {
+            highTasks.append(
+                Task {
+                    try await coalescer.run(
+                        key: "high-\(index)",
+                        options: .init(priority: .high, capacityScheduling: .queueByPriority)
+                    ) {
+                        await recorder.append("high-\(index)")
+                        return .success(Data("high-\(index)".utf8))
+                    }
+                }
+            )
+        }
+
+        _ = try await blocker
+        _ = try await lowTask.value
+        for highTask in highTasks {
+            _ = try await highTask.value
+        }
+
+        let order = await recorder.values()
+        guard let lowIndex = order.firstIndex(of: "low") else {
+            Issue.record("Expected low-priority request to start")
+            return
+        }
+        let highAfterLow = order.enumerated().filter { $0.offset > lowIndex && $0.element.hasPrefix("high-") }.count
+        #expect(lowIndex > 0)
+        #expect(highAfterLow > 0)
+    }
+
+    @Test
     func handleMemoryPressureCancelsInFlightAndTracksMetrics() async {
         let coalescer = RequestCoalescer<Data, TestError>()
 
@@ -798,5 +903,57 @@ struct RequestCoalescerTests {
 
         let metrics = await coalescer.snapshotMetrics()
         #expect(metrics.memoryPressureEvictions == 1)
+    }
+
+    @Test
+    func queueSchedulingOverheadRemainsBoundedForNoOpOperations() async throws {
+        let coalescer = RequestCoalescer<Data, TestError>(limits: .init(maxInFlightKeys: 1))
+        let start = DispatchTime.now().uptimeNanoseconds
+
+        await withTaskGroup(of: Void.self) { group in
+            for index in 0..<150 {
+                group.addTask {
+                    _ = try? await coalescer.run(
+                        key: "overhead-\(index)",
+                        options: .init(
+                            priority: index.isMultiple(of: 2) ? .high : .low,
+                            capacityScheduling: .queueByPriority
+                        )
+                    ) {
+                        .success(Data())
+                    }
+                }
+            }
+        }
+
+        let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+        #expect(elapsedMs < 2_000)
+    }
+
+    @Test
+    func concurrentStressMaintainsCoalescingCorrectness() async throws {
+        let transport = CountingTransport()
+        await transport.setDelay(5_000_000)
+        let coalescer = RequestCoalescer<Data, TestError>()
+
+        let keys = ["k1", "k2", "k3", "k4", "k5"]
+        await withTaskGroup(of: Void.self) { group in
+            for index in 0..<250 {
+                group.addTask {
+                    let key = keys[index % keys.count]
+                    _ = try? await coalescer.run(
+                        key: key,
+                        options: .init(priority: index.isMultiple(of: 3) ? .high : .medium)
+                    ) {
+                        await transport.execute()
+                    }
+                }
+            }
+        }
+
+        let calls = await transport.calls()
+        #expect(calls <= 250)
+        let entries = await coalescer.inFlightEntries()
+        #expect(entries.isEmpty)
     }
 }
