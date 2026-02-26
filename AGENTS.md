@@ -30,11 +30,75 @@ Use this file as the default operating guide for coding agents.
 - Keep code style consistent with surrounding files.
 - Avoid adding dependencies unless explicitly requested.
 
+## Product-Driven Delivery (DFR-First)
+Treat DFR (Design/Functional Requirements) as the source of truth and contract across Product, Design, Engineering, and QA.
+
+### Required DFR Structure
+- Metadata: feature name, owner, stakeholders, goal/non-goals, Definition of Done, rollout plan, dependencies, risks.
+- User value: problem statement, success metrics, scope split (MVP/V1/nice-to-have).
+- Requirements with IDs and acceptance criteria:
+  - Functional (FR-*), UX (UR-*), Data (DR-*), Analytics (AR-*), Non-functional (NFR-*), Edge cases (EC-*).
+- State/flow definition: states, transitions, and `state -> UI -> actions -> analytics` mapping.
+- Test matrix: `Requirement ID -> Test IDs -> Owner`, including negative tests and regression risks.
+
+### Mandatory Process Rules
+- No spec, no dev: do not start implementation without DFR requirements, acceptance criteria, state flow, risk section, and analytics section when applicable.
+- Change control: behavior changes must be updated in DFR first, then in code/tests/release notes.
+- Traceability: every implementation and test task must reference Requirement IDs.
+- DoD completeness: done means DFR + code + tests + telemetry + release notes + rollout plan.
+
+### Task Decomposition
+- Derive implementation tasks from DFR by layer (UI/Domain/Data) and by flow (happy path/edge cases).
+- Derive test tasks for unit/integration/UI and analytics validation.
+- Derive release tasks for feature flags, docs, monitoring, and "What's New".
+
+### Spec-First Implementation Pattern
+- Define interfaces/use cases from required scenarios.
+- Define state model directly from DFR state machine.
+- Implement happy path first, then edge cases by DFR priority.
+- Document uncovered engineering decisions in DFR engineering notes (no hidden rules).
+
+### DFR-Driven Testing
+- Every testable FR/UR/AR/NFR requires at least one test.
+- Edge cases should be covered by explicit tests.
+- Validate analytics as contract:
+  - correct trigger timing,
+  - correct payload schema/properties,
+  - no false "success" events on failures.
+
+### PR and Review Compliance
+- PRs must include:
+  - DFR link,
+  - list of implemented Requirement IDs,
+  - mapping to test IDs,
+  - analytics verification,
+  - "What's New" update,
+  - rollout/feature-flag notes.
+- Code review is split into:
+  - product compliance against DFR,
+  - engineering quality (architecture, readability, testability, performance).
+
+### Release and Learn
+- After release, monitor success metrics defined in DFR.
+- Track dashboard/alerts for key events.
+- Bug fixes that change behavior must update DFR and tests.
+
+### Templates to Keep in Repo/Workspace
+- DFR template.
+- PR template with mandatory DFR and traceability fields.
+- Test matrix section in DFR.
+- "What's New" markdown template.
+
+## Test Coverage Policy
+- Unit test coverage must stay above 90%.
+- Any change that drops coverage below 90% is blocked until coverage is restored.
+
 ## Validation Checklist
 Before finishing:
 1. Build succeeds (`swift build`).
 2. Tests pass (`swift test`).
-3. `README.md` is updated if user-facing behavior changed.
+3. Unit test coverage is above 90%.
+4. `README.md` is updated if user-facing behavior changed.
 
 ## Git Hygiene
 - Do not revert unrelated local changes.

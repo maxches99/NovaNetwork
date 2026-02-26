@@ -9,6 +9,13 @@ When multiple callers ask for the same resource at the same time, only one under
 - [Setup & Usage Guide](docs/SETUP_GUIDE.md)
 - [Unit Test Policy](docs/UNIT_TEST_POLICY.md)
 
+## Product Delivery Templates
+
+- [DFR Template](docs/templates/DFR_TEMPLATE.md)
+- [Test Matrix Example](docs/templates/TEST_MATRIX_EXAMPLE.md)
+- [What's New Template](docs/templates/WHATS_NEW_TEMPLATE.md)
+- [PR Template](.github/pull_request_template.md)
+
 ## Installation (SwiftPM)
 
 ```swift
