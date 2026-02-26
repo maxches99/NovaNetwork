@@ -102,6 +102,19 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
     }
 
     public typealias Observer = @Sendable (Event) -> Void
+    public typealias QueueMetricsObserver = @Sendable (QueueMetrics) -> Void
+
+    public struct QueueMetrics: Sendable {
+        public let key: String
+        public let queueDepth: Int
+        public let waitMilliseconds: Double
+
+        public init(key: String, queueDepth: Int, waitMilliseconds: Double) {
+            self.key = key
+            self.queueDepth = queueDepth
+            self.waitMilliseconds = waitMilliseconds
+        }
+    }
 
     private struct Entry {
         let task: Task<Result<Output, Failure>, Never>
@@ -111,8 +124,11 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
     }
 
     private struct CapacityWaiter {
+        let key: String
         let priority: RequestPriority
         let sequence: UInt64
+        let queuedAtNanoseconds: UInt64
+        let queueDepthAtEnqueue: Int
         let continuation: CheckedContinuation<Void, Never>
     }
 
@@ -120,6 +136,7 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
     private let policy: CancellationPolicy
     private let limits: Limits
     private let observer: Observer?
+    private let queueMetricsObserver: QueueMetricsObserver?
     private var coalescedHits = 0
     private var coalescedMisses = 0
     private var waiterCancellations = 0
@@ -130,6 +147,7 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
     private var memoryPressureEvictions = 0
     private var capacityWaiters: [CapacityWaiter] = []
     private var capacityWaiterSequence: UInt64 = 0
+    private var fairnessCycleIndex = 0
 
     private enum Acquisition {
         case shared(task: Task<Result<Output, Failure>, Never>, waiterID: UUID)
@@ -139,11 +157,13 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
     public init(
         policy: CancellationPolicy = .keepRunning,
         limits: Limits = Limits(),
-        observer: Observer? = nil
+        observer: Observer? = nil,
+        queueMetricsObserver: QueueMetricsObserver? = nil
     ) {
         self.policy = policy
         self.limits = limits
         self.observer = observer
+        self.queueMetricsObserver = queueMetricsObserver
     }
 
     public func run(
@@ -358,9 +378,13 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
 
         // Queue new keys while capacity is saturated to avoid bypassing coalescing.
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let enqueueDepth = capacityWaiters.count + 1
             let waiter = CapacityWaiter(
+                key: key,
                 priority: options.priority,
                 sequence: capacityWaiterSequence,
+                queuedAtNanoseconds: DispatchTime.now().uptimeNanoseconds,
+                queueDepthAtEnqueue: enqueueDepth,
                 continuation: continuation
             )
             capacityWaiterSequence += 1
@@ -370,20 +394,47 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
 
     private func resumeNextCapacityWaiterIfNeeded() {
         guard !capacityWaiters.isEmpty else { return }
-        // Highest priority first; FIFO order for waiters with the same priority.
-        let bestIndex = capacityWaiters.indices.max { lhs, rhs in
-            let left = capacityWaiters[lhs]
-            let right = capacityWaiters[rhs]
-
-            if left.priority.rawValue == right.priority.rawValue {
-                return left.sequence > right.sequence
+        let cycle = fairnessCycle()
+        if !cycle.isEmpty {
+            for offset in 0..<cycle.count {
+                let cycleIndex = (fairnessCycleIndex + offset) % cycle.count
+                let priority = cycle[cycleIndex]
+                if let waiterIndex = oldestCapacityWaiterIndex(for: priority) {
+                    let waiter = capacityWaiters.remove(at: waiterIndex)
+                    fairnessCycleIndex = (cycleIndex + 1) % cycle.count
+                    queueMetricsObserver?(
+                        QueueMetrics(
+                            key: waiter.key,
+                            queueDepth: waiter.queueDepthAtEnqueue,
+                            waitMilliseconds: milliseconds(since: waiter.queuedAtNanoseconds)
+                        )
+                    )
+                    waiter.continuation.resume()
+                    return
+                }
             }
-            return left.priority.rawValue < right.priority.rawValue
         }
 
-        guard let index = bestIndex else { return }
-        let waiter = capacityWaiters.remove(at: index)
+        guard let waiter = capacityWaiters.min(by: { $0.sequence < $1.sequence }) else { return }
+        capacityWaiters.removeAll { $0.sequence == waiter.sequence }
+        queueMetricsObserver?(
+            QueueMetrics(
+                key: waiter.key,
+                queueDepth: waiter.queueDepthAtEnqueue,
+                waitMilliseconds: milliseconds(since: waiter.queuedAtNanoseconds)
+            )
+        )
         waiter.continuation.resume()
+    }
+
+    private func oldestCapacityWaiterIndex(for priority: RequestPriority) -> Int? {
+        capacityWaiters.indices
+            .filter { capacityWaiters[$0].priority == priority }
+            .min { capacityWaiters[$0].sequence < capacityWaiters[$1].sequence }
+    }
+
+    private func fairnessCycle() -> [RequestPriority] {
+        [.high, .high, .high, .high, .medium, .medium, .low]
     }
 
     private func resumeAllCapacityWaiters() {

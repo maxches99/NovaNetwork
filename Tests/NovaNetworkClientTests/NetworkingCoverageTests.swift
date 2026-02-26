@@ -12,6 +12,13 @@ private actor ThrowingClock: RetryClock {
     }
 }
 
+private actor NonCooperativeClock: RetryClock {
+    func sleep(nanoseconds: UInt64) async throws {
+        // Ignores cancellation by swallowing Task.sleep cancellation.
+        try? await Task.sleep(nanoseconds: nanoseconds)
+    }
+}
+
 private actor CancellationThrowingTransport: NetworkTransport {
     func execute(_ request: APIRequest) async throws -> NetworkResponse {
         throw CancellationError()
@@ -71,6 +78,24 @@ private actor EventRecorder {
     }
 
     func count() -> Int { events.count }
+    func snapshot() -> [NetworkClientEvent] { events }
+}
+
+private actor TelemetryRecorder {
+    private(set) var coalescerEvents: [TelemetryCoalescerContext] = []
+    private(set) var retryEvents: [TelemetryRetryContext] = []
+    private(set) var cancellationEvents: [TelemetryCancellationContext] = []
+    private(set) var queueEvents: [TelemetryQueueContext] = []
+
+    func appendCoalescer(_ event: TelemetryCoalescerContext) { coalescerEvents.append(event) }
+    func appendRetry(_ event: TelemetryRetryContext) { retryEvents.append(event) }
+    func appendCancellation(_ event: TelemetryCancellationContext) { cancellationEvents.append(event) }
+    func appendQueue(_ event: TelemetryQueueContext) { queueEvents.append(event) }
+
+    func coalescerTypes() -> [TelemetryCoalescerEventType] { coalescerEvents.map(\.type) }
+    func retryCount() -> Int { retryEvents.count }
+    func cancellationReasons() -> [String] { cancellationEvents.map(\.reason) }
+    func queueSnapshot() -> [TelemetryQueueContext] { queueEvents }
 }
 
 private actor MiddlewareProbe {
@@ -531,6 +556,92 @@ struct NetworkingCoverageTests {
     }
 
     @Test
+    func retryPolicyDoesNotRetryNonIdempotentRequestByDefault() async {
+        let transport = SequenceThrowingTransport(remainingFailures: 1, error: URLError(.timedOut))
+        let client = NetworkClient(
+            transport: transport,
+            retryPolicy: .init(maxAttempts: 2, jitterRange: nil),
+            networkObserver: { _ in }
+        )
+        let request = APIRequest(method: .post, url: URL(string: "https://example.com/post-no-retry")!)
+
+        do {
+            _ = try await client.load(request: request, authScope: nil)
+            Issue.record("Expected failure without retry")
+        } catch let error as NetworkError {
+            #expect(error.failureReason == .timedOut || error.failureReason == .transport)
+        } catch {
+            Issue.record("Unexpected error type")
+        }
+
+        #expect(await transport.calls() == 1)
+    }
+
+    @Test
+    func retryPolicyCanRetryNonIdempotentRequestWhenOverrideEnabled() async throws {
+        let transport = SequenceThrowingTransport(remainingFailures: 1, error: URLError(.timedOut))
+        let client = NetworkClient(
+            transport: transport,
+            retryPolicy: .init(maxAttempts: 2, retryNonIdempotentRequests: true, jitterRange: nil),
+            networkObserver: { _ in }
+        )
+        let request = APIRequest(method: .post, url: URL(string: "https://example.com/post-retry-enabled")!)
+
+        let data = try await client.load(request: request, authScope: nil)
+
+        #expect(data == Data("ok".utf8))
+        #expect(await transport.calls() == 2)
+    }
+
+    @Test
+    func retryPolicyRetriesPostWhenIdempotencyHeaderPresent() async throws {
+        let transport = SequenceThrowingTransport(remainingFailures: 1, error: URLError(.timedOut))
+        let client = NetworkClient(
+            transport: transport,
+            retryPolicy: .init(maxAttempts: 2, jitterRange: nil),
+            networkObserver: { _ in }
+        )
+        let request = APIRequest(method: .post, url: URL(string: "https://example.com/post-idempotency-header")!)
+            .withIdempotencyKey("abc-123")
+
+        let data = try await client.load(request: request, authScope: nil)
+
+        #expect(data == Data("ok".utf8))
+        #expect(await transport.calls() == 2)
+    }
+
+    @Test
+    func cancellationDuringRetryBackoffStopsFurtherAttempts() async {
+        let transport = SequenceThrowingTransport(remainingFailures: 10, error: URLError(.timedOut))
+        let client = NetworkClient(
+            transport: transport,
+            cancellationPolicy: .cancelWhenNoWaiters,
+            retryPolicy: .init(maxAttempts: 3, baseDelayNanoseconds: 300_000_000, jitterRange: nil),
+            retryClock: NonCooperativeClock(),
+            networkObserver: { _ in }
+        )
+        let request = APIRequest(method: .get, url: URL(string: "https://example.com/cancel-during-backoff")!)
+
+        let task = Task {
+            try await client.load(request: request, authScope: nil)
+        }
+
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        task.cancel()
+
+        do {
+            _ = try await task.value
+            Issue.record("Expected cancelled error")
+        } catch let error as NetworkError {
+            #expect(error.failureReason == .cancelled)
+        } catch {
+            Issue.record("Unexpected error type")
+        }
+
+        #expect(await transport.calls() == 1)
+    }
+
+    @Test
     func transportMapsCancellationErrorToCancelled() async {
         let transport = Transport(session: makeURLSession())
         URLProtocolStub.requestHandler = { _ in throw CancellationError() }
@@ -785,5 +896,158 @@ struct NetworkingCoverageTests {
         _ = try await client.load(request: request, authScope: nil, options: options)
         let headers = await transport.headers()
         #expect(headers.keys.contains(where: { $0.lowercased() == "idempotency-key" }))
+    }
+
+    @Test
+    func telemetryHooksEmitCoalescerRetryAndCancellationContracts() async {
+        let recorder = TelemetryRecorder()
+
+        let coalescingTransport = StubNetworkTransport(delayNanos: 150_000_000, response: .success(Data("ok".utf8)))
+        let coalescingClient = NetworkClient(
+            transport: coalescingTransport,
+            telemetryHooks: .init(
+                onCoalescerEvent: { context in Task { await recorder.appendCoalescer(context) } }
+            )
+        )
+        let coalescingRequest = APIRequest(method: .get, url: URL(string: "https://example.com/telemetry-coalesced")!)
+        async let first: Data = coalescingClient.load(request: coalescingRequest, authScope: nil)
+        async let second: Data = coalescingClient.load(request: coalescingRequest, authScope: nil)
+        _ = try? await (first, second)
+
+        let retryTransport = SequenceThrowingTransport(remainingFailures: 1, error: URLError(.timedOut))
+        let retryClient = NetworkClient(
+            transport: retryTransport,
+            retryPolicy: .init(maxAttempts: 2, jitterRange: nil),
+            retryClock: ThrowingClock(),
+            telemetryHooks: .init(
+                onRetryScheduled: { context in Task { await recorder.appendRetry(context) } },
+                onRequestCancelled: { context in Task { await recorder.appendCancellation(context) } }
+            )
+        )
+        let retryRequest = APIRequest(method: .get, url: URL(string: "https://example.com/telemetry-retry-cancel")!)
+        _ = try? await retryClient.load(request: retryRequest, authScope: nil)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        let coalescerTypes = await recorder.coalescerTypes()
+        let coalescedJoinCount = coalescerTypes.filter { $0 == .coalesced }.count
+        #expect(coalescerTypes.contains(.started))
+        #expect(coalescerTypes.contains(.coalesced))
+        #expect(coalescerTypes.contains(.finished))
+        #expect(coalescedJoinCount == 1)
+        #expect(await recorder.retryCount() == 1)
+        #expect(await recorder.cancellationReasons().contains("retrySleepCancelled"))
+    }
+
+    @Test
+    func telemetryQueueMetricsExposeNumericDepthAndWaitMilliseconds() async throws {
+        let recorder = TelemetryRecorder()
+        let transport = StubNetworkTransport(delayNanos: 120_000_000, response: .success(Data("ok".utf8)))
+        let client = NetworkClient(
+            transport: transport,
+            coalescerLimits: .init(maxInFlightKeys: 1),
+            telemetryHooks: .init(
+                onQueueMetrics: { context in Task { await recorder.appendQueue(context) } }
+            )
+        )
+
+        let first = APIRequest(method: .get, url: URL(string: "https://example.com/queue-a")!)
+        let second = APIRequest(method: .get, url: URL(string: "https://example.com/queue-b")!)
+
+        async let one = client.load(
+            request: first,
+            authScope: nil,
+            options: .init(priority: .low, capacityScheduling: .queueByPriority)
+        )
+        try? await Task.sleep(nanoseconds: 15_000_000)
+        async let two = client.load(
+            request: second,
+            authScope: nil,
+            options: .init(priority: .high, capacityScheduling: .queueByPriority)
+        )
+
+        _ = try await (one, two)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        let queueEvents = await recorder.queueSnapshot()
+        #expect(!queueEvents.isEmpty)
+        guard let firstQueueEvent = queueEvents.first else {
+            Issue.record("Expected queue metrics event")
+            return
+        }
+        #expect(firstQueueEvent.queueDepth >= 1)
+        #expect(firstQueueEvent.waitMilliseconds >= 0)
+    }
+
+    @Test
+    func networkObserverRetryLifecycleEventCountsAreConsistent() async throws {
+        let recorder = EventRecorder()
+        let transport = SequenceThrowingTransport(remainingFailures: 1, error: URLError(.timedOut))
+        let client = NetworkClient(
+            transport: transport,
+            retryPolicy: .init(maxAttempts: 2, jitterRange: nil),
+            networkObserver: { event in Task { await recorder.append(event) } }
+        )
+        let request = APIRequest(method: .get, url: URL(string: "https://example.com/retry-lifecycle")!)
+
+        _ = try await client.load(request: request, authScope: nil)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        let events = await recorder.snapshot()
+        let attemptCount = events.reduce(0) { count, event in
+            if case .requestAttempt = event { return count + 1 }
+            return count
+        }
+        let retryCount = events.reduce(0) { count, event in
+            if case .retryScheduled = event { return count + 1 }
+            return count
+        }
+        let successCount = events.reduce(0) { count, event in
+            if case .requestSucceeded = event { return count + 1 }
+            return count
+        }
+        let failureCount = events.reduce(0) { count, event in
+            if case .requestFailed = event { return count + 1 }
+            return count
+        }
+
+        #expect(attemptCount == 2)
+        #expect(retryCount == 1)
+        #expect(successCount == 1)
+        #expect(failureCount == 0)
+    }
+
+    @Test
+    func networkObserverDoesNotEmitSuccessOnTerminalFailure() async {
+        let recorder = EventRecorder()
+        let transport = StubNetworkTransport(
+            response: Result<NetworkResponse, NetworkError>.failure(.httpStatus(code: 503, body: Data()))
+        )
+        let client = NetworkClient(
+            transport: transport,
+            retryPolicy: .init(maxAttempts: 1),
+            networkObserver: { event in Task { await recorder.append(event) } }
+        )
+        let request = APIRequest(method: .get, url: URL(string: "https://example.com/terminal-failure")!)
+
+        do {
+            _ = try await client.load(request: request, authScope: nil)
+            Issue.record("Expected failure")
+        } catch {
+            // expected
+        }
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        let events = await recorder.snapshot()
+        let successCount = events.reduce(0) { count, event in
+            if case .requestSucceeded = event { return count + 1 }
+            return count
+        }
+        let failureCount = events.reduce(0) { count, event in
+            if case .requestFailed = event { return count + 1 }
+            return count
+        }
+
+        #expect(successCount == 0)
+        #expect(failureCount == 1)
     }
 }

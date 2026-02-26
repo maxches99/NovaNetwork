@@ -50,7 +50,7 @@ targets: [
 - Cancellation policies:
   - `keepRunning`
   - `cancelWhenNoWaiters`
-- Retry/backoff policy for transient failures (for example `429`, `5xx`, network timeouts).
+- Retry/backoff policy for transient failures (for example `429`, `5xx`, network timeouts) with idempotency-aware gating.
 - Adaptive retry options (`Retry-After` support, retry budget).
 - Testable retry behavior via injectable clock and random generator.
 - Data and typed `Decodable` loading APIs.
@@ -63,7 +63,7 @@ targets: [
 - Coalescer metrics (`hit/miss/cancellation/completion`) and observer events.
 - Async event stream (`events() -> AsyncStream<NetworkClientEvent>`).
 - In-flight diagnostics (`inFlightRequests()`).
-- Optional telemetry hooks for tracing/metrics adapters.
+- Optional telemetry hooks for tracing/metrics adapters, including coalescer, queue metrics, retry, and cancellation lifecycle callbacks.
 
 ## Quick Start
 
@@ -232,6 +232,7 @@ let client = NetworkClient(
 | `cancelWhenNoWaiters`, all waiters cancel | Underlying task is cancelled |
 | `keepRunning`, all waiters cancel | Underlying task continues until completion |
 | Retriable error + attempts remaining | Retries with exponential backoff (optional jitter) |
+| Non-idempotent request without idempotency key | No retry by default (can be overridden in `RetryPolicy`) |
 | Non-retriable error | Fails immediately |
 
 ## Observability
