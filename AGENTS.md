@@ -104,3 +104,7 @@ Before finishing:
 - Do not revert unrelated local changes.
 - Do not use destructive git commands unless explicitly requested.
 - Keep commits small and task-focused.
+
+## What's New Policy
+- For user-facing changes and releases, always update or create a versioned "What's New" file in `docs/` using the existing naming format: `WHATS_NEW_v<major>.<minor>.md` (for example, `docs/WHATS_NEW_v1.3.md`).
+- Keep "What's New" aligned with implemented behavior, DFR scope, and release notes in PR metadata.
