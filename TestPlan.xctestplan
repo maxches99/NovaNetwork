@@ -1,0 +1,24 @@
+{
+  "configurations" : [
+    {
+      "id" : "924B5C55-0E83-4C68-A356-8040D536BA21",
+      "name" : "Configuration 1",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "testTimeoutsEnabled" : true
+  },
+  "testTargets" : [
+    {
+      "target" : {
+        "containerPath" : "container:",
+        "identifier" : "RequestCoalescerTests",
+        "name" : "RequestCoalescerTests"
+      }
+    }
+  ],
+  "version" : 1
+}

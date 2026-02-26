@@ -26,6 +26,7 @@ Use this file as the default operating guide for coding agents.
 - Prefer fixing root causes over adding workarounds.
 - Do not break public API without updating tests and docs.
 - Add or update tests for behavior changes.
+- Follow `docs/UNIT_TEST_POLICY.md` when creating and maintaining tests.
 - Keep code style consistent with surrounding files.
 - Avoid adding dependencies unless explicitly requested.
 
@@ -39,4 +40,3 @@ Before finishing:
 - Do not revert unrelated local changes.
 - Do not use destructive git commands unless explicitly requested.
 - Keep commits small and task-focused.
-
