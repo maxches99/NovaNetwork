@@ -1,0 +1,155 @@
+# RequestCoalescer
+
+`RequestCoalescer` is a Swift library for deduplicating concurrent requests with the same logical identity.
+
+When multiple callers ask for the same resource at the same time, only one underlying operation runs and all callers await the shared result.
+
+## Documentation
+
+- [Setup & Usage Guide](docs/SETUP_GUIDE.md)
+
+## Installation (SwiftPM)
+
+```swift
+dependencies: [
+    .package(url: "https://github.com/your-org/RequestCoalescer.git", from: "1.0.0")
+]
+```
+
+```swift
+targets: [
+    .target(
+        name: "YourTarget",
+        dependencies: [
+            .product(name: "RequestCoalescer", package: "RequestCoalescer")
+        ]
+    )
+]
+```
+
+## Features
+
+- Coalesces concurrent requests by stable fingerprint key.
+- Optional short-lived in-memory response cache (`cacheFirst`, `staleWhileRevalidate`).
+- Configurable fingerprint policy (`query`, `headers`, `body`).
+- Coalescer limits (`maxInFlightKeys`, `maxWaitersPerKey`, `inFlightTimeout`).
+- Cancellation policies:
+  - `keepRunning`
+  - `cancelWhenNoWaiters`
+- Retry/backoff policy for transient failures (for example `429`, `5xx`, network timeouts).
+- Testable retry behavior via injectable clock and random generator.
+- Data and typed `Decodable` loading APIs.
+- Request helpers (`APIRequestBuilder`, `Encodable` JSON body initializer).
+- Cache management (`preload`, `invalidate`).
+- Coalescer metrics (`hit/miss/cancellation/completion`) and observer events.
+
+## Quick Start
+
+```swift
+import Foundation
+import RequestCoalescer
+
+let client = NetworkClient(
+    transport: Transport(),
+    retryPolicy: RetryPolicy(maxAttempts: 3)
+)
+
+let request = APIRequest(
+    method: .get,
+    url: URL(string: "https://example.com/api")!,
+    queryItems: [URLQueryItem(name: "id", value: "42")],
+    headers: ["Accept": "application/json"]
+)
+
+async let first = client.load(request: request, authScope: "user:42")
+async let second = client.load(request: request, authScope: "user:42")
+
+let (a, b) = try await (first, second)
+print(a == b) // true
+```
+
+## Cache Policy
+
+```swift
+let client = NetworkClient(defaultCachePolicy: .cacheFirst(maxAge: 5))
+let data = try await client.load(
+    request: request,
+    authScope: "user:42",
+    cachePolicy: .staleWhileRevalidate(maxAge: 2, staleAge: 30)
+)
+```
+
+## Request Builder
+
+```swift
+let request = try APIRequest
+    .builder(method: .post, url: URL(string: "https://example.com/api")!)
+    .header("Accept", "application/json")
+    .jsonBody(["name": "Max"])
+    .build()
+```
+
+## Typed Decoding
+
+```swift
+struct User: Decodable, Sendable {
+    let id: Int
+    let name: String
+}
+
+let user: User = try await client.load(
+    request: request,
+    authScope: "user:42"
+)
+```
+
+## Fingerprint Policy
+
+By default, fingerprint includes method, canonical URL + query, canonical JSON body digest, headers digest, and auth scope digest.
+
+```swift
+let policy = FingerprintPolicy(
+    includeQueryItems: true,
+    includeBody: true,
+    headerInclusion: .allowlist(["Accept", "Content-Type"])
+)
+
+let client = NetworkClient(
+    transport: Transport(),
+    fingerprintPolicy: policy
+)
+```
+
+## Behavior Contract
+
+| Scenario | Behavior |
+|---|---|
+| Same key, concurrent callers | One underlying operation executes; all waiters share result |
+| Same key, next request after completion | New operation starts |
+| `cancelWhenNoWaiters`, one waiter cancels | Operation continues while at least one waiter remains |
+| `cancelWhenNoWaiters`, all waiters cancel | Underlying task is cancelled |
+| `keepRunning`, all waiters cancel | Underlying task continues until completion |
+| Retriable error + attempts remaining | Retries with exponential backoff (optional jitter) |
+| Non-retriable error | Fails immediately |
+
+## Observability
+
+Use observer events or metrics snapshot:
+
+```swift
+let client = NetworkClient(
+    transport: Transport(),
+    observer: { event in
+        print(event)
+    }
+)
+
+let metrics = await client.coalescerMetrics()
+print(metrics.coalescedHits)
+```
+
+## Run Tests
+
+```bash
+swift test
+```

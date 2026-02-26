@@ -5,12 +5,9 @@ import PackageDescription
 
 let package = Package(
     name: "RequestCoalescer",
+    platforms: [.iOS(.v13), .macOS(.v10_15), .watchOS(.v6), .tvOS(.v13)],
     products: [
-        // Products define the executables and libraries a package produces, making them visible to other packages.
-        .library(
-            name: "RequestCoalescer",
-            targets: ["RequestCoalescer"]
-        ),
+        .library(name: "RequestCoalescer", targets: ["RequestCoalescer"]),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.

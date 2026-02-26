@@ -1,0 +1,366 @@
+# RequestCoalescer Setup & Usage Guide
+
+This guide covers full setup and practical usage of `RequestCoalescer`.
+
+## Table of Contents
+
+1. [Requirements](#requirements)
+2. [Installation (SwiftPM)](#installation-swiftpm)
+3. [Minimal Setup](#minimal-setup)
+4. [Building Requests](#building-requests)
+5. [Loading Raw Data](#loading-raw-data)
+6. [Loading Decodable Models](#loading-decodable-models)
+7. [How Coalescing Works](#how-coalescing-works)
+8. [Cancellation Policies](#cancellation-policies)
+9. [Fingerprint Policy](#fingerprint-policy)
+10. [Retry Policy](#retry-policy)
+11. [Cache Policies](#cache-policies)
+12. [Observability (Events + Metrics)](#observability-events--metrics)
+13. [Error Handling](#error-handling)
+14. [Using Custom Transport](#using-custom-transport)
+15. [Using `RequestCoalescer` Directly](#using-requestcoalescer-directly)
+16. [Testing](#testing)
+
+## Requirements
+
+- Swift 6+
+- Apple platform with async/await support
+
+## Installation (SwiftPM)
+
+Add package dependency:
+
+```swift
+dependencies: [
+    .package(url: "https://github.com/your-org/RequestCoalescer.git", from: "1.0.0")
+]
+```
+
+Add product to your target:
+
+```swift
+targets: [
+    .target(
+        name: "YourTarget",
+        dependencies: [
+            .product(name: "RequestCoalescer", package: "RequestCoalescer")
+        ]
+    )
+]
+```
+
+## Minimal Setup
+
+```swift
+import Foundation
+import RequestCoalescer
+
+let client = NetworkClient()
+```
+
+`NetworkClient` default configuration:
+
+- `transport`: `Transport()` (`URLSession.shared`)
+- `cancellationPolicy`: `.keepRunning`
+- `fingerprintPolicy`: `.default`
+- `retryPolicy`: `.none`
+- `defaultCachePolicy`: `.networkOnly`
+
+`NetworkClient` also accepts:
+
+- `coalescerLimits` (`maxInFlightKeys`, `maxWaitersPerKey`, `inFlightTimeout`)
+- `retryClock` and `retryRandomGenerator` for deterministic retry tests
+- `networkObserver` for cache/retry attempt events
+
+## Building Requests
+
+Use `APIRequest` to describe requests:
+
+```swift
+let request = APIRequest(
+    method: .get,
+    url: URL(string: "https://api.example.com/users")!,
+    queryItems: [URLQueryItem(name: "id", value: "42")],
+    headers: ["Accept": "application/json"],
+    body: nil,
+    timeout: 30
+)
+```
+
+Supported HTTP methods are defined in `URLMethod` (`.get`, `.post`, `.put`, `.patch`, `.delete`, etc.).
+
+You can also build fluent requests and encode JSON bodies safely:
+
+```swift
+let request = try APIRequest
+    .builder(method: .post, url: URL(string: "https://api.example.com/users")!)
+    .header("Accept", "application/json")
+    .jsonBody(["name": "Max"])
+    .build()
+```
+
+## Loading Raw Data
+
+```swift
+let data = try await client.load(
+    request: request,
+    authScope: "user:42",
+    cachePolicy: .networkOnly
+)
+```
+
+`authScope` is part of the fingerprint identity (as digest). Use different scopes to avoid coalescing across different auth contexts.
+
+## Loading Decodable Models
+
+```swift
+struct User: Decodable, Sendable {
+    let id: Int
+    let name: String
+}
+
+let user: User = try await client.load(
+    request: request,
+    authScope: "user:42",
+    as: User.self
+)
+```
+
+You can also pass custom decoder:
+
+```swift
+let decoder = JSONDecoder()
+decoder.keyDecodingStrategy = .convertFromSnakeCase
+
+let user: User = try await client.load(
+    request: request,
+    authScope: "user:42",
+    as: User.self,
+    decoder: decoder
+)
+```
+
+## How Coalescing Works
+
+If multiple concurrent calls have the same fingerprint key, only one underlying operation executes.
+
+```swift
+async let first = client.load(request: request, authScope: "user:42")
+async let second = client.load(request: request, authScope: "user:42")
+
+let (a, b) = try await (first, second)
+print(a == b) // true
+```
+
+After completion, a new request with the same key starts a new operation.
+
+## Cancellation Policies
+
+### `.keepRunning`
+
+If all waiters cancel, underlying operation continues.
+
+```swift
+let client = NetworkClient(cancellationPolicy: .keepRunning)
+```
+
+### `.cancelWhenNoWaiters`
+
+If all waiters cancel, underlying operation is cancelled.
+
+```swift
+let client = NetworkClient(cancellationPolicy: .cancelWhenNoWaiters)
+```
+
+Choose `.cancelWhenNoWaiters` for expensive operations where no listeners remain.
+
+## Fingerprint Policy
+
+Fingerprint controls when two requests are considered the same.
+
+Default includes:
+
+- HTTP method
+- canonical URL
+- query items
+- selected headers (default: all)
+- body digest
+- auth scope digest
+
+Example with header allowlist:
+
+```swift
+let policy = FingerprintPolicy(
+    includeQueryItems: true,
+    includeBody: true,
+    headerInclusion: .allowlist(["Accept", "Content-Type"])
+)
+
+let client = NetworkClient(fingerprintPolicy: policy)
+```
+
+You can disable body/query participation if needed:
+
+```swift
+let policy = FingerprintPolicy(
+    includeQueryItems: false,
+    includeBody: false,
+    headerInclusion: .none
+)
+```
+
+## Retry Policy
+
+Retry is applied inside `NetworkClient`.
+
+```swift
+let retry = RetryPolicy(
+    maxAttempts: 3,
+    baseDelayNanoseconds: 200_000_000,
+    maxDelayNanoseconds: 2_000_000_000,
+    jitterRange: 0.8...1.2,
+    retriableHTTPStatusCodes: [408, 429, 500, 502, 503, 504],
+    retriableURLErrorCodes: [.timedOut, .networkConnectionLost]
+)
+
+let client = NetworkClient(retryPolicy: retry)
+```
+
+Notes:
+
+- `maxAttempts = 1` means no retries.
+- Cancellation is not retried.
+- Backoff is exponential and capped by `maxDelayNanoseconds`.
+
+## Cache Policies
+
+`NetworkClient` supports three policies:
+
+- `.networkOnly`: always hit network (default)
+- `.cacheFirst(maxAge:)`: return cached value while fresh, otherwise fetch+store
+- `.staleWhileRevalidate(maxAge:staleAge:)`: return stale value while triggering background refresh
+
+```swift
+let client = NetworkClient(defaultCachePolicy: .cacheFirst(maxAge: 10))
+
+let data = try await client.load(
+    request: request,
+    authScope: "user:42",
+    cachePolicy: .staleWhileRevalidate(maxAge: 2, staleAge: 60)
+)
+```
+
+Manual cache controls:
+
+```swift
+try await client.preload(request: request, authScope: "user:42")
+await client.invalidate(request: request, authScope: "user:42")
+await client.invalidateAll()
+```
+
+## Observability (Events + Metrics)
+
+Use `observer` for real-time events:
+
+```swift
+let client = NetworkClient(
+    observer: { event in
+        print(event)
+    }
+)
+```
+
+Event types:
+
+- `.started`
+- `.coalesced`
+- `.bypassed`
+- `.waiterCancelled`
+- `.timedOut`
+- `.finished`
+
+`networkObserver` gives network/cache specific events:
+
+- `.cacheHit` / `.cacheMiss`
+- `.requestAttempt`
+- `.retryScheduled`
+- `.requestSucceeded` / `.requestFailed`
+- `.cacheInvalidated`
+
+Read counters with `coalescerMetrics()`:
+
+```swift
+let metrics = await client.coalescerMetrics()
+print("hits:", metrics.coalescedHits)
+print("misses:", metrics.coalescedMisses)
+print("waiter cancellations:", metrics.waiterCancellations)
+print("finished:", metrics.finishedOperations)
+```
+
+## Error Handling
+
+`NetworkClient` throws `NetworkError`.
+
+```swift
+do {
+    let _: Data = try await client.load(request: request, authScope: nil)
+} catch let error as NetworkError {
+    switch error {
+    case .httpStatus(let code, let body):
+        print("HTTP status:", code, "body size:", body.count)
+    case .invalidResponse:
+        print("Invalid HTTP response")
+    case .decoding(let underlying):
+        print("Decoding error:", underlying)
+    case .transport(let underlying):
+        print("Transport error:", underlying)
+    case .cancelled:
+        print("Cancelled")
+    }
+} catch {
+    print("Unexpected error:", error)
+}
+```
+
+## Using Custom Transport
+
+Implement `NetworkTransport` to plug in custom networking or mocks.
+
+```swift
+struct MockTransport: NetworkTransport {
+    func execute(_ request: APIRequest) async throws -> Data {
+        Data("{\"id\":42,\"name\":\"Alice\"}".utf8)
+    }
+}
+
+let client = NetworkClient(transport: MockTransport())
+```
+
+This is useful for tests and environments with custom HTTP stacks.
+
+## Using `RequestCoalescer` Directly
+
+You can use coalescing without networking:
+
+```swift
+let coalescer = RequestCoalescer<String, Error>(policy: .keepRunning)
+
+let value = try await coalescer.run(key: "same-work") {
+    // Important: operation returns Result
+    .success("done")
+}
+
+print(value)
+```
+
+This is useful for deduplicating any async operation identified by a stable key.
+
+## Testing
+
+Run package tests:
+
+```bash
+swift test
+```
+
+For deterministic retry tests, set `jitterRange: nil`.
