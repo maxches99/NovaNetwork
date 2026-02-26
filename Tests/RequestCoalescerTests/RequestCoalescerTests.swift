@@ -33,20 +33,27 @@ actor CountingTransport {
 actor StubNetworkTransport: NetworkTransport {
     private(set) var callCount = 0
     private let delayNanos: UInt64
-    private let response: Result<Data, NetworkError>
+    private let response: Result<NetworkResponse, NetworkError>
 
     init(delayNanos: UInt64 = 100_000_000, response: Result<Data, NetworkError>) {
+        self.delayNanos = delayNanos
+        self.response = response.map { data in
+            NetworkResponse(statusCode: 200, headers: [:], body: data)
+        }
+    }
+
+    init(delayNanos: UInt64 = 100_000_000, response: Result<NetworkResponse, NetworkError>) {
         self.delayNanos = delayNanos
         self.response = response
     }
 
-    func execute(_ request: APIRequest) async throws -> Data {
+    func execute(_ request: APIRequest) async throws -> NetworkResponse {
         callCount += 1
         try? await Task.sleep(nanoseconds: delayNanos)
 
         switch response {
-        case .success(let data):
-            return data
+        case .success(let response):
+            return response
         case .failure(let error):
             throw error
         }
@@ -59,15 +66,15 @@ actor FlakyNetworkTransport: NetworkTransport {
     private(set) var callCount = 0
     private var remainingFailures: Int
     private let failure: NetworkError
-    private let successData: Data
+    private let successResponse: NetworkResponse
 
     init(remainingFailures: Int, failure: NetworkError, successData: Data = Data("ok".utf8)) {
         self.remainingFailures = remainingFailures
         self.failure = failure
-        self.successData = successData
+        self.successResponse = NetworkResponse(statusCode: 200, headers: [:], body: successData)
     }
 
-    func execute(_ request: APIRequest) async throws -> Data {
+    func execute(_ request: APIRequest) async throws -> NetworkResponse {
         callCount += 1
 
         if remainingFailures > 0 {
@@ -75,7 +82,7 @@ actor FlakyNetworkTransport: NetworkTransport {
             throw failure
         }
 
-        return successData
+        return successResponse
     }
 
     func calls() -> Int { callCount }
@@ -93,15 +100,24 @@ actor CancellationProbe {
 
 actor ScriptedNetworkTransport: NetworkTransport {
     private(set) var callCount = 0
-    private var responses: [Result<Data, NetworkError>]
+    private var responses: [Result<NetworkResponse, NetworkError>]
     private let delayNanos: UInt64
 
     init(responses: [Result<Data, NetworkError>], delayNanos: UInt64 = 0) {
+        self.responses = responses.map { result in
+            result.map { data in
+                NetworkResponse(statusCode: 200, headers: [:], body: data)
+            }
+        }
+        self.delayNanos = delayNanos
+    }
+
+    init(responses: [Result<NetworkResponse, NetworkError>], delayNanos: UInt64 = 0) {
         self.responses = responses
         self.delayNanos = delayNanos
     }
 
-    func execute(_ request: APIRequest) async throws -> Data {
+    func execute(_ request: APIRequest) async throws -> NetworkResponse {
         callCount += 1
         if delayNanos > 0 {
             try? await Task.sleep(nanoseconds: delayNanos)
@@ -113,8 +129,8 @@ actor ScriptedNetworkTransport: NetworkTransport {
 
         let response = responses.removeFirst()
         switch response {
-        case .success(let data):
-            return data
+        case .success(let response):
+            return response
         case .failure(let error):
             throw error
         }
@@ -627,5 +643,160 @@ struct RequestCoalescerTests {
 
         #expect(request.headers["Content-Type"] == "application/json")
         #expect(request.body != nil)
+    }
+
+    @Test
+    func cacheFirstRevalidatesWithETagAndUsesCachedBodyOn304() async throws {
+        let transport = ScriptedNetworkTransport(
+            responses: [
+                .success(NetworkResponse(statusCode: 200, headers: ["ETag": "v1"], body: Data("payload".utf8))),
+                .success(NetworkResponse(statusCode: 304, headers: ["ETag": "v1"], body: Data()))
+            ]
+        )
+        let client = NetworkClient(transport: transport)
+        let request = APIRequest(method: .get, url: URL(string: "https://example.com/etag")!)
+
+        let first = try await client.load(request: request, authScope: nil, cachePolicy: .cacheFirst(maxAge: 0))
+        let second = try await client.load(request: request, authScope: nil, cachePolicy: .cacheFirst(maxAge: 0))
+
+        #expect(first == Data("payload".utf8))
+        #expect(second == Data("payload".utf8))
+        #expect(await transport.calls() == 2)
+    }
+
+    @Test
+    func diskCacheStoresAndLoadsEntries() async throws {
+        let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("RequestCoalescerTests-\(UUID().uuidString)")
+        let cache = DiskResponseCache(directoryURL: baseURL)
+        let entry = CachedResponse(
+            body: Data("disk".utf8),
+            statusCode: 200,
+            headers: ["ETag": "abc"],
+            etag: "abc",
+            storedAtNanoseconds: DispatchTime.now().uptimeNanoseconds
+        )
+
+        await cache.set(entry, forKey: "k")
+        let loaded = await cache.entry(forKey: "k")
+
+        #expect(loaded?.body == Data("disk".utf8))
+        #expect(loaded?.etag == "abc")
+        await cache.removeAll()
+    }
+
+    @Test
+    func circuitBreakerOpensAfterThreshold() async {
+        let transport = ScriptedNetworkTransport(
+            responses: [Result<Data, NetworkError>.failure(.httpStatus(code: 503, body: Data()))]
+        )
+        let client = NetworkClient(transport: transport)
+        let request = APIRequest(method: .get, url: URL(string: "https://example.com/circuit")!)
+        let options = RequestExecutionOptions(
+            circuitBreakerPolicy: CircuitBreakerPolicy(scope: .host, failureThreshold: 1, cooldownSeconds: 60)
+        )
+
+        do {
+            _ = try await client.load(request: request, authScope: nil as String?, cachePolicy: nil, options: options)
+            Issue.record("Expected first request to fail")
+        } catch {
+            #expect(error is NetworkError)
+        }
+
+        do {
+            _ = try await client.load(request: request, authScope: nil as String?, cachePolicy: nil, options: options)
+            Issue.record("Expected circuit breaker to open")
+        } catch let error as NetworkError {
+            guard case .circuitBreakerOpen = error else {
+                Issue.record("Expected circuit breaker open error")
+                return
+            }
+        } catch {
+            Issue.record("Unexpected error type")
+        }
+
+        #expect(await transport.calls() == 1)
+    }
+
+    @Test
+    func loadBatchPreservesInputOrder() async throws {
+        let transport = ScriptedNetworkTransport(
+            responses: [
+                .success(Data("first".utf8)),
+                .success(Data("second".utf8))
+            ]
+        )
+        let client = NetworkClient(transport: transport)
+        let first = APIRequest(method: .get, url: URL(string: "https://example.com/b1")!)
+        let second = APIRequest(method: .get, url: URL(string: "https://example.com/b2")!)
+
+        let results = try await client.loadBatch(requests: [first, second], authScope: nil)
+
+        #expect(results.count == 2)
+        #expect(results[0] == Data("first".utf8))
+        #expect(results[1] == Data("second".utf8))
+    }
+
+    @Test
+    func queueByPriorityStartsHigherPriorityFirstAfterCapacityFrees() async throws {
+        actor StartRecorder {
+            private(set) var starts: [String] = []
+            func append(_ value: String) { starts.append(value) }
+            func values() -> [String] { starts }
+        }
+
+        let recorder = StartRecorder()
+        let coalescer = RequestCoalescer<Data, TestError>(limits: .init(maxInFlightKeys: 1))
+
+        async let first: Data = coalescer.run(
+            key: "k1",
+            options: .init(priority: .low, capacityScheduling: .queueByPriority)
+        ) {
+            await recorder.append("k1")
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            return .success(Data("k1".utf8))
+        }
+
+        try? await Task.sleep(nanoseconds: 10_000_000)
+        async let second: Data = coalescer.run(
+            key: "k2",
+            options: .init(priority: .low, capacityScheduling: .queueByPriority)
+        ) {
+            await recorder.append("k2")
+            return .success(Data("k2".utf8))
+        }
+
+        try? await Task.sleep(nanoseconds: 10_000_000)
+        async let third: Data = coalescer.run(
+            key: "k3",
+            options: .init(priority: .high, capacityScheduling: .queueByPriority)
+        ) {
+            await recorder.append("k3")
+            return .success(Data("k3".utf8))
+        }
+
+        _ = try await (first, second, third)
+        let order = await recorder.values()
+        #expect(order.first == "k1")
+        #expect(order.dropFirst().first == "k3")
+    }
+
+    @Test
+    func handleMemoryPressureCancelsInFlightAndTracksMetrics() async {
+        let coalescer = RequestCoalescer<Data, TestError>()
+
+        let task = Task {
+            try? await coalescer.run(key: "slow") {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                return .success(Data("ok".utf8))
+            }
+        }
+
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        await coalescer.handleMemoryPressure(cancelInFlight: true)
+        _ = await task.result
+
+        let metrics = await coalescer.snapshotMetrics()
+        #expect(metrics.memoryPressureEvictions == 1)
     }
 }

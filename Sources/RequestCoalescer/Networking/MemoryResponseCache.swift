@@ -1,43 +1,40 @@
 import Foundation
 
-actor MemoryResponseCache {
-    struct Entry: Sendable {
-        let data: Data
-        let storedAtNanoseconds: UInt64
-    }
+public actor MemoryResponseCache: ResponseCache {
+    public typealias Entry = CachedResponse
 
     private var storage: [String: Entry] = [:]
     private var insertionOrder: [String] = []
     private let maxEntries: Int?
 
-    init(maxEntries: Int?) {
+    public init(maxEntries: Int?) {
         self.maxEntries = maxEntries.map { max(1, $0) }
     }
 
-    func entry(forKey key: String) -> Entry? {
+    public func entry(forKey key: String) -> Entry? {
         storage[key]
     }
 
-    func set(_ data: Data, forKey key: String) {
+    public func set(_ response: Entry, forKey key: String) {
         if storage[key] == nil {
             insertionOrder.append(key)
         }
 
-        storage[key] = Entry(data: data, storedAtNanoseconds: DispatchTime.now().uptimeNanoseconds)
+        storage[key] = response
         enforceCapacityIfNeeded()
     }
 
-    func remove(key: String) {
+    public func remove(key: String) {
         storage[key] = nil
         insertionOrder.removeAll { $0 == key }
     }
 
-    func removeAll() {
+    public func removeAll() {
         storage.removeAll(keepingCapacity: false)
         insertionOrder.removeAll(keepingCapacity: false)
     }
 
-    func removeAll(where shouldRemove: @Sendable (String) -> Bool) {
+    public func removeAll(where shouldRemove: @escaping @Sendable (String) -> Bool) {
         let keys = storage.keys.filter(shouldRemove)
         for key in keys {
             storage[key] = nil

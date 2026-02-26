@@ -1,0 +1,23 @@
+### What's New in v1.2
+
+- Added `NetworkResponse` for status code and headers-aware transport handling.
+- Added `ResponseCache` abstraction with:
+  - `MemoryResponseCache` (existing behavior, now protocol-based)
+  - `DiskResponseCache` for persistent caching.
+- Added HTTP cache revalidation with `ETag` and `If-None-Match` support:
+  - on `304 Not Modified`, cached body is reused and cache timestamp is refreshed.
+- Added per-request execution controls via `RequestExecutionOptions`:
+  - coalescer limits override,
+  - priority (`low`/`medium`/`high`),
+  - capacity scheduling (`bypassWhenAtCapacity` / `queueByPriority`),
+  - circuit breaker policy.
+- Added fair capacity scheduling in `RequestCoalescer` when using `queueByPriority`.
+- Added circuit breaker support (`CircuitBreakerPolicy`) with host/key scope.
+- Added `NetworkClient.events()` stream (`AsyncStream<NetworkClientEvent>`).
+- Added richer failure semantics with `NetworkFailureReason` and `.circuitBreakerOpen`.
+- Added memory pressure handling API:
+  - `NetworkClient.handleMemoryPressure(clearCache:cancelInFlight:)`
+  - in-flight eviction tracking in coalescer metrics.
+- Added batch API: `loadBatch(requests:authScope:cachePolicy:options:)`.
+- Added benchmark executable target: `RequestCoalescerBenchmarks`.
+- Expanded tests for ETag revalidation, disk cache, circuit breaker, batch ordering, priority scheduling, and memory pressure metrics.

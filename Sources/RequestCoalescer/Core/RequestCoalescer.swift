@@ -1,6 +1,33 @@
 import Foundation
 
 public actor RequestCoalescer<Output: Sendable, Failure: Error> {
+    public enum RequestPriority: Int, Sendable {
+        case low = 0
+        case medium = 1
+        case high = 2
+    }
+
+    public enum CapacityScheduling: Sendable {
+        case bypassWhenAtCapacity
+        case queueByPriority
+    }
+
+    public struct RunOptions: Sendable {
+        public let limitsOverride: Limits?
+        public let priority: RequestPriority
+        public let capacityScheduling: CapacityScheduling
+
+        public init(
+            limitsOverride: Limits? = nil,
+            priority: RequestPriority = .medium,
+            capacityScheduling: CapacityScheduling = .bypassWhenAtCapacity
+        ) {
+            self.limitsOverride = limitsOverride
+            self.priority = priority
+            self.capacityScheduling = capacityScheduling
+        }
+    }
+
     public struct Limits: Sendable {
         public let maxInFlightKeys: Int?
         public let maxWaitersPerKey: Int?
@@ -30,6 +57,7 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
         public let bypassedDueToCapacity: Int
         public let bypassedDueToWaiterLimit: Int
         public let timedOutEntries: Int
+        public let memoryPressureEvictions: Int
 
         public init(
             coalescedHits: Int,
@@ -38,7 +66,8 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
             finishedOperations: Int,
             bypassedDueToCapacity: Int,
             bypassedDueToWaiterLimit: Int,
-            timedOutEntries: Int
+            timedOutEntries: Int,
+            memoryPressureEvictions: Int
         ) {
             self.coalescedHits = coalescedHits
             self.coalescedMisses = coalescedMisses
@@ -47,6 +76,7 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
             self.bypassedDueToCapacity = bypassedDueToCapacity
             self.bypassedDueToWaiterLimit = bypassedDueToWaiterLimit
             self.timedOutEntries = timedOutEntries
+            self.memoryPressureEvictions = memoryPressureEvictions
         }
     }
 
@@ -68,6 +98,12 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
         var peakWaiters: Int
     }
 
+    private struct CapacityWaiter {
+        let priority: RequestPriority
+        let sequence: UInt64
+        let continuation: CheckedContinuation<Void, Never>
+    }
+
     private var entries: [String: Entry] = [:]
     private let policy: CancellationPolicy
     private let limits: Limits
@@ -79,6 +115,9 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
     private var bypassedDueToCapacity = 0
     private var bypassedDueToWaiterLimit = 0
     private var timedOutEntries = 0
+    private var memoryPressureEvictions = 0
+    private var capacityWaiters: [CapacityWaiter] = []
+    private var capacityWaiterSequence: UInt64 = 0
 
     private enum Acquisition {
         case shared(task: Task<Result<Output, Failure>, Never>, waiterID: UUID)
@@ -97,10 +136,12 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
 
     public func run(
         key: String,
+        options: RunOptions = .init(),
         operation: @Sendable @escaping () async -> Result<Output, Failure>
     ) async throws -> Output {
         evictTimedOutEntriesIfNeeded()
-        let acquisition = acquireTask(for: key, operation: operation)
+        await waitForCapacityIfNeeded(key: key, options: options)
+        let acquisition = acquireTask(for: key, options: options, operation: operation)
 
         switch acquisition {
         case .shared(let task, let waiterID):
@@ -123,12 +164,14 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
 
     private func acquireTask(
         for key: String,
+        options: RunOptions,
         operation: @Sendable @escaping () async -> Result<Output, Failure>
     ) -> Acquisition {
         let waiterID = UUID()
+        let resolvedLimits = options.limitsOverride ?? limits
 
         if var existing = entries[key] {
-            if let maxWaiters = limits.maxWaitersPerKey, existing.waiters.count >= maxWaiters {
+            if let maxWaiters = resolvedLimits.maxWaitersPerKey, existing.waiters.count >= maxWaiters {
                 bypassedDueToWaiterLimit += 1
                 observer?(.bypassed(key: key, reason: .maxWaitersPerKeyReached))
                 return .standalone(task: Task { await operation() })
@@ -142,7 +185,7 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
             return .shared(task: existing.task, waiterID: waiterID)
         }
 
-        if let maxInFlight = limits.maxInFlightKeys, entries.count >= maxInFlight {
+        if let maxInFlight = resolvedLimits.maxInFlightKeys, entries.count >= maxInFlight {
             bypassedDueToCapacity += 1
             observer?(.bypassed(key: key, reason: .maxInFlightKeysReached))
             return .standalone(task: Task { await operation() })
@@ -184,6 +227,7 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
                     wasCancelled: wasCancelled
                 )
             )
+            resumeNextCapacityWaiterIfNeeded()
         } else {
             entries[key] = entry
         }
@@ -204,6 +248,7 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
                     wasCancelled: entry.task.isCancelled
                 )
             )
+            resumeNextCapacityWaiterIfNeeded()
         } else {
             entries[key] = entry
         }
@@ -219,8 +264,21 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
             finishedOperations: finishedOperations,
             bypassedDueToCapacity: bypassedDueToCapacity,
             bypassedDueToWaiterLimit: bypassedDueToWaiterLimit,
-            timedOutEntries: timedOutEntries
+            timedOutEntries: timedOutEntries,
+            memoryPressureEvictions: memoryPressureEvictions
         )
+    }
+
+    public func handleMemoryPressure(cancelInFlight: Bool = true) {
+        guard cancelInFlight else { return }
+        let allEntries = entries
+        entries.removeAll(keepingCapacity: false)
+        memoryPressureEvictions += allEntries.count
+        for (_, entry) in allEntries {
+            entry.task.cancel()
+            finishedOperations += 1
+        }
+        resumeAllCapacityWaiters()
     }
 
     private func unwrap(_ result: Result<Output, Failure>) throws -> Output {
@@ -240,7 +298,10 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
         guard let timeout = limits.inFlightTimeout else { return }
         let timeoutNanoseconds = UInt64(timeout * 1_000_000_000)
         let now = DispatchTime.now().uptimeNanoseconds
-        let expired = entries.filter { now >= $0.value.startedAtNanoseconds && (now - $0.value.startedAtNanoseconds) >= timeoutNanoseconds }
+        let expired = entries.filter {
+            now >= $0.value.startedAtNanoseconds &&
+            (now - $0.value.startedAtNanoseconds) >= timeoutNanoseconds
+        }
 
         guard !expired.isEmpty else { return }
 
@@ -259,6 +320,52 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
                     wasCancelled: true
                 )
             )
+            resumeNextCapacityWaiterIfNeeded()
+        }
+    }
+
+    private func waitForCapacityIfNeeded(key: String, options: RunOptions) async {
+        guard entries[key] == nil else { return }
+        let resolvedLimits = options.limitsOverride ?? limits
+        guard let maxInFlight = resolvedLimits.maxInFlightKeys else { return }
+        guard options.capacityScheduling == .queueByPriority else { return }
+        guard entries.count >= maxInFlight else { return }
+
+        // Queue new keys while capacity is saturated to avoid bypassing coalescing.
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let waiter = CapacityWaiter(
+                priority: options.priority,
+                sequence: capacityWaiterSequence,
+                continuation: continuation
+            )
+            capacityWaiterSequence += 1
+            capacityWaiters.append(waiter)
+        }
+    }
+
+    private func resumeNextCapacityWaiterIfNeeded() {
+        guard !capacityWaiters.isEmpty else { return }
+        // Highest priority first; FIFO order for waiters with the same priority.
+        let bestIndex = capacityWaiters.indices.max { lhs, rhs in
+            let left = capacityWaiters[lhs]
+            let right = capacityWaiters[rhs]
+
+            if left.priority.rawValue == right.priority.rawValue {
+                return left.sequence > right.sequence
+            }
+            return left.priority.rawValue < right.priority.rawValue
+        }
+
+        guard let index = bestIndex else { return }
+        let waiter = capacityWaiters.remove(at: index)
+        waiter.continuation.resume()
+    }
+
+    private func resumeAllCapacityWaiters() {
+        let waiters = capacityWaiters
+        capacityWaiters.removeAll(keepingCapacity: false)
+        for waiter in waiters {
+            waiter.continuation.resume()
         }
     }
 }

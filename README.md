@@ -31,17 +31,22 @@ targets: [
 
 - Coalesces concurrent requests by stable fingerprint key.
 - Optional short-lived in-memory response cache (`cacheFirst`, `staleWhileRevalidate`).
+- Optional pluggable response cache (`MemoryResponseCache`, `DiskResponseCache`, custom `ResponseCache`).
+- HTTP cache revalidation with `ETag` / `If-None-Match` (returns cached body on `304 Not Modified`).
 - Configurable fingerprint policy (`query`, `headers`, `body`).
 - Coalescer limits (`maxInFlightKeys`, `maxWaitersPerKey`, `inFlightTimeout`).
+- Per-request execution options (priority, per-request limits override, capacity scheduling, circuit breaker).
 - Cancellation policies:
   - `keepRunning`
   - `cancelWhenNoWaiters`
 - Retry/backoff policy for transient failures (for example `429`, `5xx`, network timeouts).
 - Testable retry behavior via injectable clock and random generator.
 - Data and typed `Decodable` loading APIs.
+- Batch loading helper (`loadBatch`) with stable input order.
 - Request helpers (`APIRequestBuilder`, `Encodable` JSON body initializer).
 - Cache management (`preload`, `invalidate`).
 - Coalescer metrics (`hit/miss/cancellation/completion`) and observer events.
+- Async event stream (`events() -> AsyncStream<NetworkClientEvent>`).
 
 ## Quick Start
 
@@ -76,6 +81,38 @@ let data = try await client.load(
     request: request,
     authScope: "user:42",
     cachePolicy: .staleWhileRevalidate(maxAge: 2, staleAge: 30)
+)
+```
+
+## Disk Cache
+
+```swift
+let cacheURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+    .appendingPathComponent("RequestCoalescerCache")
+
+let client = NetworkClient(
+    transport: Transport(),
+    cache: DiskResponseCache(directoryURL: cacheURL),
+    defaultCachePolicy: .cacheFirst(maxAge: 30)
+)
+```
+
+## Per-Request Options
+
+```swift
+let data = try await client.load(
+    request: request,
+    authScope: "user:42",
+    options: RequestExecutionOptions(
+        coalescerLimitsOverride: .init(maxInFlightKeys: 8),
+        priority: .high,
+        capacityScheduling: .queueByPriority,
+        circuitBreakerPolicy: CircuitBreakerPolicy(
+            scope: .host,
+            failureThreshold: 3,
+            cooldownSeconds: 10
+        )
+    )
 )
 ```
 
@@ -146,6 +183,15 @@ let client = NetworkClient(
 
 let metrics = await client.coalescerMetrics()
 print(metrics.coalescedHits)
+```
+
+## Batch Loading
+
+```swift
+let responses = try await client.loadBatch(
+    requests: [requestA, requestB, requestC],
+    authScope: "user:42"
+)
 ```
 
 ## Run Tests

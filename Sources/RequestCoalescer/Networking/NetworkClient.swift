@@ -1,28 +1,55 @@
 import Foundation
 
+actor NetworkClientEventHub {
+    private var continuations: [UUID: AsyncStream<NetworkClientEvent>.Continuation] = [:]
+
+    func makeStream() -> AsyncStream<NetworkClientEvent> {
+        let id = UUID()
+        return AsyncStream { continuation in
+            continuations[id] = continuation
+            continuation.onTermination = { [weak self] _ in
+                Task { await self?.removeContinuation(id: id) }
+            }
+        }
+    }
+
+    func emit(_ event: NetworkClientEvent) {
+        for continuation in continuations.values {
+            continuation.yield(event)
+        }
+    }
+
+    private func removeContinuation(id: UUID) {
+        continuations[id] = nil
+    }
+}
+
 public final class NetworkClient: @unchecked Sendable {
-    private let coalescer: RequestCoalescer<Data, NetworkError>
+    private let coalescer: RequestCoalescer<NetworkResponse, NetworkError>
     private let transport: any NetworkTransport
     private let fingerprintPolicy: FingerprintPolicy
     private let retryPolicy: RetryPolicy
     private let retryClock: any RetryClock
     private let retryRandomGenerator: any RetryRandomGenerator
     private let defaultCachePolicy: CachePolicy
-    private let cache: MemoryResponseCache
+    private let cache: any ResponseCache
     private let decoder: JSONDecoder
     private let networkObserver: (@Sendable (NetworkClientEvent) -> Void)?
+    private let eventHub = NetworkClientEventHub()
+    private let circuitBreakerStore = CircuitBreakerStore()
 
     public init(
         transport: any NetworkTransport = Transport(),
         cancellationPolicy: CancellationPolicy = .keepRunning,
-        coalescerLimits: RequestCoalescer<Data, NetworkError>.Limits = .init(),
+        coalescerLimits: RequestCoalescer<NetworkResponse, NetworkError>.Limits = .init(),
         fingerprintPolicy: FingerprintPolicy = .default,
         retryPolicy: RetryPolicy = .none,
         retryClock: any RetryClock = SystemRetryClock(),
         retryRandomGenerator: any RetryRandomGenerator = SystemRetryRandomGenerator(),
         defaultCachePolicy: CachePolicy = .networkOnly,
         cacheMaxEntries: Int? = 256,
-        observer: RequestCoalescer<Data, NetworkError>.Observer? = nil,
+        cache: (any ResponseCache)? = nil,
+        observer: RequestCoalescer<NetworkResponse, NetworkError>.Observer? = nil,
         networkObserver: (@Sendable (NetworkClientEvent) -> Void)? = nil,
         decoder: JSONDecoder = JSONDecoder()
     ) {
@@ -33,15 +60,28 @@ public final class NetworkClient: @unchecked Sendable {
         self.retryClock = retryClock
         self.retryRandomGenerator = retryRandomGenerator
         self.defaultCachePolicy = defaultCachePolicy.normalized
-        self.cache = MemoryResponseCache(maxEntries: cacheMaxEntries)
+        self.cache = cache ?? MemoryResponseCache(maxEntries: cacheMaxEntries)
         self.decoder = decoder
         self.networkObserver = networkObserver
+    }
+
+    public func events() -> AsyncStream<NetworkClientEvent> {
+        AsyncStream { continuation in
+            Task {
+                let upstream = await eventHub.makeStream()
+                for await event in upstream {
+                    continuation.yield(event)
+                }
+                continuation.finish()
+            }
+        }
     }
 
     public func load(
         request: APIRequest,
         authScope: String?,
-        cachePolicy: CachePolicy? = nil
+        cachePolicy: CachePolicy? = nil,
+        options: RequestExecutionOptions = .init()
     ) async throws -> Data {
         let fingerprint = makeFingerprint(for: request, authScope: authScope)
         let key = fingerprint.key
@@ -49,52 +89,89 @@ public final class NetworkClient: @unchecked Sendable {
 
         switch resolvedPolicy {
         case .networkOnly:
-            networkObserver?(.cacheMiss(key: key))
-            return try await fetchNetworkAndOptionallyStore(request: request, key: key, storeInCache: false)
+            emit(.cacheMiss(key: key))
+            return try await fetchNetworkAndOptionallyStore(
+                request: request,
+                key: key,
+                storeInCache: false,
+                cachedETag: nil,
+                options: options
+            )
         case .cacheFirst(let maxAge):
-            if let cached = await cache.entry(forKey: key),
-               ageSeconds(since: cached.storedAtNanoseconds) <= maxAge {
-                networkObserver?(.cacheHit(
-                    key: key,
-                    isStale: false,
-                    ageMilliseconds: ageMilliseconds(since: cached.storedAtNanoseconds)
-                ))
-                return cached.data
-            }
-
-            networkObserver?(.cacheMiss(key: key))
-            return try await fetchNetworkAndOptionallyStore(request: request, key: key, storeInCache: true)
-        case .staleWhileRevalidate(let maxAge, let staleAge):
             if let cached = await cache.entry(forKey: key) {
                 let age = ageSeconds(since: cached.storedAtNanoseconds)
                 if age <= maxAge {
-                    networkObserver?(.cacheHit(
+                    emit(.cacheHit(
                         key: key,
                         isStale: false,
                         ageMilliseconds: ageMilliseconds(since: cached.storedAtNanoseconds)
                     ))
-                    return cached.data
+                    return cached.body
+                }
+
+                // Attempt conditional revalidation before returning an expired entry.
+                do {
+                    return try await fetchNetworkAndOptionallyStore(
+                        request: request,
+                        key: key,
+                        storeInCache: true,
+                        cachedETag: cached.etag,
+                        options: options
+                    )
+                } catch {
+                    emit(.cacheMiss(key: key))
+                    throw error
+                }
+            }
+
+            emit(.cacheMiss(key: key))
+            return try await fetchNetworkAndOptionallyStore(
+                request: request,
+                key: key,
+                storeInCache: true,
+                cachedETag: nil,
+                options: options
+            )
+        case .staleWhileRevalidate(let maxAge, let staleAge):
+            if let cached = await cache.entry(forKey: key) {
+                let age = ageSeconds(since: cached.storedAtNanoseconds)
+                if age <= maxAge {
+                    emit(.cacheHit(
+                        key: key,
+                        isStale: false,
+                        ageMilliseconds: ageMilliseconds(since: cached.storedAtNanoseconds)
+                    ))
+                    return cached.body
                 }
 
                 if age <= staleAge {
-                    networkObserver?(.cacheHit(
+                    emit(.cacheHit(
                         key: key,
                         isStale: true,
                         ageMilliseconds: ageMilliseconds(since: cached.storedAtNanoseconds)
                     ))
+
                     Task {
                         _ = try? await self.fetchNetworkAndOptionallyStore(
                             request: request,
                             key: key,
-                            storeInCache: true
+                            storeInCache: true,
+                            cachedETag: cached.etag,
+                            options: options
                         )
                     }
-                    return cached.data
+                    return cached.body
                 }
             }
 
-            networkObserver?(.cacheMiss(key: key))
-            return try await fetchNetworkAndOptionallyStore(request: request, key: key, storeInCache: true)
+            emit(.cacheMiss(key: key))
+            return try await fetchNetworkAndOptionallyStore(
+                request: request,
+                key: key,
+                storeInCache: true,
+                cachedETag: nil,
+                options: options
+            )
         }
     }
 
@@ -103,12 +180,14 @@ public final class NetworkClient: @unchecked Sendable {
         authScope: String?,
         cachePolicy: CachePolicy? = nil,
         as type: T.Type = T.self,
-        decoder: JSONDecoder? = nil
+        decoder: JSONDecoder? = nil,
+        options: RequestExecutionOptions = .init()
     ) async throws -> T {
         let data = try await load(
             request: request,
             authScope: authScope,
-            cachePolicy: cachePolicy
+            cachePolicy: cachePolicy,
+            options: options
         )
         let decoderToUse = decoder ?? self.decoder
 
@@ -119,24 +198,61 @@ public final class NetworkClient: @unchecked Sendable {
         }
     }
 
-    public func coalescerMetrics() async -> RequestCoalescer<Data, NetworkError>.Metrics {
+    public func loadBatch(
+        requests: [APIRequest],
+        authScope: String?,
+        cachePolicy: CachePolicy? = nil,
+        options: RequestExecutionOptions = .init()
+    ) async throws -> [Data] {
+        try await withThrowingTaskGroup(of: (Int, Data).self) { group in
+            for (index, request) in requests.enumerated() {
+                group.addTask {
+                    let data = try await self.load(
+                        request: request,
+                        authScope: authScope,
+                        cachePolicy: cachePolicy,
+                        options: options
+                    )
+                    return (index, data)
+                }
+            }
+
+            var orderedResults = Array(repeating: Data(), count: requests.count)
+            for try await (index, data) in group {
+                orderedResults[index] = data
+            }
+            return orderedResults
+        }
+    }
+
+    public func coalescerMetrics() async -> RequestCoalescer<NetworkResponse, NetworkError>.Metrics {
         await coalescer.snapshotMetrics()
     }
 
-    public func preload(request: APIRequest, authScope: String?) async throws {
+    public func preload(
+        request: APIRequest,
+        authScope: String?,
+        options: RequestExecutionOptions = .init()
+    ) async throws {
         let key = makeFingerprint(for: request, authScope: authScope).key
-        _ = try await fetchNetworkAndOptionallyStore(request: request, key: key, storeInCache: true)
+        _ = try await fetchNetworkAndOptionallyStore(
+            request: request,
+            key: key,
+            storeInCache: true,
+            cachedETag: nil,
+            options: options
+        )
     }
 
     public func invalidate(request: APIRequest, authScope: String?) async {
         let key = makeFingerprint(for: request, authScope: authScope).key
         await cache.remove(key: key)
-        networkObserver?(.cacheInvalidated(key: key))
+        emit(.cacheInvalidated(key: key))
     }
 
     public func invalidate(fingerprintKey: String) async {
         await cache.remove(key: fingerprintKey)
-        networkObserver?(.cacheInvalidated(key: fingerprintKey))
+        emit(.cacheInvalidated(key: fingerprintKey))
     }
 
     public func invalidateAll() async {
@@ -145,6 +261,19 @@ public final class NetworkClient: @unchecked Sendable {
 
     public func invalidateAll(where shouldRemove: @escaping @Sendable (String) -> Bool) async {
         await cache.removeAll(where: shouldRemove)
+    }
+
+    public func handleMemoryPressure(
+        clearCache: Bool = true,
+        cancelInFlight: Bool = true
+    ) async {
+        if clearCache {
+            await cache.removeAll()
+        }
+        if cancelInFlight {
+            await coalescer.handleMemoryPressure(cancelInFlight: true)
+        }
+        emit(.memoryPressureHandled(cacheCleared: clearCache, inFlightCancelled: cancelInFlight))
     }
 
     private func makeFingerprint(for request: APIRequest, authScope: String?) -> RequestFingerprint {
@@ -162,24 +291,134 @@ public final class NetworkClient: @unchecked Sendable {
     private func fetchNetworkAndOptionallyStore(
         request: APIRequest,
         key: String,
-        storeInCache: Bool
+        storeInCache: Bool,
+        cachedETag: String?,
+        options: RequestExecutionOptions
     ) async throws -> Data {
-        let outcome = try await coalescer.run(key: key) {
-            await Self.executeWithRetry(
+        if let breakerPolicy = options.circuitBreakerPolicy {
+            let identifier = circuitBreakerIdentifier(for: request, key: key, policy: breakerPolicy)
+            let canExecute = await circuitBreakerStore.canExecute(identifier: identifier)
+            if !canExecute {
+                emit(.circuitBreakerOpen(identifier: identifier))
+                throw NetworkError.circuitBreakerOpen
+            }
+        }
+
+        let conditionalRequest: APIRequest
+        if let etag = cachedETag {
+            conditionalRequest = request.withMergedHeaders(["If-None-Match": etag])
+        } else {
+            conditionalRequest = request
+        }
+
+        let outcome: NetworkResponse
+        do {
+            outcome = try await coalescer.run(
                 key: key,
-                request: request,
-                transport: self.transport,
-                retryPolicy: self.retryPolicy,
-                retryClock: self.retryClock,
-                retryRandomGenerator: self.retryRandomGenerator,
-                observer: self.networkObserver
-            )
+                options: coalescerRunOptions(from: options)
+            ) {
+                await Self.executeWithRetry(
+                    key: key,
+                    request: conditionalRequest,
+                    transport: self.transport,
+                    retryPolicy: self.retryPolicy,
+                    retryClock: self.retryClock,
+                    retryRandomGenerator: self.retryRandomGenerator,
+                    observer: self.networkObserver
+                )
+            }
+        } catch {
+            if let breakerPolicy = options.circuitBreakerPolicy,
+               let networkError = error as? NetworkError,
+               shouldCountFailureForCircuitBreaker(networkError) {
+                let identifier = circuitBreakerIdentifier(for: request, key: key, policy: breakerPolicy)
+                await circuitBreakerStore.recordFailure(identifier: identifier, policy: breakerPolicy)
+            }
+            throw error
+        }
+
+        if outcome.statusCode == 304, let cached = await cache.entry(forKey: key) {
+            if storeInCache {
+                let revalidated = CachedResponse(
+                    body: cached.body,
+                    statusCode: cached.statusCode,
+                    headers: cached.headers,
+                    etag: cached.etag,
+                    storedAtNanoseconds: DispatchTime.now().uptimeNanoseconds
+                )
+                await cache.set(revalidated, forKey: key)
+            }
+            emit(.cacheRevalidated(key: key, ageMilliseconds: 0))
+            return cached.body
         }
 
         if storeInCache {
-            await cache.set(outcome, forKey: key)
+            let cached = CachedResponse(
+                body: outcome.body,
+                statusCode: outcome.statusCode,
+                headers: outcome.headers,
+                etag: outcome.headerValue(for: "ETag"),
+                storedAtNanoseconds: DispatchTime.now().uptimeNanoseconds
+            )
+            await cache.set(cached, forKey: key)
         }
-        return outcome
+
+        if let breakerPolicy = options.circuitBreakerPolicy {
+            let identifier = circuitBreakerIdentifier(for: request, key: key, policy: breakerPolicy)
+            await circuitBreakerStore.recordSuccess(identifier: identifier)
+        }
+
+        return outcome.body
+    }
+
+    private func shouldCountFailureForCircuitBreaker(_ error: NetworkError) -> Bool {
+        switch error.failureReason {
+        case .rateLimited, .timedOut, .transport:
+            return true
+        case .httpStatus(let code):
+            return code >= 500
+        default:
+            return false
+        }
+    }
+
+    private func coalescerRunOptions(from options: RequestExecutionOptions) -> RequestCoalescer<NetworkResponse, NetworkError>.RunOptions {
+        let priority: RequestCoalescer<NetworkResponse, NetworkError>.RequestPriority
+        switch options.priority {
+        case .low:
+            priority = .low
+        case .medium:
+            priority = .medium
+        case .high:
+            priority = .high
+        }
+
+        let scheduling: RequestCoalescer<NetworkResponse, NetworkError>.CapacityScheduling
+        switch options.capacityScheduling {
+        case .bypassWhenAtCapacity:
+            scheduling = .bypassWhenAtCapacity
+        case .queueByPriority:
+            scheduling = .queueByPriority
+        }
+
+        return .init(
+            limitsOverride: options.coalescerLimitsOverride,
+            priority: priority,
+            capacityScheduling: scheduling
+        )
+    }
+
+    private func circuitBreakerIdentifier(
+        for request: APIRequest,
+        key: String,
+        policy: CircuitBreakerPolicy
+    ) -> String {
+        switch policy.scope {
+        case .key:
+            return key
+        case .host:
+            return request.url.host ?? key
+        }
     }
 
     private func ageSeconds(since startNanoseconds: UInt64) -> TimeInterval {
@@ -202,16 +441,16 @@ public final class NetworkClient: @unchecked Sendable {
         retryClock: any RetryClock,
         retryRandomGenerator: any RetryRandomGenerator,
         observer: (@Sendable (NetworkClientEvent) -> Void)?
-    ) async -> Result<Data, NetworkError> {
+    ) async -> Result<NetworkResponse, NetworkError> {
         var attempt = 1
 
         while true {
             observer?(.requestAttempt(key: key, attempt: attempt))
 
             do {
-                let data = try await transport.execute(request)
+                let response = try await transport.execute(request)
                 observer?(.requestSucceeded(key: key, attempts: attempt))
-                return .success(data)
+                return .success(response)
             } catch is CancellationError {
                 observer?(.requestFailed(key: key, attempts: attempt, reason: "cancelled"))
                 return .failure(.cancelled)
@@ -296,6 +535,13 @@ public final class NetworkClient: @unchecked Sendable {
             return "transport"
         case .cancelled:
             return "cancelled"
+        case .circuitBreakerOpen:
+            return "circuitBreakerOpen"
         }
+    }
+
+    private func emit(_ event: NetworkClientEvent) {
+        networkObserver?(event)
+        Task { await eventHub.emit(event) }
     }
 }

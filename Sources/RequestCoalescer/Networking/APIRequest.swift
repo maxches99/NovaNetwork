@@ -53,6 +53,22 @@ public struct APIRequest: Sendable {
         APIRequestBuilder(method: method, url: url)
     }
 
+    public func withMergedHeaders(_ additionalHeaders: [String: String]) -> APIRequest {
+        guard !additionalHeaders.isEmpty else { return self }
+        var merged = headers
+        for (name, value) in additionalHeaders {
+            merged[name] = value
+        }
+        return APIRequest(
+            method: method,
+            url: url,
+            queryItems: queryItems,
+            headers: merged,
+            body: body,
+            timeout: timeout
+        )
+    }
+
     public func urlRequest() -> URLRequest {
         let resolvedURL: URL
 

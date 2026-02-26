@@ -1,7 +1,7 @@
 import Foundation
 
 public protocol NetworkTransport: Sendable {
-    func execute(_ request: APIRequest) async throws -> Data
+    func execute(_ request: APIRequest) async throws -> NetworkResponse
 }
 
 public struct Transport: NetworkTransport {
@@ -11,7 +11,7 @@ public struct Transport: NetworkTransport {
         self.session = session
     }
 
-    public func execute(_ request: APIRequest) async throws -> Data {
+    public func execute(_ request: APIRequest) async throws -> NetworkResponse {
         let urlRequest = request.urlRequest()
 
         do {
@@ -25,7 +25,16 @@ public struct Transport: NetworkTransport {
                 throw NetworkError.httpStatus(code: httpResponse.statusCode, body: data)
             }
 
-            return data
+            let headers = httpResponse.allHeaderFields.reduce(into: [String: String]()) { partial, item in
+                guard let key = item.key as? String else { return }
+                partial[key] = String(describing: item.value)
+            }
+
+            return NetworkResponse(
+                statusCode: httpResponse.statusCode,
+                headers: headers,
+                body: data
+            )
         } catch is CancellationError {
             throw NetworkError.cancelled
         } catch let error as NetworkError {
