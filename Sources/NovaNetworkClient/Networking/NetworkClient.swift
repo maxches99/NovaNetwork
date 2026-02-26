@@ -24,6 +24,44 @@ actor NetworkClientEventHub {
     }
 }
 
+actor OfflineQueueEventHub {
+    private var continuations: [UUID: AsyncStream<OfflineQueueEvent>.Continuation] = [:]
+
+    func makeStream() -> AsyncStream<OfflineQueueEvent> {
+        let id = UUID()
+        return AsyncStream { continuation in
+            continuations[id] = continuation
+            continuation.onTermination = { [weak self] _ in
+                Task { await self?.removeContinuation(id: id) }
+            }
+        }
+    }
+
+    func emit(_ event: OfflineQueueEvent) {
+        for continuation in continuations.values {
+            continuation.yield(event)
+        }
+    }
+
+    private func removeContinuation(id: UUID) {
+        continuations[id] = nil
+    }
+}
+
+actor OfflineReplayGate {
+    private var isRunning = false
+
+    func begin() -> Bool {
+        guard !isRunning else { return false }
+        isRunning = true
+        return true
+    }
+
+    func end() {
+        isRunning = false
+    }
+}
+
 public final class NetworkClient: @unchecked Sendable {
     private let coalescer: RequestCoalescer<NetworkResponse, NetworkError>
     private let transport: any NetworkTransport
@@ -33,14 +71,19 @@ public final class NetworkClient: @unchecked Sendable {
     private let retryRandomGenerator: any RetryRandomGenerator
     private let defaultCachePolicy: CachePolicy
     private let cache: any ResponseCache
+    private let offlineWriteStore: (any OfflineWriteStore)?
+    private let offlineConnectivityMonitor: (any OfflineConnectivityMonitor)?
     private let decoder: JSONDecoder
     private let networkObserver: (@Sendable (NetworkClientEvent) -> Void)?
     private let middlewares: [NetworkMiddleware]
     private let telemetryHooks: NetworkTelemetryHooks?
     private let eventHub = NetworkClientEventHub()
+    private let offlineQueueEventHub = OfflineQueueEventHub()
+    private let offlineReplayGate = OfflineReplayGate()
     private let circuitBreakerStore = CircuitBreakerStore()
     private let rateLimiter = KeyRateLimiter()
     private let runtimePolicyStore = RuntimePolicyStore()
+    private var offlineReplayListenerTask: Task<Void, Never>?
 
     private struct RequestDeadline: Sendable {
         let deadlineNanoseconds: UInt64
@@ -57,6 +100,8 @@ public final class NetworkClient: @unchecked Sendable {
         defaultCachePolicy: CachePolicy = .networkOnly,
         cacheMaxEntries: Int? = 256,
         cache: (any ResponseCache)? = nil,
+        offlineWriteStore: (any OfflineWriteStore)? = nil,
+        offlineConnectivityMonitor: (any OfflineConnectivityMonitor)? = nil,
         observer: RequestCoalescer<NetworkResponse, NetworkError>.Observer? = nil,
         networkObserver: (@Sendable (NetworkClientEvent) -> Void)? = nil,
         middlewares: [NetworkMiddleware] = [],
@@ -92,16 +137,43 @@ public final class NetworkClient: @unchecked Sendable {
         self.retryRandomGenerator = retryRandomGenerator
         self.defaultCachePolicy = defaultCachePolicy.normalized
         self.cache = cache ?? MemoryResponseCache(maxEntries: cacheMaxEntries)
+        self.offlineWriteStore = offlineWriteStore
+        self.offlineConnectivityMonitor = offlineConnectivityMonitor
         self.decoder = decoder
         self.networkObserver = networkObserver
         self.middlewares = middlewares
         self.telemetryHooks = telemetryHooks
+
+        if let offlineConnectivityMonitor {
+            offlineReplayListenerTask = Task {
+                let stream = offlineConnectivityMonitor.statusStream()
+                for await isOnline in stream where isOnline {
+                    _ = await self.flushOfflineQueue()
+                }
+            }
+        }
+    }
+
+    deinit {
+        offlineReplayListenerTask?.cancel()
     }
 
     public func events() -> AsyncStream<NetworkClientEvent> {
         AsyncStream { continuation in
             Task {
                 let upstream = await eventHub.makeStream()
+                for await event in upstream {
+                    continuation.yield(event)
+                }
+                continuation.finish()
+            }
+        }
+    }
+
+    public func offlineQueueEvents() -> AsyncStream<OfflineQueueEvent> {
+        AsyncStream { continuation in
+            Task {
+                let upstream = await offlineQueueEventHub.makeStream()
                 for await event in upstream {
                     continuation.yield(event)
                 }
@@ -272,6 +344,145 @@ public final class NetworkClient: @unchecked Sendable {
         } catch {
             throw NetworkError.decoding(underlying: error)
         }
+    }
+
+    public func enqueueWrite(
+        request: APIRequest,
+        authScope: String?,
+        options: RequestExecutionOptions = .init()
+    ) async throws -> QueuedWriteResult {
+        let key = makeFingerprint(for: request, authScope: authScope).key
+        let queuePolicy = options.offlineQueuePolicy
+        let isQueueEligibleMethod = Self.isQueueEligibleWriteMethod(request.method)
+        let queueIdempotencyPolicy = options.idempotencyPolicy ?? .default
+        let queuePreparedRequest = applyIdempotencyPolicy(
+            request: request,
+            key: key,
+            idempotencyPolicy: queueIdempotencyPolicy
+        )
+
+        if queuePolicy.mode == .alwaysEnqueue, isQueueEligibleMethod {
+            return try await enqueuePreparedWrite(request: queuePreparedRequest, requestKey: key)
+        }
+
+        do {
+            let data = try await fetchNetworkAndOptionallyStore(
+                request: queuePreparedRequest,
+                authScope: authScope,
+                key: key,
+                storeInCache: false,
+                cachedETag: nil,
+                options: options
+            )
+            return .completed(data)
+        } catch let error as NetworkError {
+            guard queuePolicy.mode == .enqueueWhenOffline, isQueueEligibleMethod, Self.isOfflineError(error) else {
+                throw error
+            }
+            return try await enqueuePreparedWrite(request: queuePreparedRequest, requestKey: key)
+        }
+    }
+
+    @discardableResult
+    public func flushOfflineQueue(limit: Int = 64) async -> Int {
+        guard let offlineWriteStore else { return 0 }
+        guard limit > 0 else { return 0 }
+        guard await offlineReplayGate.begin() else { return 0 }
+        defer {
+            Task { await offlineReplayGate.end() }
+        }
+
+        var replayedCount = 0
+        while replayedCount < limit {
+            let remaining = max(1, limit - replayedCount)
+            let batch = await offlineWriteStore.nextBatch(limit: remaining, now: Date())
+            guard !batch.isEmpty else { break }
+
+            for entry in batch {
+                if replayedCount >= limit {
+                    break
+                }
+                await replayOfflineEntry(entry, store: offlineWriteStore)
+                replayedCount += 1
+            }
+        }
+        return replayedCount
+    }
+
+    public func offlineQueueDepth() async -> Int {
+        guard let offlineWriteStore else { return 0 }
+        return await offlineWriteStore.depth(now: Date())
+    }
+
+    public func offlineQueueSnapshot() async -> [OfflineQueueSnapshotItem] {
+        guard let offlineWriteStore else { return [] }
+        let entries = await offlineWriteStore.snapshot(now: Date())
+        return entries
+            .map { entry in
+                OfflineQueueSnapshotItem(
+                    receipt: entry.receipt,
+                    method: entry.request.method,
+                    url: entry.request.url,
+                    attempt: entry.attempt,
+                    state: entry.state
+                )
+            }
+            .sorted { lhs, rhs in
+                lhs.receipt.position < rhs.receipt.position
+            }
+    }
+
+    @discardableResult
+    public func dropQueuedWrite(queueID: String) async -> Bool {
+        guard let offlineWriteStore else { return false }
+        let snapshot = await offlineWriteStore.snapshot(now: Date())
+        let entry = snapshot.first { $0.receipt.queueID == queueID }
+        let dropped = await offlineWriteStore.drop(queueID: queueID)
+        if dropped, let entry {
+            await emitOfflineQueueEvent(
+                .dropped(
+                    queueID: entry.receipt.queueID,
+                    requestKey: entry.receipt.requestKey,
+                    reason: "manual_drop"
+                ),
+                telemetry: telemetryOfflineQueueContext(
+                    type: .dropped,
+                    queueID: entry.receipt.queueID,
+                    requestKey: entry.receipt.requestKey,
+                    attempt: entry.attempt,
+                    enqueuedAt: entry.receipt.enqueuedAt,
+                    reason: "manual_drop",
+                    willRetry: false
+                )
+            )
+        }
+        return dropped
+    }
+
+    @discardableResult
+    public func dropAllQueuedWrites() async -> Int {
+        guard let offlineWriteStore else { return 0 }
+        let snapshot = await offlineWriteStore.snapshot(now: Date())
+        let removed = await offlineWriteStore.dropAll()
+        for entry in snapshot {
+            await emitOfflineQueueEvent(
+                .dropped(
+                    queueID: entry.receipt.queueID,
+                    requestKey: entry.receipt.requestKey,
+                    reason: "manual_drop_all"
+                ),
+                telemetry: telemetryOfflineQueueContext(
+                    type: .dropped,
+                    queueID: entry.receipt.queueID,
+                    requestKey: entry.receipt.requestKey,
+                    attempt: entry.attempt,
+                    enqueuedAt: entry.receipt.enqueuedAt,
+                    reason: "manual_drop_all",
+                    willRetry: false
+                )
+            )
+        }
+        return removed
     }
 
     public func load<T: Decodable & Sendable, E: Error>(
@@ -1150,6 +1361,10 @@ public final class NetworkClient: @unchecked Sendable {
             return "coalescer_limit_exceeded"
         case .clientRateLimited:
             return "client_rate_limited"
+        case .queueCapacityExceeded:
+            return "offline_queue_capacity_exceeded"
+        case .offlineQueueUnavailable:
+            return "offline_queue_unavailable"
         }
     }
 
@@ -1189,7 +1404,50 @@ public final class NetworkClient: @unchecked Sendable {
         key: String,
         options: RequestExecutionOptions
     ) async throws -> APIRequest {
-        guard let idempotencyPolicy = options.idempotencyPolicy else {
+        applyIdempotencyPolicy(
+            request: request,
+            key: key,
+            idempotencyPolicy: options.idempotencyPolicy
+        )
+    }
+
+    private func enqueuePreparedWrite(request: APIRequest, requestKey: String) async throws -> QueuedWriteResult {
+        guard let offlineWriteStore else {
+            throw NetworkError.offlineQueueUnavailable
+        }
+        do {
+            let receipt = try await offlineWriteStore.enqueue(
+                request: request,
+                requestKey: requestKey,
+                now: Date()
+            )
+            await emitOfflineQueueEvent(
+                .enqueued(receipt: receipt),
+                telemetry: telemetryOfflineQueueContext(
+                    type: .enqueued,
+                    queueID: receipt.queueID,
+                    requestKey: receipt.requestKey,
+                    attempt: 0,
+                    enqueuedAt: receipt.enqueuedAt
+                )
+            )
+            return .queued(receipt)
+        } catch let error as OfflineWriteStoreError {
+            switch error {
+            case .queueCapacityExceeded(let limit):
+                throw NetworkError.queueCapacityExceeded(limit: limit)
+            }
+        } catch {
+            throw NetworkError.offlineQueueUnavailable
+        }
+    }
+
+    private func applyIdempotencyPolicy(
+        request: APIRequest,
+        key: String,
+        idempotencyPolicy: IdempotencyPolicy?
+    ) -> APIRequest {
+        guard let idempotencyPolicy else {
             return request
         }
         guard idempotencyPolicy.guardedMethods.contains(request.method) else {
@@ -1207,6 +1465,199 @@ public final class NetworkClient: @unchecked Sendable {
             idempotencyKey = SHA256Util.hex(Data(key.utf8))
         }
         return request.withMergedHeaders([idempotencyPolicy.headerName: idempotencyKey])
+    }
+
+    private func replayOfflineEntry(_ entry: OfflineWriteStoreEntry, store: any OfflineWriteStore) async {
+        let nextAttempt = max(1, entry.attempt + 1)
+        await store.markReplaying(queueID: entry.receipt.queueID, attempt: nextAttempt, now: Date())
+        await emitOfflineQueueEvent(
+            .replayStarted(queueID: entry.receipt.queueID, requestKey: entry.receipt.requestKey, attempt: nextAttempt),
+            telemetry: telemetryOfflineQueueContext(
+                type: .replayStarted,
+                queueID: entry.receipt.queueID,
+                requestKey: entry.receipt.requestKey,
+                attempt: nextAttempt,
+                enqueuedAt: entry.receipt.enqueuedAt
+            )
+        )
+
+        do {
+            _ = try await fetchNetworkAndOptionallyStore(
+                request: entry.request,
+                authScope: nil,
+                key: entry.receipt.requestKey,
+                storeInCache: false,
+                cachedETag: nil,
+                options: .init()
+            )
+            await store.markSucceeded(queueID: entry.receipt.queueID)
+            await emitOfflineQueueEvent(
+                .replaySucceeded(
+                    queueID: entry.receipt.queueID,
+                    requestKey: entry.receipt.requestKey,
+                    statusCode: 200
+                ),
+                telemetry: telemetryOfflineQueueContext(
+                    type: .replaySucceeded,
+                    queueID: entry.receipt.queueID,
+                    requestKey: entry.receipt.requestKey,
+                    attempt: nextAttempt,
+                    enqueuedAt: entry.receipt.enqueuedAt
+                )
+            )
+        } catch let error as NetworkError {
+            if shouldDeadLetterReplay(error: error, attempt: nextAttempt) {
+                let reason = Self.failureReason(error: error)
+                await store.markDeadLetter(
+                    queueID: entry.receipt.queueID,
+                    reason: reason,
+                    now: Date()
+                )
+                await emitOfflineQueueEvent(
+                    .deadLettered(
+                        queueID: entry.receipt.queueID,
+                        requestKey: entry.receipt.requestKey,
+                        reason: reason
+                    ),
+                    telemetry: telemetryOfflineQueueContext(
+                        type: .deadLettered,
+                        queueID: entry.receipt.queueID,
+                        requestKey: entry.receipt.requestKey,
+                        attempt: nextAttempt,
+                        enqueuedAt: entry.receipt.enqueuedAt,
+                        reason: reason,
+                        willRetry: false
+                    )
+                )
+                return
+            }
+
+            let delaySeconds = min(pow(2, Double(nextAttempt)), 60)
+            let nextRetryAt = Date().addingTimeInterval(delaySeconds)
+            let reason = Self.failureReason(error: error)
+            await store.markRetryWaiting(
+                queueID: entry.receipt.queueID,
+                attempt: nextAttempt,
+                reason: reason,
+                nextRetryAt: nextRetryAt,
+                now: Date()
+            )
+            await emitOfflineQueueEvent(
+                .replayFailed(
+                    queueID: entry.receipt.queueID,
+                    requestKey: entry.receipt.requestKey,
+                    attempt: nextAttempt,
+                    reason: reason,
+                    willRetry: true
+                ),
+                telemetry: telemetryOfflineQueueContext(
+                    type: .replayFailed,
+                    queueID: entry.receipt.queueID,
+                    requestKey: entry.receipt.requestKey,
+                    attempt: nextAttempt,
+                    enqueuedAt: entry.receipt.enqueuedAt,
+                    reason: reason,
+                    willRetry: true
+                )
+            )
+        } catch {
+            let fallback = NetworkError.transport(underlying: error)
+            let delaySeconds = min(pow(2, Double(nextAttempt)), 60)
+            let nextRetryAt = Date().addingTimeInterval(delaySeconds)
+            let reason = Self.failureReason(error: fallback)
+            await store.markRetryWaiting(
+                queueID: entry.receipt.queueID,
+                attempt: nextAttempt,
+                reason: reason,
+                nextRetryAt: nextRetryAt,
+                now: Date()
+            )
+            await emitOfflineQueueEvent(
+                .replayFailed(
+                    queueID: entry.receipt.queueID,
+                    requestKey: entry.receipt.requestKey,
+                    attempt: nextAttempt,
+                    reason: reason,
+                    willRetry: true
+                ),
+                telemetry: telemetryOfflineQueueContext(
+                    type: .replayFailed,
+                    queueID: entry.receipt.queueID,
+                    requestKey: entry.receipt.requestKey,
+                    attempt: nextAttempt,
+                    enqueuedAt: entry.receipt.enqueuedAt,
+                    reason: reason,
+                    willRetry: true
+                )
+            )
+        }
+    }
+
+    private func shouldDeadLetterReplay(error: NetworkError, attempt: Int) -> Bool {
+        if attempt >= 5 {
+            return true
+        }
+        guard case .httpStatus(let code, _, _) = error else {
+            return false
+        }
+        if code == 408 || code == 409 || code == 429 {
+            return false
+        }
+        return (400...499).contains(code)
+    }
+
+    private func emitOfflineQueueEvent(_ event: OfflineQueueEvent, telemetry: TelemetryOfflineQueueContext? = nil) async {
+        await offlineQueueEventHub.emit(event)
+        if let telemetry {
+            telemetryHooks?.onOfflineQueueEvent?(telemetry)
+        }
+    }
+
+    private func telemetryOfflineQueueContext(
+        type: TelemetryOfflineQueueEventType,
+        queueID: String,
+        requestKey: String,
+        attempt: Int? = nil,
+        enqueuedAt: Date? = nil,
+        reason: String? = nil,
+        willRetry: Bool? = nil
+    ) -> TelemetryOfflineQueueContext {
+        let ageMilliseconds: Double?
+        if let enqueuedAt {
+            ageMilliseconds = max(0, Date().timeIntervalSince(enqueuedAt)) * 1_000
+        } else {
+            ageMilliseconds = nil
+        }
+        return TelemetryOfflineQueueContext(
+            type: type,
+            queueID: queueID,
+            requestKey: requestKey,
+            attempt: attempt,
+            ageMilliseconds: ageMilliseconds,
+            reason: reason,
+            willRetry: willRetry
+        )
+    }
+
+    private static func isQueueEligibleWriteMethod(_ method: URLMethod) -> Bool {
+        switch method {
+        case .post, .put, .patch:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func isOfflineError(_ error: NetworkError) -> Bool {
+        guard case .transport(let underlying as URLError) = error else {
+            return false
+        }
+        switch underlying.code {
+        case .notConnectedToInternet, .networkConnectionLost, .cannotFindHost, .cannotConnectToHost, .dataNotAllowed:
+            return true
+        default:
+            return false
+        }
     }
 
     private func shouldStoreInCache(_ headers: [String: String]) -> Bool {

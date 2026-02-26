@@ -48,6 +48,7 @@ targets: [
 - Per-request execution options (priority, per-request limits override, capacity scheduling, deadline budget, coalescing mode, circuit breaker).
 - Client-side per-key rate limiting (`RateLimitPolicy`).
 - Request middleware pipeline (`beforeSend` / `afterResponse`).
+- Offline queue for write requests (`POST`/`PUT`/`PATCH`) with durable disk store and replay APIs.
 - Cancellation policies:
   - `keepRunning`
   - `cancelWhenNoWaiters`
@@ -65,7 +66,7 @@ targets: [
 - Coalescer metrics (`hit/miss/cancellation/completion`) and observer events.
 - Async event stream (`events() -> AsyncStream<NetworkClientEvent>`).
 - In-flight diagnostics (`inFlightRequests()`).
-- Optional telemetry hooks for tracing/metrics adapters, including coalescer, queue metrics, retry, retry exhaustion, cancellation, and circuit-breaker transition callbacks.
+- Optional telemetry hooks for tracing/metrics adapters, including coalescer, queue metrics, retry, retry exhaustion, cancellation, circuit-breaker transitions, and offline queue lifecycle callbacks.
 - Extended telemetry fields for retry schedule source/profile/scope, retry-skipped reasons, and runtime policy update events.
 
 ## Quick Start
@@ -184,6 +185,61 @@ let data = try await client.load(
         rateLimitPolicy: .init(maxRequests: 5, intervalSeconds: 1)
     )
 )
+```
+
+## Offline Queue (Write Requests)
+
+```swift
+let queueURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+    .appendingPathComponent("NovaNetworkClientOfflineQueue")
+
+let client = NetworkClient(
+    transport: Transport(),
+    offlineWriteStore: DiskOfflineWriteStore(directoryURL: queueURL)
+)
+
+let writeRequest = APIRequest(
+    method: .post,
+    url: URL(string: "https://api.example.com/items")!,
+    body: Data("{\"name\":\"draft\"}".utf8)
+)
+
+let result = try await client.enqueueWrite(
+    request: writeRequest,
+    authScope: "user:42",
+    options: .init(
+        offlineQueuePolicy: .init(mode: .enqueueWhenOffline)
+    )
+)
+
+switch result {
+case .completed(let body):
+    print("sent now:", body.count)
+case .queued(let receipt):
+    print("queued:", receipt.queueID)
+}
+
+let replayed = await client.flushOfflineQueue()
+print("replayed:", replayed)
+```
+
+Queue management helpers:
+
+```swift
+let depth = await client.offlineQueueDepth()
+let snapshot = await client.offlineQueueSnapshot()
+if let first = snapshot.first {
+    _ = await client.dropQueuedWrite(queueID: first.receipt.queueID)
+}
+_ = await client.dropAllQueuedWrites()
+```
+
+Offline queue event stream:
+
+```swift
+for await event in client.offlineQueueEvents() {
+    print(event)
+}
 ```
 
 ## Streaming

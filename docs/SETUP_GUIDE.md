@@ -15,11 +15,12 @@ This guide covers full setup and practical usage of `NovaNetworkClient`.
 9. [Fingerprint Policy](#fingerprint-policy)
 10. [Retry Policy](#retry-policy)
 11. [Cache Policies](#cache-policies)
-12. [Observability (Events + Metrics)](#observability-events--metrics)
-13. [Error Handling](#error-handling)
-14. [Using Custom Transport](#using-custom-transport)
-15. [Using `RequestCoalescer` Directly](#using-requestcoalescer-directly)
-16. [Testing](#testing)
+12. [Offline Queue (Write Requests)](#offline-queue-write-requests)
+13. [Observability (Events + Metrics)](#observability-events--metrics)
+14. [Error Handling](#error-handling)
+15. [Using Custom Transport](#using-custom-transport)
+16. [Using `RequestCoalescer` Directly](#using-requestcoalescer-directly)
+17. [Testing](#testing)
 
 ## Requirements
 
@@ -258,6 +259,61 @@ await client.invalidate(request: request, authScope: "user:42")
 await client.invalidateAll()
 ```
 
+## Offline Queue (Write Requests)
+
+Use offline queue for write methods (`POST`/`PUT`/`PATCH`) when transport is unavailable.
+
+```swift
+let queueURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+    .appendingPathComponent("NovaNetworkClientOfflineQueue")
+
+let client = NetworkClient(
+    transport: Transport(),
+    offlineWriteStore: DiskOfflineWriteStore(directoryURL: queueURL)
+)
+
+let request = APIRequest(
+    method: .post,
+    url: URL(string: "https://api.example.com/items")!,
+    body: Data("{\"name\":\"draft\"}".utf8)
+)
+
+let result = try await client.enqueueWrite(
+    request: request,
+    authScope: "user:42",
+    options: .init(
+        offlineQueuePolicy: .init(mode: .enqueueWhenOffline)
+    )
+)
+```
+
+Queue policy modes:
+
+- `.disabled`: default behavior, no offline queueing
+- `.enqueueWhenOffline`: try network first, enqueue when transport is offline
+- `.alwaysEnqueue`: enqueue immediately and replay later
+
+Replay and queue management:
+
+```swift
+let replayed = await client.flushOfflineQueue(limit: 64)
+let depth = await client.offlineQueueDepth()
+let snapshot = await client.offlineQueueSnapshot()
+
+if let first = snapshot.first {
+    _ = await client.dropQueuedWrite(queueID: first.receipt.queueID)
+}
+_ = await client.dropAllQueuedWrites()
+```
+
+Offline queue events:
+
+```swift
+for await event in client.offlineQueueEvents() {
+    print(event)
+}
+```
+
 ## Observability (Events + Metrics)
 
 Use `observer` for real-time events:
@@ -286,6 +342,19 @@ Event types:
 - `.retryScheduled`
 - `.requestSucceeded` / `.requestFailed`
 - `.cacheInvalidated`
+- `.requestPolicyUpdated`
+- `.circuitBreakerTransition`
+- `.requestRateLimited`
+
+`telemetryHooks` supports structured callbacks for:
+
+- coalescer events
+- retry scheduled / retry exhausted / retry skipped
+- request cancellation
+- queue metrics
+- circuit-breaker transitions
+- runtime policy updates
+- offline queue lifecycle (`enqueued`, `replayStarted`, `replaySucceeded`, `replayFailed`, `deadLettered`, `dropped`)
 
 Read counters with `coalescerMetrics()`:
 

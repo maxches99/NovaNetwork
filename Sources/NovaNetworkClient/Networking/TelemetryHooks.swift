@@ -149,6 +149,43 @@ public struct TelemetryQueueContext: Sendable {
     }
 }
 
+public enum TelemetryOfflineQueueEventType: String, Sendable {
+    case enqueued
+    case replayStarted
+    case replaySucceeded
+    case replayFailed
+    case deadLettered
+    case dropped
+}
+
+public struct TelemetryOfflineQueueContext: Sendable {
+    public let type: TelemetryOfflineQueueEventType
+    public let queueID: String
+    public let requestKey: String
+    public let attempt: Int?
+    public let ageMilliseconds: Double?
+    public let reason: String?
+    public let willRetry: Bool?
+
+    public init(
+        type: TelemetryOfflineQueueEventType,
+        queueID: String,
+        requestKey: String,
+        attempt: Int? = nil,
+        ageMilliseconds: Double? = nil,
+        reason: String? = nil,
+        willRetry: Bool? = nil
+    ) {
+        self.type = type
+        self.queueID = queueID
+        self.requestKey = requestKey
+        self.attempt = attempt
+        self.ageMilliseconds = ageMilliseconds
+        self.reason = reason
+        self.willRetry = willRetry
+    }
+}
+
 public struct TelemetryRetryExhaustedContext: Sendable {
     public let key: String
     public let attempts: Int
@@ -234,6 +271,7 @@ public struct NetworkTelemetryHooks: Sendable {
     public typealias OnRetrySkipped = @Sendable (TelemetryRetrySkippedContext) -> Void
     public typealias OnRequestCancelled = @Sendable (TelemetryCancellationContext) -> Void
     public typealias OnQueueMetrics = @Sendable (TelemetryQueueContext) -> Void
+    public typealias OnOfflineQueueEvent = @Sendable (TelemetryOfflineQueueContext) -> Void
     public typealias OnCircuitBreakerTransition = @Sendable (TelemetryCircuitBreakerTransitionContext) -> Void
     public typealias OnPolicyUpdated = @Sendable (TelemetryPolicyUpdateContext) -> Void
 
@@ -245,6 +283,7 @@ public struct NetworkTelemetryHooks: Sendable {
     public let onRetrySkipped: OnRetrySkipped?
     public let onRequestCancelled: OnRequestCancelled?
     public let onQueueMetrics: OnQueueMetrics?
+    public let onOfflineQueueEvent: OnOfflineQueueEvent?
     public let onCircuitBreakerTransition: OnCircuitBreakerTransition?
     public let onPolicyUpdated: OnPolicyUpdated?
 
@@ -257,6 +296,7 @@ public struct NetworkTelemetryHooks: Sendable {
         onRetrySkipped: OnRetrySkipped? = nil,
         onRequestCancelled: OnRequestCancelled? = nil,
         onQueueMetrics: OnQueueMetrics? = nil,
+        onOfflineQueueEvent: OnOfflineQueueEvent? = nil,
         onCircuitBreakerTransition: OnCircuitBreakerTransition? = nil,
         onPolicyUpdated: OnPolicyUpdated? = nil
     ) {
@@ -268,6 +308,7 @@ public struct NetworkTelemetryHooks: Sendable {
         self.onRetrySkipped = onRetrySkipped
         self.onRequestCancelled = onRequestCancelled
         self.onQueueMetrics = onQueueMetrics
+        self.onOfflineQueueEvent = onOfflineQueueEvent
         self.onCircuitBreakerTransition = onCircuitBreakerTransition
         self.onPolicyUpdated = onPolicyUpdated
     }
