@@ -41,6 +41,10 @@ public final class NetworkClient: @unchecked Sendable {
     private let circuitBreakerStore = CircuitBreakerStore()
     private let rateLimiter = KeyRateLimiter()
 
+    private struct RequestDeadline: Sendable {
+        let deadlineNanoseconds: UInt64
+    }
+
     public init(
         transport: any NetworkTransport = Transport(),
         cancellationPolicy: CancellationPolicy = .keepRunning,
@@ -443,6 +447,10 @@ public final class NetworkClient: @unchecked Sendable {
         cachedETag: String?,
         options: RequestExecutionOptions
     ) async throws -> Data {
+        let requestDeadline = makeDeadline(from: options.deadlineBudgetSeconds)
+        let telemetryCoalescingMode = telemetryCoalescingMode(for: options.coalescingMode)
+        let coalescingKey = resolvedCoalescingKey(baseKey: key, mode: options.coalescingMode)
+
         if let rateLimitPolicy = options.rateLimitPolicy,
            let retryAfter = await rateLimiter.acquire(key: key, policy: rateLimitPolicy) {
             emit(.requestRateLimited(key: key, retryAfterSeconds: retryAfter))
@@ -451,8 +459,11 @@ public final class NetworkClient: @unchecked Sendable {
 
         if let breakerPolicy = options.circuitBreakerPolicy {
             let identifier = circuitBreakerIdentifier(for: request, key: key, policy: breakerPolicy)
-            let canExecute = await circuitBreakerStore.canExecute(identifier: identifier)
-            if !canExecute {
+            let decision = await circuitBreakerStore.canExecute(identifier: identifier, policy: breakerPolicy)
+            if let transition = decision.transition {
+                emitCircuitBreakerTransition(transition)
+            }
+            if !decision.canExecute {
                 emit(.circuitBreakerOpen(identifier: identifier))
                 throw NetworkError.circuitBreakerOpen
             }
@@ -473,7 +484,7 @@ public final class NetworkClient: @unchecked Sendable {
         let outcome: NetworkResponse
         do {
             outcome = try await coalescer.run(
-                key: key,
+                key: coalescingKey,
                 options: coalescerRunOptions(from: options)
             ) {
                 await Self.executeWithRetry(
@@ -486,7 +497,9 @@ public final class NetworkClient: @unchecked Sendable {
                     retryRandomGenerator: self.retryRandomGenerator,
                     middlewares: self.middlewares,
                     telemetryHooks: self.telemetryHooks,
-                    observer: self.networkObserver
+                    observer: self.networkObserver,
+                    deadline: requestDeadline,
+                    coalescingMode: telemetryCoalescingMode
                 )
             }
         } catch {
@@ -494,7 +507,9 @@ public final class NetworkClient: @unchecked Sendable {
                let networkError = error as? NetworkError,
                shouldCountFailureForCircuitBreaker(networkError) {
                 let identifier = circuitBreakerIdentifier(for: request, key: key, policy: breakerPolicy)
-                await circuitBreakerStore.recordFailure(identifier: identifier, policy: breakerPolicy)
+                if let transition = await circuitBreakerStore.recordFailure(identifier: identifier, policy: breakerPolicy) {
+                    emitCircuitBreakerTransition(transition)
+                }
             }
             throw error
         }
@@ -529,7 +544,9 @@ public final class NetworkClient: @unchecked Sendable {
 
         if let breakerPolicy = options.circuitBreakerPolicy {
             let identifier = circuitBreakerIdentifier(for: request, key: key, policy: breakerPolicy)
-            await circuitBreakerStore.recordSuccess(identifier: identifier)
+            if let transition = await circuitBreakerStore.recordSuccess(identifier: identifier, policy: breakerPolicy) {
+                emitCircuitBreakerTransition(transition)
+            }
         }
 
         return outcome.body
@@ -585,6 +602,56 @@ public final class NetworkClient: @unchecked Sendable {
         }
     }
 
+    private func resolvedCoalescingKey(baseKey: String, mode: CoalescingMode) -> String {
+        switch mode {
+        case .default:
+            return baseKey
+        case .custom(let customKey):
+            return customKey
+        case .disabled:
+            return "\(baseKey)#\(UUID().uuidString)"
+        }
+    }
+
+    private func telemetryCoalescingMode(for mode: CoalescingMode) -> TelemetryCoalescingMode {
+        switch mode {
+        case .default:
+            return .default
+        case .custom:
+            return .custom
+        case .disabled:
+            return .disabled
+        }
+    }
+
+    private func makeDeadline(from budgetSeconds: TimeInterval?) -> RequestDeadline? {
+        guard let budgetSeconds else { return nil }
+        let budgetNanoseconds = UInt64(budgetSeconds * 1_000_000_000)
+        let now = DispatchTime.now().uptimeNanoseconds
+        return RequestDeadline(deadlineNanoseconds: now.saturatingAdd(budgetNanoseconds))
+    }
+
+    private func emitCircuitBreakerTransition(_ transition: CircuitBreakerTransition) {
+        emit(
+            .circuitBreakerTransition(
+                identifier: transition.identifier,
+                fromState: transition.fromState.rawValue,
+                toState: transition.toState.rawValue,
+                failureCount: transition.failureCount,
+                openDurationMilliseconds: transition.openDurationMilliseconds
+            )
+        )
+        telemetryHooks?.onCircuitBreakerTransition?(
+            TelemetryCircuitBreakerTransitionContext(
+                identifier: transition.identifier,
+                fromState: transition.fromState.rawValue,
+                toState: transition.toState.rawValue,
+                failureCount: transition.failureCount,
+                openDurationMilliseconds: transition.openDurationMilliseconds
+            )
+        )
+    }
+
     private func ageSeconds(since startNanoseconds: UInt64) -> TimeInterval {
         let now = DispatchTime.now().uptimeNanoseconds
         let elapsed = now >= startNanoseconds ? (now - startNanoseconds) : 0
@@ -607,19 +674,40 @@ public final class NetworkClient: @unchecked Sendable {
         retryRandomGenerator: any RetryRandomGenerator,
         middlewares: [NetworkMiddleware],
         telemetryHooks: NetworkTelemetryHooks?,
-        observer: (@Sendable (NetworkClientEvent) -> Void)?
+        observer: (@Sendable (NetworkClientEvent) -> Void)?,
+        deadline: RequestDeadline?,
+        coalescingMode: TelemetryCoalescingMode
     ) async -> Result<NetworkResponse, NetworkError> {
         var attempt = 1
         var retriesUsed = 0
 
         while true {
+            if deadlineHasExpired(deadline) {
+                observer?(
+                    .requestFailed(
+                        key: key,
+                        attempts: attempt,
+                        reason: "timeout_budget_exhausted",
+                        remainingBudgetMilliseconds: remainingBudgetMilliseconds(deadline)
+                    )
+                )
+                return .failure(.timeoutBudgetExceeded)
+            }
             if Task.isCancelled {
-                observer?(.requestFailed(key: key, attempts: attempt, reason: "cancelled"))
+                observer?(
+                    .requestFailed(
+                        key: key,
+                        attempts: attempt,
+                        reason: "cancelled",
+                        remainingBudgetMilliseconds: remainingBudgetMilliseconds(deadline)
+                    )
+                )
                 telemetryHooks?.onRequestCancelled?(
                     TelemetryCancellationContext(
                         key: key,
                         attempt: attempt,
                         reason: "taskCancelled",
+                        coalescingMode: coalescingMode,
                         request: request
                     )
                 )
@@ -628,7 +716,12 @@ public final class NetworkClient: @unchecked Sendable {
             observer?(.requestAttempt(key: key, attempt: attempt))
 
             let startedAt = DispatchTime.now().uptimeNanoseconds
-            let telemetryRequest = TelemetryRequestContext(key: key, attempt: attempt, request: request)
+            let telemetryRequest = TelemetryRequestContext(
+                key: key,
+                attempt: attempt,
+                coalescingMode: coalescingMode,
+                request: request
+            )
             telemetryHooks?.onRequestStart?(telemetryRequest)
 
             do {
@@ -664,12 +757,20 @@ public final class NetworkClient: @unchecked Sendable {
                         durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - startedAt) / 1_000_000
                     )
                 )
-                observer?(.requestFailed(key: key, attempts: attempt, reason: "cancelled"))
+                observer?(
+                    .requestFailed(
+                        key: key,
+                        attempts: attempt,
+                        reason: "cancelled",
+                        remainingBudgetMilliseconds: remainingBudgetMilliseconds(deadline)
+                    )
+                )
                 telemetryHooks?.onRequestCancelled?(
                     TelemetryCancellationContext(
                         key: key,
                         attempt: attempt,
                         reason: "cancellationError",
+                        coalescingMode: coalescingMode,
                         request: request
                     )
                 )
@@ -684,12 +785,38 @@ public final class NetworkClient: @unchecked Sendable {
                     )
                 )
 
-                if !retryPolicy.canRetry(attempt: attempt, retriesUsed: retriesUsed) || !retryPolicy.shouldRetry(error: error, request: request) {
-                    observer?(.requestFailed(
-                        key: key,
-                        attempts: attempt,
-                        reason: failureReason(error: error)
-                    ))
+                let reason = failureReason(error: error)
+                let shouldRetry = retryPolicy.shouldRetry(error: error, request: request)
+                if !shouldRetry {
+                    observer?(
+                        .requestFailed(
+                            key: key,
+                            attempts: attempt,
+                            reason: reason,
+                            remainingBudgetMilliseconds: remainingBudgetMilliseconds(deadline)
+                        )
+                    )
+                    return .failure(error)
+                }
+                if !retryPolicy.canRetry(attempt: attempt, retriesUsed: retriesUsed) {
+                    observer?(.retryExhausted(key: key, attempts: attempt, reason: reason))
+                    telemetryHooks?.onRetryExhausted?(
+                        TelemetryRetryExhaustedContext(
+                            key: key,
+                            attempts: attempt,
+                            reason: reason,
+                            coalescingMode: coalescingMode,
+                            request: request
+                        )
+                    )
+                    observer?(
+                        .requestFailed(
+                            key: key,
+                            attempts: attempt,
+                            reason: reason,
+                            remainingBudgetMilliseconds: remainingBudgetMilliseconds(deadline)
+                        )
+                    )
                     return .failure(error)
                 }
 
@@ -698,12 +825,23 @@ public final class NetworkClient: @unchecked Sendable {
                     error: error,
                     random: retryRandomGenerator
                 )
+                if !canScheduleRetry(withDelayNanoseconds: delay, deadline: deadline) {
+                    observer?(
+                        .requestFailed(
+                            key: key,
+                            attempts: attempt,
+                            reason: "timeout_budget_exhausted",
+                            remainingBudgetMilliseconds: remainingBudgetMilliseconds(deadline)
+                        )
+                    )
+                    return .failure(.timeoutBudgetExceeded)
+                }
                 observer?(
                     .retryScheduled(
                         key: key,
                         nextAttempt: attempt + 1,
                         delayMilliseconds: Double(delay) / 1_000_000,
-                        reason: failureReason(error: error)
+                        reason: reason
                     )
                 )
                 telemetryHooks?.onRetryScheduled?(
@@ -712,31 +850,48 @@ public final class NetworkClient: @unchecked Sendable {
                         attempt: attempt,
                         nextAttempt: attempt + 1,
                         delayMilliseconds: Double(delay) / 1_000_000,
-                        reason: failureReason(error: error),
+                        reason: reason,
+                        coalescingMode: coalescingMode,
                         request: request
                     )
                 )
                 do {
                     try await retryClock.sleep(nanoseconds: delay)
                 } catch {
-                    observer?(.requestFailed(key: key, attempts: attempt, reason: "cancelled"))
+                    observer?(
+                        .requestFailed(
+                            key: key,
+                            attempts: attempt,
+                            reason: "cancelled",
+                            remainingBudgetMilliseconds: remainingBudgetMilliseconds(deadline)
+                        )
+                    )
                     telemetryHooks?.onRequestCancelled?(
                         TelemetryCancellationContext(
                             key: key,
                             attempt: attempt,
                             reason: "retrySleepCancelled",
+                            coalescingMode: coalescingMode,
                             request: request
                         )
                     )
                     return .failure(.cancelled)
                 }
                 if Task.isCancelled {
-                    observer?(.requestFailed(key: key, attempts: attempt, reason: "cancelled"))
+                    observer?(
+                        .requestFailed(
+                            key: key,
+                            attempts: attempt,
+                            reason: "cancelled",
+                            remainingBudgetMilliseconds: remainingBudgetMilliseconds(deadline)
+                        )
+                    )
                     telemetryHooks?.onRequestCancelled?(
                         TelemetryCancellationContext(
                             key: key,
                             attempt: attempt,
                             reason: "taskCancelled",
+                            coalescingMode: coalescingMode,
                             request: request
                         )
                     )
@@ -757,12 +912,38 @@ public final class NetworkClient: @unchecked Sendable {
                     )
                 )
 
-                if !retryPolicy.canRetry(attempt: attempt, retriesUsed: retriesUsed) || !retryPolicy.shouldRetry(error: wrapped, request: request) {
-                    observer?(.requestFailed(
-                        key: key,
-                        attempts: attempt,
-                        reason: failureReason(error: wrapped)
-                    ))
+                let reason = failureReason(error: wrapped)
+                let shouldRetry = retryPolicy.shouldRetry(error: wrapped, request: request)
+                if !shouldRetry {
+                    observer?(
+                        .requestFailed(
+                            key: key,
+                            attempts: attempt,
+                            reason: reason,
+                            remainingBudgetMilliseconds: remainingBudgetMilliseconds(deadline)
+                        )
+                    )
+                    return .failure(wrapped)
+                }
+                if !retryPolicy.canRetry(attempt: attempt, retriesUsed: retriesUsed) {
+                    observer?(.retryExhausted(key: key, attempts: attempt, reason: reason))
+                    telemetryHooks?.onRetryExhausted?(
+                        TelemetryRetryExhaustedContext(
+                            key: key,
+                            attempts: attempt,
+                            reason: reason,
+                            coalescingMode: coalescingMode,
+                            request: request
+                        )
+                    )
+                    observer?(
+                        .requestFailed(
+                            key: key,
+                            attempts: attempt,
+                            reason: reason,
+                            remainingBudgetMilliseconds: remainingBudgetMilliseconds(deadline)
+                        )
+                    )
                     return .failure(wrapped)
                 }
 
@@ -771,12 +952,23 @@ public final class NetworkClient: @unchecked Sendable {
                     error: wrapped,
                     random: retryRandomGenerator
                 )
+                if !canScheduleRetry(withDelayNanoseconds: delay, deadline: deadline) {
+                    observer?(
+                        .requestFailed(
+                            key: key,
+                            attempts: attempt,
+                            reason: "timeout_budget_exhausted",
+                            remainingBudgetMilliseconds: remainingBudgetMilliseconds(deadline)
+                        )
+                    )
+                    return .failure(.timeoutBudgetExceeded)
+                }
                 observer?(
                     .retryScheduled(
                         key: key,
                         nextAttempt: attempt + 1,
                         delayMilliseconds: Double(delay) / 1_000_000,
-                        reason: failureReason(error: wrapped)
+                        reason: reason
                     )
                 )
                 telemetryHooks?.onRetryScheduled?(
@@ -785,31 +977,48 @@ public final class NetworkClient: @unchecked Sendable {
                         attempt: attempt,
                         nextAttempt: attempt + 1,
                         delayMilliseconds: Double(delay) / 1_000_000,
-                        reason: failureReason(error: wrapped),
+                        reason: reason,
+                        coalescingMode: coalescingMode,
                         request: request
                     )
                 )
                 do {
                     try await retryClock.sleep(nanoseconds: delay)
                 } catch {
-                    observer?(.requestFailed(key: key, attempts: attempt, reason: "cancelled"))
+                    observer?(
+                        .requestFailed(
+                            key: key,
+                            attempts: attempt,
+                            reason: "cancelled",
+                            remainingBudgetMilliseconds: remainingBudgetMilliseconds(deadline)
+                        )
+                    )
                     telemetryHooks?.onRequestCancelled?(
                         TelemetryCancellationContext(
                             key: key,
                             attempt: attempt,
                             reason: "retrySleepCancelled",
+                            coalescingMode: coalescingMode,
                             request: request
                         )
                     )
                     return .failure(.cancelled)
                 }
                 if Task.isCancelled {
-                    observer?(.requestFailed(key: key, attempts: attempt, reason: "cancelled"))
+                    observer?(
+                        .requestFailed(
+                            key: key,
+                            attempts: attempt,
+                            reason: "cancelled",
+                            remainingBudgetMilliseconds: remainingBudgetMilliseconds(deadline)
+                        )
+                    )
                     telemetryHooks?.onRequestCancelled?(
                         TelemetryCancellationContext(
                             key: key,
                             attempt: attempt,
                             reason: "taskCancelled",
+                            coalescingMode: coalescingMode,
                             request: request
                         )
                     )
@@ -823,24 +1032,51 @@ public final class NetworkClient: @unchecked Sendable {
         }
     }
 
+    private static func deadlineHasExpired(_ deadline: RequestDeadline?) -> Bool {
+        guard let deadline else { return false }
+        return DispatchTime.now().uptimeNanoseconds >= deadline.deadlineNanoseconds
+    }
+
+    private static func remainingBudgetMilliseconds(_ deadline: RequestDeadline?) -> Double? {
+        guard let deadline else { return nil }
+        let now = DispatchTime.now().uptimeNanoseconds
+        if now >= deadline.deadlineNanoseconds {
+            return 0
+        }
+        return Double(deadline.deadlineNanoseconds - now) / 1_000_000
+    }
+
+    private static func canScheduleRetry(
+        withDelayNanoseconds delayNanoseconds: UInt64,
+        deadline: RequestDeadline?
+    ) -> Bool {
+        guard let deadline else { return true }
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard now < deadline.deadlineNanoseconds else { return false }
+        let remaining = deadline.deadlineNanoseconds - now
+        return delayNanoseconds < remaining
+    }
+
     private static func failureReason(error: NetworkError) -> String {
         switch error {
         case .invalidResponse:
-            return "invalidResponse"
+            return "invalid_response"
         case .httpStatus(let code, _, _):
-            return "httpStatus:\(code)"
+            return "http_status_\(code)"
         case .decoding:
             return "decoding"
         case .transport(let underlying as URLError):
-            return "transport:\(underlying.code.rawValue)"
+            return "transport_\(underlying.code.rawValue)"
         case .transport:
             return "transport"
         case .cancelled:
             return "cancelled"
+        case .timeoutBudgetExceeded:
+            return "timeout_budget_exhausted"
         case .circuitBreakerOpen:
-            return "circuitBreakerOpen"
+            return "circuit_open"
         case .clientRateLimited:
-            return "clientRateLimited"
+            return "client_rate_limited"
         }
     }
 
@@ -1046,4 +1282,11 @@ private extension DateFormatter {
         formatter.dateFormat = "EEE',' dd MMM yyyy HH':'mm':'ss z"
         return formatter
     }()
+}
+
+private extension UInt64 {
+    func saturatingAdd(_ rhs: UInt64) -> UInt64 {
+        let (value, overflow) = addingReportingOverflow(rhs)
+        return overflow ? UInt64.max : value
+    }
 }
