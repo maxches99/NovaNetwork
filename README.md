@@ -1,6 +1,6 @@
-# RequestCoalescer
+# NovaNetworkClient
 
-`RequestCoalescer` is a Swift library for deduplicating concurrent requests with the same logical identity.
+`NovaNetworkClient` is a Swift library for deduplicating concurrent requests with the same logical identity.
 
 When multiple callers ask for the same resource at the same time, only one underlying operation runs and all callers await the shared result.
 
@@ -20,7 +20,7 @@ When multiple callers ask for the same resource at the same time, only one under
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/your-org/RequestCoalescer.git", from: "1.0.0")
+    .package(url: "https://github.com/your-org/NovaNetworkClient.git", from: "1.0.0")
 ]
 ```
 
@@ -29,7 +29,7 @@ targets: [
     .target(
         name: "YourTarget",
         dependencies: [
-            .product(name: "RequestCoalescer", package: "RequestCoalescer")
+            .product(name: "NovaNetworkClient", package: "NovaNetworkClient")
         ]
     )
 ]
@@ -69,7 +69,7 @@ targets: [
 
 ```swift
 import Foundation
-import RequestCoalescer
+import NovaNetworkClient
 
 let client = NetworkClient(
     transport: Transport(),
@@ -105,7 +105,7 @@ let data = try await client.load(
 
 ```swift
 let cacheURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-    .appendingPathComponent("RequestCoalescerCache")
+    .appendingPathComponent("NovaNetworkClientCache")
 
 let client = NetworkClient(
     transport: Transport(),
@@ -178,7 +178,7 @@ print(inFlight.map(\.key))
 ## Benchmark Baseline Check
 
 ```bash
-swift run RequestCoalescerBenchmarks --check-baseline
+swift run NovaNetworkClientBenchmarks --check-baseline
 ```
 
 ## Request Builder

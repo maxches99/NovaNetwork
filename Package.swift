@@ -4,30 +4,34 @@
 import PackageDescription
 
 let package = Package(
-    name: "RequestCoalescer",
+    name: "NovaNetworkClient",
     platforms: [.iOS(.v13), .macOS(.v10_15), .watchOS(.v6), .tvOS(.v13)],
     products: [
-        .library(name: "RequestCoalescer", targets: ["RequestCoalescer"]),
-        .library(name: "RequestCoalescerTestSupport", targets: ["RequestCoalescerTestSupport"]),
-        .executable(name: "RequestCoalescerBenchmarks", targets: ["RequestCoalescerBenchmarks"]),
+        .library(name: "NovaNetworkClient", targets: ["NovaNetworkClient"]),
+        .library(name: "NovaNetworkClientTestSupport", targets: ["NovaNetworkClientTestSupport"]),
+        .executable(name: "NovaNetworkClientBenchmarks", targets: ["NovaNetworkClientBenchmarks"]),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
         // Targets can depend on other targets in this package and products from dependencies.
         .target(
-            name: "RequestCoalescer"
+            name: "NovaNetworkClient",
+            path: "Sources/NovaNetworkClient"
         ),
         .target(
-            name: "RequestCoalescerTestSupport",
-            dependencies: ["RequestCoalescer"]
+            name: "NovaNetworkClientTestSupport",
+            dependencies: ["NovaNetworkClient"],
+            path: "Sources/NovaNetworkClientTestSupport"
         ),
         .testTarget(
-            name: "RequestCoalescerTests",
-            dependencies: ["RequestCoalescer"]
+            name: "NovaNetworkClientTests",
+            dependencies: ["NovaNetworkClient"],
+            path: "Tests/NovaNetworkClientTests"
         ),
         .executableTarget(
-            name: "RequestCoalescerBenchmarks",
-            dependencies: ["RequestCoalescer"]
+            name: "NovaNetworkClientBenchmarks",
+            dependencies: ["NovaNetworkClient"],
+            path: "Sources/NovaNetworkClientBenchmarks"
         ),
     ]
 )

@@ -1,5 +1,5 @@
 import Foundation
-import RequestCoalescer
+import NovaNetworkClient
 
 actor BenchmarkTransport: NetworkTransport {
     private(set) var calls = 0

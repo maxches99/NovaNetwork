@@ -1,7 +1,7 @@
 # AGENTS.md
 
 ## Purpose
-This repository contains a Swift Package (`RequestCoalescer`).
+This repository contains a Swift Package (`NovaNetworkClient`).
 Use this file as the default operating guide for coding agents.
 
 ## Project Layout

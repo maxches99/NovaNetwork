@@ -1,7 +1,7 @@
 {
   "configurations" : [
     {
-      "id" : "924B5C55-0E83-4C68-A356-8040D536BA21",
+      "id" : "8CE17268-FEF4-494E-9CA7-4374BA9C22C4",
       "name" : "Configuration 1",
       "options" : {
 
@@ -15,8 +15,8 @@
     {
       "target" : {
         "containerPath" : "container:",
-        "identifier" : "RequestCoalescerTests",
-        "name" : "RequestCoalescerTests"
+        "identifier" : "NovaNetworkClientTests",
+        "name" : "NovaNetworkClientTests"
       }
     }
   ],

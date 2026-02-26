@@ -1,6 +1,6 @@
-# RequestCoalescer Setup & Usage Guide
+# NovaNetworkClient Setup & Usage Guide
 
-This guide covers full setup and practical usage of `RequestCoalescer`.
+This guide covers full setup and practical usage of `NovaNetworkClient`.
 
 ## Table of Contents
 
@@ -32,7 +32,7 @@ Add package dependency:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/your-org/RequestCoalescer.git", from: "1.0.0")
+    .package(url: "https://github.com/your-org/NovaNetworkClient.git", from: "1.0.0")
 ]
 ```
 
@@ -43,7 +43,7 @@ targets: [
     .target(
         name: "YourTarget",
         dependencies: [
-            .product(name: "RequestCoalescer", package: "RequestCoalescer")
+            .product(name: "NovaNetworkClient", package: "NovaNetworkClient")
         ]
     )
 ]
@@ -53,7 +53,7 @@ targets: [
 
 ```swift
 import Foundation
-import RequestCoalescer
+import NovaNetworkClient
 
 let client = NetworkClient()
 ```

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import RequestCoalescer
+@testable import NovaNetworkClient
 
 private enum DummyError: Error {
     case boom

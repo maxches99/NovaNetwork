@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import RequestCoalescer
+@testable import NovaNetworkClient
 
 enum TestError: Error, Equatable { case failed }
 

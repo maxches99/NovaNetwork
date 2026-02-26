@@ -1,10 +1,10 @@
-# ``RequestCoalescer``
+# ``NovaNetworkClient``
 
 Deduplicate concurrent network requests with configurable fingerprinting, cancellation, retry policy, and observability.
 
 ## Overview
 
-`RequestCoalescer` ensures that simultaneous calls for the same logical request share a single underlying operation.
+`NovaNetworkClient` ensures that simultaneous calls for the same logical request share a single underlying operation.
 
 Use ``NetworkClient`` for a batteries-included integration with `URLSession`.
 

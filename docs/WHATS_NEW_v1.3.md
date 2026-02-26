@@ -14,7 +14,7 @@ This document tracks the implemented scope for `RequestCoalescer` `v1.3`.
 - [x] In-flight introspection APIs for diagnostics (`inFlightRequests()`).
 - [x] Adaptive retry behavior (`Retry-After`, capped delay, retry budget).
 - [x] Telemetry hooks for trace/metric adapters (`NetworkTelemetryHooks`).
-- [x] Test utilities target (`RequestCoalescerTestSupport`).
+- [x] Test utilities target (`NovaNetworkClientTestSupport`).
 
 ## Could
 

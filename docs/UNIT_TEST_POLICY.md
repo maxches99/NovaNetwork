@@ -1,6 +1,6 @@
 # Unit Test Policy
 
-This policy defines how unit tests are created and maintained in `RequestCoalescer`.
+This policy defines how unit tests are created and maintained in `NovaNetworkClient`.
 
 ## Goals
 
@@ -10,8 +10,8 @@ This policy defines how unit tests are created and maintained in `RequestCoalesc
 
 ## Scope
 
-- Applies to all source files in `Sources/RequestCoalescer/`.
-- Applies to all tests in `Tests/RequestCoalescerTests/`.
+- Applies to all source files in `Sources/NovaNetworkClient/`.
+- Applies to all tests in `Tests/NovaNetworkClientTests/`.
 
 ## Coverage Targets
 
@@ -79,8 +79,7 @@ Optional coverage report:
 
 ```bash
 xcrun llvm-cov report \
-  .build/arm64-apple-macosx/debug/RequestCoalescerPackageTests.xctest/Contents/MacOS/RequestCoalescerPackageTests \
+  .build/arm64-apple-macosx/debug/NovaNetworkClientPackageTests.xctest/Contents/MacOS/NovaNetworkClientPackageTests \
   -instr-profile=.build/arm64-apple-macosx/debug/codecov/default.profdata \
-  Sources/RequestCoalescer/**/*.swift
+  Sources/NovaNetworkClient/**/*.swift
 ```
-

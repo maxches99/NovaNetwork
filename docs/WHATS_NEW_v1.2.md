@@ -19,5 +19,5 @@
   - `NetworkClient.handleMemoryPressure(clearCache:cancelInFlight:)`
   - in-flight eviction tracking in coalescer metrics.
 - Added batch API: `loadBatch(requests:authScope:cachePolicy:options:)`.
-- Added benchmark executable target: `RequestCoalescerBenchmarks`.
+- Added benchmark executable target: `NovaNetworkClientBenchmarks`.
 - Expanded tests for ETag revalidation, disk cache, circuit breaker, batch ordering, priority scheduling, and memory pressure metrics.
