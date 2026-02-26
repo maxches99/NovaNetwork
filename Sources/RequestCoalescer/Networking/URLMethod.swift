@@ -1,6 +1,6 @@
 import Foundation
 
-public enum URLMethod: String, Codable, Sendable {
+public enum URLMethod: String, Codable, Hashable, Sendable {
     case get = "GET"
     case post = "POST"
     case put = "PUT"

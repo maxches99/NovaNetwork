@@ -442,7 +442,7 @@ struct RequestCoalescerTests {
             _ = try await client.load(request: request, authScope: nil)
             Issue.record("Expected to throw")
         } catch let error as NetworkError {
-            guard case .httpStatus(let code, _) = error else {
+            guard case .httpStatus(let code, _, _) = error else {
                 Issue.record("Expected HTTP status error")
                 return
             }

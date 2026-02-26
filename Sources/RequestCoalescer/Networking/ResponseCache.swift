@@ -6,19 +6,25 @@ public struct CachedResponse: Sendable {
     public let headers: [String: String]
     public let etag: String?
     public let storedAtNanoseconds: UInt64
+    public let lastAccessedAtNanoseconds: UInt64
+    public let varyRequestHeaders: [String: String]
 
     public init(
         body: Data,
         statusCode: Int,
         headers: [String: String],
         etag: String?,
-        storedAtNanoseconds: UInt64
+        storedAtNanoseconds: UInt64,
+        lastAccessedAtNanoseconds: UInt64? = nil,
+        varyRequestHeaders: [String: String] = [:]
     ) {
         self.body = body
         self.statusCode = statusCode
         self.headers = headers
         self.etag = etag
         self.storedAtNanoseconds = storedAtNanoseconds
+        self.lastAccessedAtNanoseconds = lastAccessedAtNanoseconds ?? storedAtNanoseconds
+        self.varyRequestHeaders = varyRequestHeaders
     }
 }
 

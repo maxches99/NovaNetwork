@@ -15,16 +15,23 @@ public enum NetworkFailureReason: Sendable, Equatable {
 
 public enum NetworkError: Error {
     case invalidResponse
-    case httpStatus(code: Int, body: Data)
+    case httpStatus(code: Int, headers: [String: String], body: Data)
     case decoding(underlying: any Error)
     case transport(underlying: any Error)
     case cancelled
     case circuitBreakerOpen
+    case clientRateLimited(retryAfterSeconds: TimeInterval?)
+}
+
+public extension NetworkError {
+    static func httpStatus(code: Int, body: Data) -> NetworkError {
+        .httpStatus(code: code, headers: [:], body: body)
+    }
 }
 
 public extension NetworkError {
     var statusCode: Int? {
-        if case .httpStatus(let code, _) = self {
+        if case .httpStatus(let code, _, _) = self {
             return code
         }
         return nil
@@ -43,7 +50,7 @@ public extension NetworkError {
         switch self {
         case .invalidResponse:
             return .invalidResponse
-        case .httpStatus(let code, _):
+        case .httpStatus(let code, _, _):
             if code == 429 { return .rateLimited }
             return .httpStatus(code: code)
         case .decoding:
@@ -59,6 +66,8 @@ public extension NetworkError {
             return .cancelled
         case .circuitBreakerOpen:
             return .circuitBreakerOpen
+        case .clientRateLimited:
+            return .rateLimited
         }
     }
 }

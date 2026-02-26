@@ -52,6 +52,17 @@ private actor SequenceThrowingTransport: NetworkTransport {
     func calls() -> Int { callCount }
 }
 
+private actor HeaderCapturingTransport: NetworkTransport {
+    private(set) var lastHeaders: [String: String] = [:]
+
+    func execute(_ request: APIRequest) async throws -> NetworkResponse {
+        lastHeaders = request.headers
+        return NetworkResponse(statusCode: 200, headers: [:], body: Data("ok".utf8))
+    }
+
+    func headers() -> [String: String] { lastHeaders }
+}
+
 private actor EventRecorder {
     private(set) var events: [NetworkClientEvent] = []
 
@@ -60,6 +71,16 @@ private actor EventRecorder {
     }
 
     func count() -> Int { events.count }
+}
+
+private actor MiddlewareProbe {
+    private(set) var beforeCalls = 0
+    private(set) var afterCalls = 0
+
+    func onBefore() { beforeCalls += 1 }
+    func onAfter() { afterCalls += 1 }
+    func beforeCount() -> Int { beforeCalls }
+    func afterCount() -> Int { afterCalls }
 }
 
 private final class URLProtocolStub: URLProtocol {
@@ -574,5 +595,195 @@ struct NetworkingCoverageTests {
         let openPolicy = CircuitBreakerPolicy(scope: .host, failureThreshold: 1, cooldownSeconds: 0)
         await store.recordFailure(identifier: "id2", policy: openPolicy)
         #expect(await store.canExecute(identifier: "id2"))
+    }
+
+    @Test
+    func middlewarePipelineTransformsRequestAndResponse() async throws {
+        let probe = MiddlewareProbe()
+        let middleware = NetworkMiddleware(
+            beforeSend: { request, _ in
+                await probe.onBefore()
+                return request.withMergedHeaders(["X-Test": "1"])
+            },
+            afterResponse: { _, _, response in
+                await probe.onAfter()
+                return NetworkResponse(
+                    statusCode: response.statusCode,
+                    headers: response.headers,
+                    body: Data("mutated".utf8)
+                )
+            }
+        )
+        let transport = StubNetworkTransport(response: .success(Data("raw".utf8)))
+        let client = NetworkClient(transport: transport, middlewares: [middleware])
+        let request = APIRequest(method: .get, url: URL(string: "https://example.com/middleware")!)
+
+        let result = try await client.load(request: request, authScope: nil)
+        #expect(result == Data("mutated".utf8))
+        #expect(await probe.beforeCount() == 1)
+        #expect(await probe.afterCount() == 1)
+    }
+
+    @Test
+    func retryPolicyRespectsRetryAfterHeader() {
+        let policy = RetryPolicy(
+            maxAttempts: 3,
+            baseDelayNanoseconds: 100_000_000,
+            maxDelayNanoseconds: 200_000_000,
+            jitterRange: nil
+        )
+        let error = NetworkError.httpStatus(
+            code: 429,
+            headers: ["Retry-After": "2"],
+            body: Data()
+        )
+        let delay = policy.adaptiveDelayNanoseconds(forAttempt: 1, error: error, random: FixedRetryRandom(value: 1))
+        #expect(delay == 2_000_000_000)
+    }
+
+    @Test
+    func clientRateLimitBlocksSecondRequestWithinWindow() async throws {
+        let transport = StubNetworkTransport(response: .success(Data("ok".utf8)))
+        let client = NetworkClient(transport: transport)
+        let request = APIRequest(method: .get, url: URL(string: "https://example.com/local-rate-limit")!)
+        let options = RequestExecutionOptions(rateLimitPolicy: .init(maxRequests: 1, intervalSeconds: 60))
+
+        _ = try await client.load(request: request, authScope: nil, options: options)
+        do {
+            _ = try await client.load(request: request, authScope: nil, options: options)
+            Issue.record("Expected client-side rate limit")
+        } catch let error as NetworkError {
+            guard case .clientRateLimited(let retryAfter) = error else {
+                Issue.record("Expected clientRateLimited")
+                return
+            }
+            #expect((retryAfter ?? 0) > 0)
+        } catch {
+            Issue.record("Unexpected error type")
+        }
+    }
+
+    @Test
+    func inFlightRequestsExposesActiveKey() async throws {
+        let transport = StubNetworkTransport(delayNanos: 300_000_000, response: .success(Data("ok".utf8)))
+        let client = NetworkClient(transport: transport)
+        let request = APIRequest(method: .get, url: URL(string: "https://example.com/in-flight")!)
+
+        let task = Task {
+            try await client.load(request: request, authScope: nil)
+        }
+        try? await Task.sleep(nanoseconds: 30_000_000)
+
+        let entries = await client.inFlightRequests()
+        #expect(entries.contains(where: { !$0.key.isEmpty }))
+        _ = try await task.value
+    }
+
+    @Test
+    func loadWithErrorMapperMapsNetworkErrors() async {
+        enum DomainError: Error, Equatable { case remoteFailure }
+
+        let transport = StubNetworkTransport(
+            response: Result<NetworkResponse, NetworkError>.failure(.httpStatus(code: 500, body: Data()))
+        )
+        let client = NetworkClient(transport: transport)
+        let request = APIRequest(method: .get, url: URL(string: "https://example.com/mapped-error")!)
+
+        do {
+            _ = try await client.load(
+                request: request,
+                authScope: nil,
+                errorMapper: { _ in DomainError.remoteFailure }
+            )
+            Issue.record("Expected mapped error")
+        } catch let error as DomainError {
+            #expect(error == .remoteFailure)
+        } catch {
+            Issue.record("Unexpected error type")
+        }
+    }
+
+    @Test
+    func cacheControlNoStoreAndVaryAreRespected() async throws {
+        let noStoreTransport = ScriptedNetworkTransport(
+            responses: [
+                .success(
+                    NetworkResponse(
+                        statusCode: 200,
+                        headers: ["Cache-Control": "no-store"],
+                        body: Data("network-only".utf8)
+                    )
+                ),
+                .success(
+                    NetworkResponse(
+                        statusCode: 200,
+                        headers: ["Cache-Control": "no-store"],
+                        body: Data("network-only".utf8)
+                    )
+                )
+            ]
+        )
+        let noStoreClient = NetworkClient(transport: noStoreTransport)
+        let baseURL = URL(string: "https://example.com/cache-control")!
+        let noStore = APIRequest(method: .get, url: baseURL)
+
+        _ = try await noStoreClient.load(request: noStore, authScope: nil, cachePolicy: .cacheFirst(maxAge: 60))
+        _ = try await noStoreClient.load(request: noStore, authScope: nil, cachePolicy: .cacheFirst(maxAge: 60))
+
+        #expect(await noStoreTransport.calls() == 2)
+
+        let varyTransport = ScriptedNetworkTransport(
+            responses: [
+                .success(
+                    NetworkResponse(
+                        statusCode: 200,
+                        headers: ["Vary": "Accept-Language"],
+                        body: Data("lang-en".utf8)
+                    )
+                ),
+                .success(
+                    NetworkResponse(
+                        statusCode: 200,
+                        headers: ["Vary": "Accept-Language"],
+                        body: Data("lang-fr".utf8)
+                    )
+                )
+            ]
+        )
+        let varyClient = NetworkClient(transport: varyTransport)
+
+        let en = APIRequest(method: .get, url: baseURL.appendingPathComponent("vary"), headers: ["Accept-Language": "en"])
+        let fr = APIRequest(method: .get, url: baseURL.appendingPathComponent("vary"), headers: ["Accept-Language": "fr"])
+        let enBody = try await varyClient.load(request: en, authScope: nil, cachePolicy: .cacheFirst(maxAge: 60))
+        let frBody = try await varyClient.load(request: fr, authScope: nil, cachePolicy: .cacheFirst(maxAge: 60))
+
+        #expect(enBody == Data("lang-en".utf8))
+        #expect(frBody == Data("lang-fr".utf8))
+        #expect(await varyTransport.calls() == 2)
+    }
+
+    @Test
+    func loadStreamFallsBackToSingleChunkWhenStreamingTransportUnavailable() async throws {
+        let transport = StubNetworkTransport(response: .success(Data("chunk".utf8)))
+        let client = NetworkClient(transport: transport)
+        let request = APIRequest(method: .get, url: URL(string: "https://example.com/stream-fallback")!)
+
+        var chunks: [Data] = []
+        for try await chunk in client.loadStream(request: request, authScope: nil) {
+            chunks.append(chunk)
+        }
+        #expect(chunks == [Data("chunk".utf8)])
+    }
+
+    @Test
+    func idempotencyPolicyAddsHeaderForGuardedMethod() async throws {
+        let transport = HeaderCapturingTransport()
+        let client = NetworkClient(transport: transport)
+        let request = APIRequest(method: .post, url: URL(string: "https://example.com/idempotency")!)
+        let options = RequestExecutionOptions(idempotencyPolicy: .default)
+
+        _ = try await client.load(request: request, authScope: nil, options: options)
+        let headers = await transport.headers()
+        #expect(headers.keys.contains(where: { $0.lowercased() == "idempotency-key" }))
     }
 }

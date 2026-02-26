@@ -80,6 +80,18 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
         }
     }
 
+    public struct InFlightEntry: Sendable {
+        public let key: String
+        public let waiterCount: Int
+        public let durationMilliseconds: Double
+
+        public init(key: String, waiterCount: Int, durationMilliseconds: Double) {
+            self.key = key
+            self.waiterCount = waiterCount
+            self.durationMilliseconds = durationMilliseconds
+        }
+    }
+
     public enum Event: Sendable {
         case started(key: String)
         case coalesced(key: String, waiterCount: Int)
@@ -279,6 +291,19 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
             finishedOperations += 1
         }
         resumeAllCapacityWaiters()
+    }
+
+    public func inFlightEntries() -> [InFlightEntry] {
+        let now = DispatchTime.now().uptimeNanoseconds
+        return entries.map { key, entry in
+            let elapsed = now >= entry.startedAtNanoseconds ? (now - entry.startedAtNanoseconds) : 0
+            return InFlightEntry(
+                key: key,
+                waiterCount: entry.waiters.count,
+                durationMilliseconds: Double(elapsed) / 1_000_000
+            )
+        }
+        .sorted { $0.key < $1.key }
     }
 
     private func unwrap(_ result: Result<Output, Failure>) throws -> Output {

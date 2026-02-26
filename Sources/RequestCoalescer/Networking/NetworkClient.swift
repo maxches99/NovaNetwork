@@ -35,8 +35,11 @@ public final class NetworkClient: @unchecked Sendable {
     private let cache: any ResponseCache
     private let decoder: JSONDecoder
     private let networkObserver: (@Sendable (NetworkClientEvent) -> Void)?
+    private let middlewares: [NetworkMiddleware]
+    private let telemetryHooks: NetworkTelemetryHooks?
     private let eventHub = NetworkClientEventHub()
     private let circuitBreakerStore = CircuitBreakerStore()
+    private let rateLimiter = KeyRateLimiter()
 
     public init(
         transport: any NetworkTransport = Transport(),
@@ -51,6 +54,8 @@ public final class NetworkClient: @unchecked Sendable {
         cache: (any ResponseCache)? = nil,
         observer: RequestCoalescer<NetworkResponse, NetworkError>.Observer? = nil,
         networkObserver: (@Sendable (NetworkClientEvent) -> Void)? = nil,
+        middlewares: [NetworkMiddleware] = [],
+        telemetryHooks: NetworkTelemetryHooks? = nil,
         decoder: JSONDecoder = JSONDecoder()
     ) {
         self.transport = transport
@@ -63,6 +68,8 @@ public final class NetworkClient: @unchecked Sendable {
         self.cache = cache ?? MemoryResponseCache(maxEntries: cacheMaxEntries)
         self.decoder = decoder
         self.networkObserver = networkObserver
+        self.middlewares = middlewares
+        self.telemetryHooks = telemetryHooks
     }
 
     public func events() -> AsyncStream<NetworkClientEvent> {
@@ -92,6 +99,7 @@ public final class NetworkClient: @unchecked Sendable {
             emit(.cacheMiss(key: key))
             return try await fetchNetworkAndOptionallyStore(
                 request: request,
+                authScope: authScope,
                 key: key,
                 storeInCache: false,
                 cachedETag: nil,
@@ -99,8 +107,21 @@ public final class NetworkClient: @unchecked Sendable {
             )
         case .cacheFirst(let maxAge):
             if let cached = await cache.entry(forKey: key) {
+                guard varyMatches(cached: cached, request: request) else {
+                    emit(.cacheMiss(key: key))
+                    return try await fetchNetworkAndOptionallyStore(
+                        request: request,
+                        authScope: authScope,
+                        key: key,
+                        storeInCache: true,
+                        cachedETag: nil,
+                        options: options
+                    )
+                }
+
                 let age = ageSeconds(since: cached.storedAtNanoseconds)
-                if age <= maxAge {
+                let effectiveMaxAge = effectiveMaxAge(clientMaxAge: maxAge, cached: cached)
+                if age <= effectiveMaxAge || isFreshByExpiresHeader(cached: cached) {
                     emit(.cacheHit(
                         key: key,
                         isStale: false,
@@ -113,6 +134,7 @@ public final class NetworkClient: @unchecked Sendable {
                 do {
                     return try await fetchNetworkAndOptionallyStore(
                         request: request,
+                        authScope: authScope,
                         key: key,
                         storeInCache: true,
                         cachedETag: cached.etag,
@@ -127,6 +149,7 @@ public final class NetworkClient: @unchecked Sendable {
             emit(.cacheMiss(key: key))
             return try await fetchNetworkAndOptionallyStore(
                 request: request,
+                authScope: authScope,
                 key: key,
                 storeInCache: true,
                 cachedETag: nil,
@@ -134,8 +157,21 @@ public final class NetworkClient: @unchecked Sendable {
             )
         case .staleWhileRevalidate(let maxAge, let staleAge):
             if let cached = await cache.entry(forKey: key) {
+                guard varyMatches(cached: cached, request: request) else {
+                    emit(.cacheMiss(key: key))
+                    return try await fetchNetworkAndOptionallyStore(
+                        request: request,
+                        authScope: authScope,
+                        key: key,
+                        storeInCache: true,
+                        cachedETag: nil,
+                        options: options
+                    )
+                }
+
                 let age = ageSeconds(since: cached.storedAtNanoseconds)
-                if age <= maxAge {
+                let freshness = effectiveStaleAges(clientMaxAge: maxAge, clientStaleAge: staleAge, cached: cached)
+                if age <= freshness.maxAge || isFreshByExpiresHeader(cached: cached) {
                     emit(.cacheHit(
                         key: key,
                         isStale: false,
@@ -144,7 +180,7 @@ public final class NetworkClient: @unchecked Sendable {
                     return cached.body
                 }
 
-                if age <= staleAge {
+                if age <= freshness.staleAge {
                     emit(.cacheHit(
                         key: key,
                         isStale: true,
@@ -154,6 +190,7 @@ public final class NetworkClient: @unchecked Sendable {
                     Task {
                         _ = try? await self.fetchNetworkAndOptionallyStore(
                             request: request,
+                            authScope: authScope,
                             key: key,
                             storeInCache: true,
                             cachedETag: cached.etag,
@@ -167,6 +204,7 @@ public final class NetworkClient: @unchecked Sendable {
             emit(.cacheMiss(key: key))
             return try await fetchNetworkAndOptionallyStore(
                 request: request,
+                authScope: authScope,
                 key: key,
                 storeInCache: true,
                 cachedETag: nil,
@@ -198,35 +236,123 @@ public final class NetworkClient: @unchecked Sendable {
         }
     }
 
+    public func load<T: Decodable & Sendable, E: Error>(
+        request: APIRequest,
+        authScope: String?,
+        cachePolicy: CachePolicy? = nil,
+        as type: T.Type = T.self,
+        decoder: JSONDecoder? = nil,
+        options: RequestExecutionOptions = .init(),
+        errorMapper: @Sendable (NetworkError) -> E
+    ) async throws -> T {
+        do {
+            return try await load(
+                request: request,
+                authScope: authScope,
+                cachePolicy: cachePolicy,
+                as: type,
+                decoder: decoder,
+                options: options
+            )
+        } catch let error as NetworkError {
+            throw errorMapper(error)
+        } catch {
+            throw errorMapper(.transport(underlying: error))
+        }
+    }
+
+    public func load<E: Error>(
+        request: APIRequest,
+        authScope: String?,
+        cachePolicy: CachePolicy? = nil,
+        options: RequestExecutionOptions = .init(),
+        errorMapper: @Sendable (NetworkError) -> E
+    ) async throws -> Data {
+        do {
+            return try await load(
+                request: request,
+                authScope: authScope,
+                cachePolicy: cachePolicy,
+                options: options
+            )
+        } catch let error as NetworkError {
+            throw errorMapper(error)
+        } catch {
+            throw errorMapper(.transport(underlying: error))
+        }
+    }
+
     public func loadBatch(
         requests: [APIRequest],
         authScope: String?,
         cachePolicy: CachePolicy? = nil,
         options: RequestExecutionOptions = .init()
     ) async throws -> [Data] {
-        try await withThrowingTaskGroup(of: (Int, Data).self) { group in
-            for (index, request) in requests.enumerated() {
-                group.addTask {
+        var orderedResults: [Data] = []
+        orderedResults.reserveCapacity(requests.count)
+        for request in requests {
+            let data = try await load(
+                request: request,
+                authScope: authScope,
+                cachePolicy: cachePolicy,
+                options: options
+            )
+            orderedResults.append(data)
+        }
+        return orderedResults
+    }
+
+    public func loadStream(
+        request: APIRequest,
+        authScope: String?,
+        cachePolicy: CachePolicy? = nil,
+        options: RequestExecutionOptions = .init()
+    ) -> AsyncThrowingStream<Data, Error> {
+        if let streamingTransport = transport as? any StreamingNetworkTransport {
+            return AsyncThrowingStream { continuation in
+                Task {
+                    do {
+                        let prepared = try await prepareRequestForExecution(
+                            request: request,
+                            key: makeFingerprint(for: request, authScope: authScope).key,
+                            options: options
+                        )
+                        let stream = streamingTransport.stream(prepared, authScope: authScope)
+                        for try await chunk in stream {
+                            continuation.yield(chunk)
+                        }
+                        continuation.finish()
+                    } catch {
+                        continuation.finish(throwing: error)
+                    }
+                }
+            }
+        }
+
+        return AsyncThrowingStream { continuation in
+            Task {
+                do {
                     let data = try await self.load(
                         request: request,
                         authScope: authScope,
                         cachePolicy: cachePolicy,
                         options: options
                     )
-                    return (index, data)
+                    continuation.yield(data)
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
                 }
             }
-
-            var orderedResults = Array(repeating: Data(), count: requests.count)
-            for try await (index, data) in group {
-                orderedResults[index] = data
-            }
-            return orderedResults
         }
     }
 
     public func coalescerMetrics() async -> RequestCoalescer<NetworkResponse, NetworkError>.Metrics {
         await coalescer.snapshotMetrics()
+    }
+
+    public func inFlightRequests() async -> [RequestCoalescer<NetworkResponse, NetworkError>.InFlightEntry] {
+        await coalescer.inFlightEntries()
     }
 
     public func preload(
@@ -237,6 +363,7 @@ public final class NetworkClient: @unchecked Sendable {
         let key = makeFingerprint(for: request, authScope: authScope).key
         _ = try await fetchNetworkAndOptionallyStore(
             request: request,
+            authScope: authScope,
             key: key,
             storeInCache: true,
             cachedETag: nil,
@@ -290,11 +417,18 @@ public final class NetworkClient: @unchecked Sendable {
 
     private func fetchNetworkAndOptionallyStore(
         request: APIRequest,
+        authScope: String?,
         key: String,
         storeInCache: Bool,
         cachedETag: String?,
         options: RequestExecutionOptions
     ) async throws -> Data {
+        if let rateLimitPolicy = options.rateLimitPolicy,
+           let retryAfter = await rateLimiter.acquire(key: key, policy: rateLimitPolicy) {
+            emit(.requestRateLimited(key: key, retryAfterSeconds: retryAfter))
+            throw NetworkError.clientRateLimited(retryAfterSeconds: retryAfter)
+        }
+
         if let breakerPolicy = options.circuitBreakerPolicy {
             let identifier = circuitBreakerIdentifier(for: request, key: key, policy: breakerPolicy)
             let canExecute = await circuitBreakerStore.canExecute(identifier: identifier)
@@ -310,6 +444,11 @@ public final class NetworkClient: @unchecked Sendable {
         } else {
             conditionalRequest = request
         }
+        let preparedRequest = try await prepareRequestForExecution(
+            request: conditionalRequest,
+            key: key,
+            options: options
+        )
 
         let outcome: NetworkResponse
         do {
@@ -319,11 +458,14 @@ public final class NetworkClient: @unchecked Sendable {
             ) {
                 await Self.executeWithRetry(
                     key: key,
-                    request: conditionalRequest,
+                    request: preparedRequest,
+                    authScope: authScope,
                     transport: self.transport,
                     retryPolicy: self.retryPolicy,
                     retryClock: self.retryClock,
                     retryRandomGenerator: self.retryRandomGenerator,
+                    middlewares: self.middlewares,
+                    telemetryHooks: self.telemetryHooks,
                     observer: self.networkObserver
                 )
             }
@@ -344,7 +486,8 @@ public final class NetworkClient: @unchecked Sendable {
                     statusCode: cached.statusCode,
                     headers: cached.headers,
                     etag: cached.etag,
-                    storedAtNanoseconds: DispatchTime.now().uptimeNanoseconds
+                    storedAtNanoseconds: DispatchTime.now().uptimeNanoseconds,
+                    varyRequestHeaders: cached.varyRequestHeaders
                 )
                 await cache.set(revalidated, forKey: key)
             }
@@ -352,13 +495,14 @@ public final class NetworkClient: @unchecked Sendable {
             return cached.body
         }
 
-        if storeInCache {
+        if storeInCache && shouldStoreInCache(outcome.headers) {
             let cached = CachedResponse(
                 body: outcome.body,
                 statusCode: outcome.statusCode,
                 headers: outcome.headers,
                 etag: outcome.headerValue(for: "ETag"),
-                storedAtNanoseconds: DispatchTime.now().uptimeNanoseconds
+                storedAtNanoseconds: DispatchTime.now().uptimeNanoseconds,
+                varyRequestHeaders: varyHeaders(from: outcome.headers, requestHeaders: preparedRequest.headers)
             )
             await cache.set(cached, forKey: key)
         }
@@ -436,26 +580,71 @@ public final class NetworkClient: @unchecked Sendable {
     private static func executeWithRetry(
         key: String,
         request: APIRequest,
+        authScope: String?,
         transport: any NetworkTransport,
         retryPolicy: RetryPolicy,
         retryClock: any RetryClock,
         retryRandomGenerator: any RetryRandomGenerator,
+        middlewares: [NetworkMiddleware],
+        telemetryHooks: NetworkTelemetryHooks?,
         observer: (@Sendable (NetworkClientEvent) -> Void)?
     ) async -> Result<NetworkResponse, NetworkError> {
         var attempt = 1
+        var retriesUsed = 0
 
         while true {
             observer?(.requestAttempt(key: key, attempt: attempt))
 
+            let startedAt = DispatchTime.now().uptimeNanoseconds
+            let telemetryRequest = TelemetryRequestContext(key: key, attempt: attempt, request: request)
+            telemetryHooks?.onRequestStart?(telemetryRequest)
+
             do {
-                let response = try await transport.execute(request)
+                let preparedRequest = try await applyBeforeSendMiddlewares(
+                    middlewares: middlewares,
+                    request: request,
+                    authScope: authScope
+                )
+                let response = try await transport.execute(preparedRequest)
+                let postProcessed = try await applyAfterResponseMiddlewares(
+                    middlewares: middlewares,
+                    request: preparedRequest,
+                    authScope: authScope,
+                    response: response
+                )
+
+                telemetryHooks?.onRequestEnd?(
+                    TelemetryResponseContext(
+                        request: telemetryRequest,
+                        response: postProcessed,
+                        error: nil,
+                        durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - startedAt) / 1_000_000
+                    )
+                )
                 observer?(.requestSucceeded(key: key, attempts: attempt))
-                return .success(response)
+                return .success(postProcessed)
             } catch is CancellationError {
+                telemetryHooks?.onRequestEnd?(
+                    TelemetryResponseContext(
+                        request: telemetryRequest,
+                        response: nil,
+                        error: .cancelled,
+                        durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - startedAt) / 1_000_000
+                    )
+                )
                 observer?(.requestFailed(key: key, attempts: attempt, reason: "cancelled"))
                 return .failure(.cancelled)
             } catch let error as NetworkError {
-                if attempt >= retryPolicy.maxAttempts || !retryPolicy.shouldRetry(error: error) {
+                telemetryHooks?.onRequestEnd?(
+                    TelemetryResponseContext(
+                        request: telemetryRequest,
+                        response: nil,
+                        error: error,
+                        durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - startedAt) / 1_000_000
+                    )
+                )
+
+                if !retryPolicy.canRetry(attempt: attempt, retriesUsed: retriesUsed) || !retryPolicy.shouldRetry(error: error) {
                     observer?(.requestFailed(
                         key: key,
                         attempts: attempt,
@@ -464,8 +653,9 @@ public final class NetworkClient: @unchecked Sendable {
                     return .failure(error)
                 }
 
-                let delay = retryPolicy.delayNanoseconds(
+                let delay = retryPolicy.adaptiveDelayNanoseconds(
                     forAttempt: attempt,
+                    error: error,
                     random: retryRandomGenerator
                 )
                 observer?(
@@ -483,11 +673,21 @@ public final class NetworkClient: @unchecked Sendable {
                     return .failure(.cancelled)
                 }
 
+                retriesUsed += 1
                 attempt += 1
                 continue
             } catch {
                 let wrapped = NetworkError.transport(underlying: error)
-                if attempt >= retryPolicy.maxAttempts || !retryPolicy.shouldRetry(error: wrapped) {
+                telemetryHooks?.onRequestEnd?(
+                    TelemetryResponseContext(
+                        request: telemetryRequest,
+                        response: nil,
+                        error: wrapped,
+                        durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - startedAt) / 1_000_000
+                    )
+                )
+
+                if !retryPolicy.canRetry(attempt: attempt, retriesUsed: retriesUsed) || !retryPolicy.shouldRetry(error: wrapped) {
                     observer?(.requestFailed(
                         key: key,
                         attempts: attempt,
@@ -496,8 +696,9 @@ public final class NetworkClient: @unchecked Sendable {
                     return .failure(wrapped)
                 }
 
-                let delay = retryPolicy.delayNanoseconds(
+                let delay = retryPolicy.adaptiveDelayNanoseconds(
                     forAttempt: attempt,
+                    error: wrapped,
                     random: retryRandomGenerator
                 )
                 observer?(
@@ -515,6 +716,7 @@ public final class NetworkClient: @unchecked Sendable {
                     return .failure(.cancelled)
                 }
 
+                retriesUsed += 1
                 attempt += 1
                 continue
             }
@@ -525,7 +727,7 @@ public final class NetworkClient: @unchecked Sendable {
         switch error {
         case .invalidResponse:
             return "invalidResponse"
-        case .httpStatus(let code, _):
+        case .httpStatus(let code, _, _):
             return "httpStatus:\(code)"
         case .decoding:
             return "decoding"
@@ -537,11 +739,180 @@ public final class NetworkClient: @unchecked Sendable {
             return "cancelled"
         case .circuitBreakerOpen:
             return "circuitBreakerOpen"
+        case .clientRateLimited:
+            return "clientRateLimited"
         }
+    }
+
+    private func prepareRequestForExecution(
+        request: APIRequest,
+        key: String,
+        options: RequestExecutionOptions
+    ) async throws -> APIRequest {
+        guard let idempotencyPolicy = options.idempotencyPolicy else {
+            return request
+        }
+        guard idempotencyPolicy.guardedMethods.contains(request.method) else {
+            return request
+        }
+        if request.headers.keys.contains(where: { $0.caseInsensitiveCompare(idempotencyPolicy.headerName) == .orderedSame }) {
+            return request
+        }
+
+        let idempotencyKey: String
+        switch idempotencyPolicy.keyStrategy {
+        case .uuid:
+            idempotencyKey = UUID().uuidString
+        case .fingerprintDigest:
+            idempotencyKey = SHA256Util.hex(Data(key.utf8))
+        }
+        return request.withMergedHeaders([idempotencyPolicy.headerName: idempotencyKey])
+    }
+
+    private func shouldStoreInCache(_ headers: [String: String]) -> Bool {
+        let directives = cacheDirectives(from: headers)
+        return !directives.contains("no-store")
+    }
+
+    private func varyHeaders(from responseHeaders: [String: String], requestHeaders: [String: String]) -> [String: String] {
+        guard let rawVary = headerValue("Vary", in: responseHeaders) else { return [:] }
+        let names = rawVary
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && $0 != "*" }
+        guard !names.isEmpty else { return [:] }
+
+        var captured: [String: String] = [:]
+        for name in names {
+            let value = requestHeaders.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value ?? ""
+            captured[name.lowercased()] = value
+        }
+        return captured
+    }
+
+    private func varyMatches(cached: CachedResponse, request: APIRequest) -> Bool {
+        guard !cached.varyRequestHeaders.isEmpty else { return true }
+        for (name, expectedValue) in cached.varyRequestHeaders {
+            let actual = request.headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value ?? ""
+            if actual != expectedValue {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func effectiveMaxAge(clientMaxAge: TimeInterval, cached: CachedResponse) -> TimeInterval {
+        var value = max(0, clientMaxAge)
+        if let serverMax = cacheControlMaxAge(headers: cached.headers) {
+            value = min(value, serverMax)
+        }
+        return value
+    }
+
+    private func effectiveStaleAges(
+        clientMaxAge: TimeInterval,
+        clientStaleAge: TimeInterval,
+        cached: CachedResponse
+    ) -> (maxAge: TimeInterval, staleAge: TimeInterval) {
+        let maxAge = effectiveMaxAge(clientMaxAge: clientMaxAge, cached: cached)
+        var staleAge = max(maxAge, clientStaleAge)
+        if let swr = cacheControlStaleWhileRevalidate(headers: cached.headers) {
+            staleAge = min(staleAge, maxAge + swr)
+        }
+        return (maxAge, staleAge)
+    }
+
+    private func isFreshByExpiresHeader(cached: CachedResponse) -> Bool {
+        guard let expires = cacheControlExpires(headers: cached.headers) else { return false }
+        return Date() <= expires
+    }
+
+    private func cacheControlMaxAge(headers: [String: String]) -> TimeInterval? {
+        for directive in cacheDirectives(from: headers) {
+            if directive.hasPrefix("max-age=") {
+                let raw = directive.replacingOccurrences(of: "max-age=", with: "")
+                if let value = TimeInterval(raw) {
+                    return max(0, value)
+                }
+            }
+        }
+        return nil
+    }
+
+    private func cacheControlStaleWhileRevalidate(headers: [String: String]) -> TimeInterval? {
+        for directive in cacheDirectives(from: headers) {
+            if directive.hasPrefix("stale-while-revalidate=") {
+                let raw = directive.replacingOccurrences(of: "stale-while-revalidate=", with: "")
+                if let value = TimeInterval(raw) {
+                    return max(0, value)
+                }
+            }
+        }
+        return nil
+    }
+
+    private func cacheControlExpires(headers: [String: String]) -> Date? {
+        guard let expires = headerValue("Expires", in: headers) else { return nil }
+        return DateFormatter.rfc1123.date(from: expires)
+    }
+
+    private func cacheDirectives(from headers: [String: String]) -> Set<String> {
+        guard let cacheControl = headerValue("Cache-Control", in: headers) else { return [] }
+        return Set(
+            cacheControl
+                .lowercased()
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        )
+    }
+
+    private func headerValue(_ name: String, in headers: [String: String]) -> String? {
+        headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value
     }
 
     private func emit(_ event: NetworkClientEvent) {
         networkObserver?(event)
         Task { await eventHub.emit(event) }
     }
+}
+
+private extension NetworkClient {
+    static func applyBeforeSendMiddlewares(
+        middlewares: [NetworkMiddleware],
+        request: APIRequest,
+        authScope: String?
+    ) async throws -> APIRequest {
+        var current = request
+        for middleware in middlewares {
+            if let beforeSend = middleware.beforeSend {
+                current = try await beforeSend(current, authScope)
+            }
+        }
+        return current
+    }
+
+    static func applyAfterResponseMiddlewares(
+        middlewares: [NetworkMiddleware],
+        request: APIRequest,
+        authScope: String?,
+        response: NetworkResponse
+    ) async throws -> NetworkResponse {
+        var current = response
+        for middleware in middlewares {
+            if let afterResponse = middleware.afterResponse {
+                current = try await afterResponse(request, authScope, current)
+            }
+        }
+        return current
+    }
+}
+
+private extension DateFormatter {
+    static let rfc1123: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE',' dd MMM yyyy HH':'mm':'ss z"
+        return formatter
+    }()
 }

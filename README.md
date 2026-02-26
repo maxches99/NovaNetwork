@@ -34,20 +34,29 @@ targets: [
 - Optional short-lived in-memory response cache (`cacheFirst`, `staleWhileRevalidate`).
 - Optional pluggable response cache (`MemoryResponseCache`, `DiskResponseCache`, custom `ResponseCache`).
 - HTTP cache revalidation with `ETag` / `If-None-Match` (returns cached body on `304 Not Modified`).
+- Basic HTTP cache directive support (`Cache-Control`, `Expires`, `Vary`) for freshness and variant checks.
 - Configurable fingerprint policy (`query`, `headers`, `body`).
 - Coalescer limits (`maxInFlightKeys`, `maxWaitersPerKey`, `inFlightTimeout`).
 - Per-request execution options (priority, per-request limits override, capacity scheduling, circuit breaker).
+- Client-side per-key rate limiting (`RateLimitPolicy`).
+- Request middleware pipeline (`beforeSend` / `afterResponse`).
 - Cancellation policies:
   - `keepRunning`
   - `cancelWhenNoWaiters`
 - Retry/backoff policy for transient failures (for example `429`, `5xx`, network timeouts).
+- Adaptive retry options (`Retry-After` support, retry budget).
 - Testable retry behavior via injectable clock and random generator.
 - Data and typed `Decodable` loading APIs.
+- Typed error mapping overloads (`errorMapper`).
 - Batch loading helper (`loadBatch`) with stable input order.
+- Streaming helper (`loadStream`) with fallback to single-chunk mode.
 - Request helpers (`APIRequestBuilder`, `Encodable` JSON body initializer).
+- Idempotency helpers (`APIRequest.withIdempotencyKey`, `IdempotencyPolicy`).
 - Cache management (`preload`, `invalidate`).
 - Coalescer metrics (`hit/miss/cancellation/completion`) and observer events.
 - Async event stream (`events() -> AsyncStream<NetworkClientEvent>`).
+- In-flight diagnostics (`inFlightRequests()`).
+- Optional telemetry hooks for tracing/metrics adapters.
 
 ## Quick Start
 
@@ -115,6 +124,54 @@ let data = try await client.load(
         )
     )
 )
+```
+
+## Middleware
+
+```swift
+let authMiddleware = NetworkMiddleware(
+    beforeSend: { request, _ in
+        request.withMergedHeaders(["Authorization": "Bearer token"])
+    }
+)
+
+let client = NetworkClient(
+    transport: Transport(),
+    middlewares: [authMiddleware]
+)
+```
+
+## Rate Limiting
+
+```swift
+let data = try await client.load(
+    request: request,
+    authScope: "user:42",
+    options: .init(
+        rateLimitPolicy: .init(maxRequests: 5, intervalSeconds: 1)
+    )
+)
+```
+
+## Streaming
+
+```swift
+for try await chunk in client.loadStream(request: request, authScope: "user:42") {
+    print("chunk bytes:", chunk.count)
+}
+```
+
+## In-Flight Diagnostics
+
+```swift
+let inFlight = await client.inFlightRequests()
+print(inFlight.map(\.key))
+```
+
+## Benchmark Baseline Check
+
+```bash
+swift run RequestCoalescerBenchmarks --check-baseline
 ```
 
 ## Request Builder

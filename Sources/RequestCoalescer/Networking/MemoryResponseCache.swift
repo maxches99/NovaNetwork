@@ -12,7 +12,18 @@ public actor MemoryResponseCache: ResponseCache {
     }
 
     public func entry(forKey key: String) -> Entry? {
-        storage[key]
+        guard let existing = storage[key] else { return nil }
+        let touched = CachedResponse(
+            body: existing.body,
+            statusCode: existing.statusCode,
+            headers: existing.headers,
+            etag: existing.etag,
+            storedAtNanoseconds: existing.storedAtNanoseconds,
+            lastAccessedAtNanoseconds: DispatchTime.now().uptimeNanoseconds,
+            varyRequestHeaders: existing.varyRequestHeaders
+        )
+        storage[key] = touched
+        return touched
     }
 
     public func set(_ response: Entry, forKey key: String) {

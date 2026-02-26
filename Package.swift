@@ -8,6 +8,7 @@ let package = Package(
     platforms: [.iOS(.v13), .macOS(.v10_15), .watchOS(.v6), .tvOS(.v13)],
     products: [
         .library(name: "RequestCoalescer", targets: ["RequestCoalescer"]),
+        .library(name: "RequestCoalescerTestSupport", targets: ["RequestCoalescerTestSupport"]),
         .executable(name: "RequestCoalescerBenchmarks", targets: ["RequestCoalescerBenchmarks"]),
     ],
     targets: [
@@ -15,6 +16,10 @@ let package = Package(
         // Targets can depend on other targets in this package and products from dependencies.
         .target(
             name: "RequestCoalescer"
+        ),
+        .target(
+            name: "RequestCoalescerTestSupport",
+            dependencies: ["RequestCoalescer"]
         ),
         .testTarget(
             name: "RequestCoalescerTests",

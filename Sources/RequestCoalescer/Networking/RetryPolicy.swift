@@ -26,23 +26,32 @@ public struct SystemRetryClock: RetryClock {
 
 public struct RetryPolicy: Sendable {
     public let maxAttempts: Int
+    public let retryBudget: Int?
     public let baseDelayNanoseconds: UInt64
     public let maxDelayNanoseconds: UInt64
+    public let maxRetryAfterNanoseconds: UInt64
+    public let respectRetryAfterHeader: Bool
     public let jitterRange: ClosedRange<Double>?
     public let retriableHTTPStatusCodes: Set<Int>
     public let retriableURLErrorCodes: Set<URLError.Code>
 
     public init(
         maxAttempts: Int = 1,
+        retryBudget: Int? = nil,
         baseDelayNanoseconds: UInt64 = 200_000_000,
         maxDelayNanoseconds: UInt64 = 3_000_000_000,
+        maxRetryAfterNanoseconds: UInt64 = 60_000_000_000,
+        respectRetryAfterHeader: Bool = true,
         jitterRange: ClosedRange<Double>? = 0.8...1.2,
         retriableHTTPStatusCodes: Set<Int> = [408, 429, 500, 502, 503, 504],
         retriableURLErrorCodes: Set<URLError.Code> = [.timedOut, .networkConnectionLost, .notConnectedToInternet, .cannotFindHost, .cannotConnectToHost]
     ) {
         self.maxAttempts = max(1, maxAttempts)
+        self.retryBudget = retryBudget.map { max(0, $0) }
         self.baseDelayNanoseconds = baseDelayNanoseconds
         self.maxDelayNanoseconds = max(baseDelayNanoseconds, maxDelayNanoseconds)
+        self.maxRetryAfterNanoseconds = max(baseDelayNanoseconds, maxRetryAfterNanoseconds)
+        self.respectRetryAfterHeader = respectRetryAfterHeader
         self.jitterRange = jitterRange
         self.retriableHTTPStatusCodes = retriableHTTPStatusCodes
         self.retriableURLErrorCodes = retriableURLErrorCodes
@@ -52,7 +61,7 @@ public struct RetryPolicy: Sendable {
 
     func shouldRetry(error: NetworkError) -> Bool {
         switch error {
-        case .httpStatus(let code, _):
+        case .httpStatus(let code, _, _):
             return retriableHTTPStatusCodes.contains(code)
         case .transport(let underlying as URLError):
             return retriableURLErrorCodes.contains(underlying.code)
@@ -79,6 +88,61 @@ public struct RetryPolicy: Sendable {
         let factor = random.nextDouble(in: jitterRange)
         return UInt64(Double(capped) * factor)
     }
+
+    func adaptiveDelayNanoseconds(
+        forAttempt attempt: Int,
+        error: NetworkError,
+        random: any RetryRandomGenerator = SystemRetryRandomGenerator(),
+        now: Date = Date()
+    ) -> UInt64 {
+        let backoff = delayNanoseconds(forAttempt: attempt, random: random)
+        guard respectRetryAfterHeader else { return backoff }
+        guard let retryAfter = retryAfterDelayNanoseconds(from: error, now: now) else {
+            return backoff
+        }
+        return max(backoff, retryAfter)
+    }
+
+    func retryAfterDelayNanoseconds(from error: NetworkError, now: Date = Date()) -> UInt64? {
+        guard case .httpStatus(_, let headers, _) = error else { return nil }
+        guard let value = headerValue(name: "Retry-After", from: headers) else { return nil }
+
+        if let seconds = TimeInterval(value.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            let clamped = min(max(0, seconds), TimeInterval(maxRetryAfterNanoseconds) / 1_000_000_000)
+            return UInt64(clamped * 1_000_000_000)
+        }
+
+        let formatter = DateFormatter.retryRFC1123
+        guard let date = formatter.date(from: value) else { return nil }
+        let delay = max(0, date.timeIntervalSince(now))
+        let clamped = min(delay, TimeInterval(maxRetryAfterNanoseconds) / 1_000_000_000)
+        return UInt64(clamped * 1_000_000_000)
+    }
+
+    func canRetry(attempt: Int, retriesUsed: Int) -> Bool {
+        guard attempt < maxAttempts else { return false }
+        if let retryBudget {
+            return retriesUsed < retryBudget
+        }
+        return true
+    }
+}
+
+private extension RetryPolicy {
+    func headerValue(name: String, from headers: [String: String]) -> String? {
+        let normalized = name.lowercased()
+        return headers.first { $0.key.lowercased() == normalized }?.value
+    }
+}
+
+private extension DateFormatter {
+    static let retryRFC1123: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE',' dd MMM yyyy HH':'mm':'ss z"
+        return formatter
+    }()
 }
 
 private extension UInt64 {

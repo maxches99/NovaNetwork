@@ -21,13 +21,13 @@ public struct Transport: NetworkTransport {
                 throw NetworkError.invalidResponse
             }
 
-            guard (200..<300).contains(httpResponse.statusCode) else {
-                throw NetworkError.httpStatus(code: httpResponse.statusCode, body: data)
-            }
-
             let headers = httpResponse.allHeaderFields.reduce(into: [String: String]()) { partial, item in
                 guard let key = item.key as? String else { return }
                 partial[key] = String(describing: item.value)
+            }
+
+            guard (200..<300).contains(httpResponse.statusCode) else {
+                throw NetworkError.httpStatus(code: httpResponse.statusCode, headers: headers, body: data)
             }
 
             return NetworkResponse(

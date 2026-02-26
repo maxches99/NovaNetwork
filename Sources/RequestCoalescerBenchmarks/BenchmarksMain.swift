@@ -19,6 +19,8 @@ actor BenchmarkTransport: NetworkTransport {
 @main
 struct BenchmarksMain {
     static func main() async {
+        let args = Set(CommandLine.arguments.dropFirst())
+        let shouldCheckBaseline = args.contains("--check-baseline")
         let transport = BenchmarkTransport(delayNanoseconds: 1_000_000)
         let client = NetworkClient(
             transport: transport,
@@ -42,5 +44,34 @@ struct BenchmarksMain {
         print("benchmark_iterations=\(iterations)")
         print("transport_calls=\(calls)")
         print(String(format: "elapsed_ms=%.2f", elapsedMs))
+
+        if shouldCheckBaseline {
+            let baselineURL = URL(fileURLWithPath: "Benchmarks/baseline.json")
+            guard
+                let data = try? Data(contentsOf: baselineURL),
+                let baseline = try? JSONDecoder().decode(BenchmarkBaseline.self, from: data)
+            else {
+                fputs("baseline_check=skipped missing_or_invalid_baseline\n", stderr)
+                return
+            }
+
+            let elapsedOK = elapsedMs <= baseline.maxElapsedMilliseconds
+            let callsOK = calls <= baseline.maxTransportCalls
+            if elapsedOK && callsOK {
+                print("baseline_check=passed")
+                return
+            }
+
+            fputs(
+                "baseline_check=failed elapsed_ms=\(elapsedMs) max_elapsed_ms=\(baseline.maxElapsedMilliseconds) transport_calls=\(calls) max_transport_calls=\(baseline.maxTransportCalls)\n",
+                stderr
+            )
+            Foundation.exit(1)
+        }
     }
+}
+
+private struct BenchmarkBaseline: Decodable {
+    let maxElapsedMilliseconds: Double
+    let maxTransportCalls: Int
 }

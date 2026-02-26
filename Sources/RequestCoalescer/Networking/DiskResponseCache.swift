@@ -1,23 +1,36 @@
 import Foundation
 
 public actor DiskResponseCache: ResponseCache {
+    public enum EvictionPolicy: Sendable {
+        case leastRecentlyUsed
+    }
+
     private struct Metadata: Codable {
         let key: String
         let statusCode: Int
         let headers: [String: String]
         let etag: String?
         let storedAtNanoseconds: UInt64
+        let lastAccessedAtNanoseconds: UInt64
+        let bodyBytes: Int
+        let varyRequestHeaders: [String: String]
     }
 
     private let directoryURL: URL
     private let fileManager: FileManager
+    private let maxBytes: Int?
+    private let evictionPolicy: EvictionPolicy
 
     public init(
         directoryURL: URL,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        maxBytes: Int? = nil,
+        evictionPolicy: EvictionPolicy = .leastRecentlyUsed
     ) {
         self.directoryURL = directoryURL
         self.fileManager = fileManager
+        self.maxBytes = maxBytes.map { max(1, $0) }
+        self.evictionPolicy = evictionPolicy
     }
 
     public func entry(forKey key: String) async -> CachedResponse? {
@@ -31,12 +44,28 @@ public actor DiskResponseCache: ResponseCache {
             return nil
         }
 
+        let touched = Metadata(
+            key: metadata.key,
+            statusCode: metadata.statusCode,
+            headers: metadata.headers,
+            etag: metadata.etag,
+            storedAtNanoseconds: metadata.storedAtNanoseconds,
+            lastAccessedAtNanoseconds: DispatchTime.now().uptimeNanoseconds,
+            bodyBytes: metadata.bodyBytes,
+            varyRequestHeaders: metadata.varyRequestHeaders
+        )
+        if let touchedData = try? JSONEncoder().encode(touched) {
+            try? touchedData.write(to: paths.metadataURL, options: .atomic)
+        }
+
         return CachedResponse(
             body: body,
             statusCode: metadata.statusCode,
             headers: metadata.headers,
             etag: metadata.etag,
-            storedAtNanoseconds: metadata.storedAtNanoseconds
+            storedAtNanoseconds: metadata.storedAtNanoseconds,
+            lastAccessedAtNanoseconds: touched.lastAccessedAtNanoseconds,
+            varyRequestHeaders: metadata.varyRequestHeaders
         )
     }
 
@@ -48,7 +77,10 @@ public actor DiskResponseCache: ResponseCache {
             statusCode: response.statusCode,
             headers: response.headers,
             etag: response.etag,
-            storedAtNanoseconds: response.storedAtNanoseconds
+            storedAtNanoseconds: response.storedAtNanoseconds,
+            lastAccessedAtNanoseconds: response.lastAccessedAtNanoseconds,
+            bodyBytes: response.body.count,
+            varyRequestHeaders: response.varyRequestHeaders
         )
 
         do {
@@ -59,6 +91,8 @@ public actor DiskResponseCache: ResponseCache {
             try? fileManager.removeItem(at: paths.metadataURL)
             try? fileManager.removeItem(at: paths.bodyURL)
         }
+
+        await enforceCapacityIfNeeded()
     }
 
     public func remove(key: String) async {
@@ -109,6 +143,54 @@ public actor DiskResponseCache: ResponseCache {
             at: directoryURL,
             withIntermediateDirectories: true
         )
+    }
+
+    private func enforceCapacityIfNeeded() async {
+        guard let maxBytes else { return }
+        let entries = allMetadataEntries()
+        var totalBytes = entries.reduce(0) { $0 + $1.metadata.bodyBytes }
+        guard totalBytes > maxBytes else { return }
+
+        let sorted: [(metadataURL: URL, metadata: Metadata)] = {
+            switch evictionPolicy {
+            case .leastRecentlyUsed:
+                return entries.sorted { lhs, rhs in
+                    if lhs.metadata.lastAccessedAtNanoseconds == rhs.metadata.lastAccessedAtNanoseconds {
+                        return lhs.metadata.storedAtNanoseconds < rhs.metadata.storedAtNanoseconds
+                    }
+                    return lhs.metadata.lastAccessedAtNanoseconds < rhs.metadata.lastAccessedAtNanoseconds
+                }
+            }
+        }()
+
+        for entry in sorted {
+            if totalBytes <= maxBytes { break }
+            let bodyURL = entry.metadataURL.deletingPathExtension().appendingPathExtension("bin")
+            try? fileManager.removeItem(at: entry.metadataURL)
+            try? fileManager.removeItem(at: bodyURL)
+            totalBytes -= entry.metadata.bodyBytes
+        }
+    }
+
+    private func allMetadataEntries() -> [(metadataURL: URL, metadata: Metadata)] {
+        guard let files = try? fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: nil
+        ) else {
+            return []
+        }
+
+        var entries: [(URL, Metadata)] = []
+        for metadataURL in files where metadataURL.pathExtension == "json" {
+            guard
+                let data = try? Data(contentsOf: metadataURL),
+                let metadata = try? JSONDecoder().decode(Metadata.self, from: data)
+            else {
+                continue
+            }
+            entries.append((metadataURL, metadata))
+        }
+        return entries
     }
 
     private func fileURLs(forKey key: String) -> (metadataURL: URL, bodyURL: URL) {
