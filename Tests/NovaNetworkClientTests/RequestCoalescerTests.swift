@@ -786,38 +786,86 @@ struct RequestCoalescerTests {
             func append(_ value: String) { starts.append(value) }
             func values() -> [String] { starts }
         }
+        actor HoldGate {
+            private var continuation: CheckedContinuation<Void, Never>?
+            func wait() async {
+                await withCheckedContinuation { continuation in
+                    self.continuation = continuation
+                }
+            }
+            func open() {
+                continuation?.resume()
+                continuation = nil
+            }
+        }
+        actor Rendezvous {
+            private var arrivals = 0
+            private var continuation: CheckedContinuation<Void, Never>?
+
+            func arriveAndWaitForPair() async {
+                arrivals += 1
+                if arrivals == 2 {
+                    continuation?.resume()
+                    continuation = nil
+                    return
+                }
+                await withCheckedContinuation { continuation in
+                    self.continuation = continuation
+                }
+            }
+
+            func count() -> Int { arrivals }
+        }
 
         let recorder = StartRecorder()
+        let holdGate = HoldGate()
+        let rendezvous = Rendezvous()
         let coalescer = RequestCoalescer<Data, TestError>(limits: .init(maxInFlightKeys: 1))
 
-        async let first: Data = coalescer.run(
-            key: "k1",
-            options: .init(priority: .low, capacityScheduling: .queueByPriority)
-        ) {
+        let first = Task { () throws -> Data in
+            try await coalescer.run(
+                key: "k1",
+                options: .init(priority: .low, capacityScheduling: .queueByPriority)
+            ) {
             await recorder.append("k1")
-            try? await Task.sleep(nanoseconds: 80_000_000)
+            await holdGate.wait()
             return .success(Data("k1".utf8))
         }
-
-        try? await Task.sleep(nanoseconds: 10_000_000)
-        async let second: Data = coalescer.run(
-            key: "k2",
-            options: .init(priority: .low, capacityScheduling: .queueByPriority)
-        ) {
-            await recorder.append("k2")
-            return .success(Data("k2".utf8))
         }
 
-        try? await Task.sleep(nanoseconds: 10_000_000)
-        async let third: Data = coalescer.run(
-            key: "k3",
-            options: .init(priority: .high, capacityScheduling: .queueByPriority)
-        ) {
-            await recorder.append("k3")
-            return .success(Data("k3".utf8))
+        let second = Task { () throws -> Data in
+            await rendezvous.arriveAndWaitForPair()
+            return try await coalescer.run(
+                key: "k2",
+                options: .init(priority: .low, capacityScheduling: .queueByPriority)
+            ) {
+                await recorder.append("k2")
+                return .success(Data("k2".utf8))
+            }
         }
 
-        _ = try await (first, second, third)
+        let third = Task { () throws -> Data in
+            await rendezvous.arriveAndWaitForPair()
+            return try await coalescer.run(
+                key: "k3",
+                options: .init(priority: .high, capacityScheduling: .queueByPriority)
+            ) {
+                await recorder.append("k3")
+                return .success(Data("k3".utf8))
+            }
+        }
+
+        let deadline = DispatchTime.now().uptimeNanoseconds + 500_000_000
+        while DispatchTime.now().uptimeNanoseconds < deadline {
+            if await rendezvous.count() == 2 {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try? await Task.sleep(nanoseconds: 10_000_000)
+        await holdGate.open()
+
+        _ = try await (first.value, second.value, third.value)
         let order = await recorder.values()
         #expect(order.first == "k1")
         #expect(order.dropFirst().first == "k3")

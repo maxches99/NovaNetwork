@@ -12,6 +12,8 @@ public enum NetworkFailureReason: Sendable, Equatable {
     case coalescerLimitExceeded
     case cacheMiss
     case circuitBreakerOpen
+    case queueCapacityExceeded
+    case offlineQueueUnavailable
 }
 
 public enum NetworkError: Error {
@@ -24,6 +26,8 @@ public enum NetworkError: Error {
     case circuitBreakerOpen
     case coalescerLimitExceeded
     case clientRateLimited(retryAfterSeconds: TimeInterval?)
+    case queueCapacityExceeded(limit: Int?)
+    case offlineQueueUnavailable
 }
 
 public extension NetworkError {
@@ -75,6 +79,10 @@ public extension NetworkError {
             return .coalescerLimitExceeded
         case .clientRateLimited:
             return .rateLimited
+        case .queueCapacityExceeded:
+            return .queueCapacityExceeded
+        case .offlineQueueUnavailable:
+            return .offlineQueueUnavailable
         }
     }
 }

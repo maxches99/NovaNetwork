@@ -26,6 +26,7 @@ public struct RequestExecutionOptions: Sendable {
     public let circuitBreakerPolicy: CircuitBreakerPolicy?
     public let rateLimitPolicy: RateLimitPolicy?
     public let idempotencyPolicy: IdempotencyPolicy?
+    public let offlineQueuePolicy: OfflineQueuePolicy
 
     public init(
         coalescerLimitsOverride: RequestCoalescer<NetworkResponse, NetworkError>.Limits? = nil,
@@ -35,7 +36,8 @@ public struct RequestExecutionOptions: Sendable {
         deadlineBudgetSeconds: TimeInterval? = nil,
         circuitBreakerPolicy: CircuitBreakerPolicy? = nil,
         rateLimitPolicy: RateLimitPolicy? = nil,
-        idempotencyPolicy: IdempotencyPolicy? = nil
+        idempotencyPolicy: IdempotencyPolicy? = nil,
+        offlineQueuePolicy: OfflineQueuePolicy = .disabled
     ) {
         self.coalescerLimitsOverride = coalescerLimitsOverride
         self.priority = priority
@@ -45,5 +47,6 @@ public struct RequestExecutionOptions: Sendable {
         self.circuitBreakerPolicy = circuitBreakerPolicy
         self.rateLimitPolicy = rateLimitPolicy
         self.idempotencyPolicy = idempotencyPolicy
+        self.offlineQueuePolicy = offlineQueuePolicy
     }
 }
