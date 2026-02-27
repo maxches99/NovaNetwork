@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test-coverage:
+    name: Build, Test, Coverage Gates
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Swift 6.2
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.2"
+
+      - name: Show Swift Version
+        run: swift --version
+
+      - name: Build
+        run: swift build
+
+      - name: Unit Tests with Coverage
+        run: swift test --enable-code-coverage
+
+      - name: Enforce Unit Coverage >= 90%
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TEST_BIN=$(find .build -type f -path "*NovaNetworkClientPackageTests.xctest/Contents/MacOS/NovaNetworkClientPackageTests" | head -n 1)
+          PROF_DATA=$(find .build -type f -path "*/debug/codecov/default.profdata" | head -n 1)
+
+          if [[ -z "${TEST_BIN}" || -z "${PROF_DATA}" ]]; then
+            echo "Failed to locate coverage artifacts for unit tests."
+            exit 1
+          fi
+
+          REPORT=$(xcrun llvm-cov report "${TEST_BIN}" \
+            -instr-profile="${PROF_DATA}" \
+            Sources/NovaNetworkClient/**/*.swift)
+
+          echo "${REPORT}"
+
+          UNIT_COVERAGE=$(echo "${REPORT}" | awk '
+            /^TOTAL/ {
+              p = 0
+              for (i = 1; i <= NF; i++) {
+                if ($i ~ /%$/) {
+                  p++
+                  if (p == 3) {
+                    gsub("%", "", $i)
+                    print $i
+                    exit
+                  }
+                }
+              }
+            }
+          ')
+          if [[ -z "${UNIT_COVERAGE}" ]]; then
+            echo "Failed to parse unit coverage."
+            exit 1
+          fi
+
+          awk -v cov="${UNIT_COVERAGE}" 'BEGIN { if (cov + 0 < 90) exit 1 }' || {
+            echo "Unit coverage gate failed: ${UNIT_COVERAGE}% < 90%"
+            exit 1
+          }
+          echo "Unit coverage gate passed: ${UNIT_COVERAGE}% >= 90%"
+
+      - name: E2E Tests with Coverage
+        env:
+          RUN_E2E_TESTS: "1"
+        run: swift test --enable-code-coverage --filter E2ECoverageTests
+
+      - name: Enforce E2E Coverage >= 50%
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TEST_BIN=$(find .build -type f -path "*NovaNetworkClientPackageTests.xctest/Contents/MacOS/NovaNetworkClientPackageTests" | head -n 1)
+          PROF_DATA=$(find .build -type f -path "*/debug/codecov/default.profdata" | head -n 1)
+
+          if [[ -z "${TEST_BIN}" || -z "${PROF_DATA}" ]]; then
+            echo "Failed to locate coverage artifacts for E2E tests."
+            exit 1
+          fi
+
+          REPORT=$(xcrun llvm-cov report "${TEST_BIN}" \
+            -instr-profile="${PROF_DATA}" \
+            Sources/NovaNetworkClient/**/*.swift)
+
+          echo "${REPORT}"
+
+          E2E_COVERAGE=$(echo "${REPORT}" | awk '
+            /^TOTAL/ {
+              p = 0
+              for (i = 1; i <= NF; i++) {
+                if ($i ~ /%$/) {
+                  p++
+                  if (p == 3) {
+                    gsub("%", "", $i)
+                    print $i
+                    exit
+                  }
+                }
+              }
+            }
+          ')
+          if [[ -z "${E2E_COVERAGE}" ]]; then
+            echo "Failed to parse E2E coverage."
+            exit 1
+          fi
+
+          awk -v cov="${E2E_COVERAGE}" 'BEGIN { if (cov + 0 < 50) exit 1 }' || {
+            echo "E2E coverage gate failed: ${E2E_COVERAGE}% < 50%"
+            exit 1
+          }
+          echo "E2E coverage gate passed: ${E2E_COVERAGE}% >= 50%"
