@@ -24,7 +24,55 @@ public struct SystemRetryClock: RetryClock {
     }
 }
 
-public struct RetryPolicy: Sendable {
+public enum RetryFailureCategory: String, Sendable, Hashable {
+    case rateLimited = "rate_limited"
+    case serverError = "server_error"
+    case timeout
+    case networkUnreachable = "network_unreachable"
+    case other
+}
+
+public enum RetryScheduleSource: String, Sendable {
+    case policy
+    case serverRetryAfter = "server_retry_after"
+}
+
+public struct RetryProfile: Sendable, Equatable {
+    public let maxAttempts: Int?
+    public let baseDelayNanoseconds: UInt64?
+    public let maxDelayNanoseconds: UInt64?
+    public let jitterRange: ClosedRange<Double>?
+
+    public init(
+        maxAttempts: Int? = nil,
+        baseDelayNanoseconds: UInt64? = nil,
+        maxDelayNanoseconds: UInt64? = nil,
+        jitterRange: ClosedRange<Double>? = nil
+    ) {
+        self.maxAttempts = maxAttempts.map { max(1, $0) }
+        self.baseDelayNanoseconds = baseDelayNanoseconds
+        self.maxDelayNanoseconds = maxDelayNanoseconds
+        self.jitterRange = jitterRange
+    }
+}
+
+public struct RetryDelayDecision: Sendable, Equatable {
+    public let delayNanoseconds: UInt64
+    public let source: RetryScheduleSource
+    public let category: RetryFailureCategory
+
+    public init(
+        delayNanoseconds: UInt64,
+        source: RetryScheduleSource,
+        category: RetryFailureCategory
+    ) {
+        self.delayNanoseconds = delayNanoseconds
+        self.source = source
+        self.category = category
+    }
+}
+
+public struct RetryPolicy: Sendable, Equatable {
     public let maxAttempts: Int
     public let retryBudget: Int?
     public let retryNonIdempotentRequests: Bool
@@ -36,6 +84,7 @@ public struct RetryPolicy: Sendable {
     public let jitterRange: ClosedRange<Double>?
     public let retriableHTTPStatusCodes: Set<Int>
     public let retriableURLErrorCodes: Set<URLError.Code>
+    public let adaptiveProfiles: [RetryFailureCategory: RetryProfile]
 
     public init(
         maxAttempts: Int = 1,
@@ -48,7 +97,8 @@ public struct RetryPolicy: Sendable {
         respectRetryAfterHeader: Bool = true,
         jitterRange: ClosedRange<Double>? = 0.8...1.2,
         retriableHTTPStatusCodes: Set<Int> = [408, 429, 500, 502, 503, 504],
-        retriableURLErrorCodes: Set<URLError.Code> = [.timedOut, .networkConnectionLost, .notConnectedToInternet, .cannotFindHost, .cannotConnectToHost]
+        retriableURLErrorCodes: Set<URLError.Code> = [.timedOut, .networkConnectionLost, .notConnectedToInternet, .cannotFindHost, .cannotConnectToHost],
+        adaptiveProfiles: [RetryFailureCategory: RetryProfile] = [:]
     ) {
         self.maxAttempts = max(1, maxAttempts)
         self.retryBudget = retryBudget.map { max(0, $0) }
@@ -61,6 +111,7 @@ public struct RetryPolicy: Sendable {
         self.jitterRange = jitterRange
         self.retriableHTTPStatusCodes = retriableHTTPStatusCodes
         self.retriableURLErrorCodes = retriableURLErrorCodes
+        self.adaptiveProfiles = adaptiveProfiles
     }
 
     public static let none = RetryPolicy(maxAttempts: 1, jitterRange: nil)
@@ -85,18 +136,25 @@ public struct RetryPolicy: Sendable {
 
     func delayNanoseconds(
         forAttempt attempt: Int,
-        random: any RetryRandomGenerator = SystemRetryRandomGenerator()
+        random: any RetryRandomGenerator = SystemRetryRandomGenerator(),
+        profile: RetryProfile? = nil
     ) -> UInt64 {
         guard attempt > 0 else { return 0 }
 
+        let resolvedBaseDelay = profile?.baseDelayNanoseconds ?? baseDelayNanoseconds
+        let resolvedMaxDelay = max(
+            resolvedBaseDelay,
+            profile?.maxDelayNanoseconds ?? maxDelayNanoseconds
+        )
         let exponent = min(attempt - 1, 16)
         let multiplier = UInt64(1 << exponent)
-        let scaled = baseDelayNanoseconds.saturatingMultiply(multiplier)
-        let capped = min(scaled, maxDelayNanoseconds)
+        let scaled = resolvedBaseDelay.saturatingMultiply(multiplier)
+        let capped = min(scaled, resolvedMaxDelay)
 
-        guard let jitterRange else { return capped }
+        let resolvedJitterRange = profile?.jitterRange ?? jitterRange
+        guard let resolvedJitterRange else { return capped }
 
-        let factor = random.nextDouble(in: jitterRange)
+        let factor = random.nextDouble(in: resolvedJitterRange)
         return UInt64(Double(capped) * factor)
     }
 
@@ -106,12 +164,38 @@ public struct RetryPolicy: Sendable {
         random: any RetryRandomGenerator = SystemRetryRandomGenerator(),
         now: Date = Date()
     ) -> UInt64 {
-        let backoff = delayNanoseconds(forAttempt: attempt, random: random)
+        let profile = adaptiveProfiles[failureCategory(for: error)]
+        let backoff = delayNanoseconds(forAttempt: attempt, random: random, profile: profile)
         guard respectRetryAfterHeader else { return backoff }
         guard let retryAfter = retryAfterDelayNanoseconds(from: error, now: now) else {
             return backoff
         }
-        return max(backoff, retryAfter)
+        return retryAfter
+    }
+
+    func delayDecision(
+        forAttempt attempt: Int,
+        error: NetworkError,
+        random: any RetryRandomGenerator = SystemRetryRandomGenerator(),
+        now: Date = Date()
+    ) -> RetryDelayDecision {
+        let category = failureCategory(for: error)
+        let profile = adaptiveProfiles[category]
+        let backoff = delayNanoseconds(forAttempt: attempt, random: random, profile: profile)
+        guard respectRetryAfterHeader,
+              let retryAfter = retryAfterDelayNanoseconds(from: error, now: now) else {
+            return RetryDelayDecision(
+                delayNanoseconds: backoff,
+                source: .policy,
+                category: category
+            )
+        }
+
+        return RetryDelayDecision(
+            delayNanoseconds: retryAfter,
+            source: .serverRetryAfter,
+            category: category
+        )
     }
 
     func retryAfterDelayNanoseconds(from error: NetworkError, now: Date = Date()) -> UInt64? {
@@ -136,6 +220,40 @@ public struct RetryPolicy: Sendable {
             return retriesUsed < retryBudget
         }
         return true
+    }
+
+    func canRetry(attempt: Int, retriesUsed: Int, error: NetworkError) -> Bool {
+        let categoryMaxAttempts = adaptiveProfiles[failureCategory(for: error)]?.maxAttempts
+        let effectiveMaxAttempts = min(categoryMaxAttempts ?? maxAttempts, maxAttempts)
+        guard attempt < effectiveMaxAttempts else { return false }
+        if let retryBudget {
+            return retriesUsed < retryBudget
+        }
+        return true
+    }
+
+    func failureCategory(for error: NetworkError) -> RetryFailureCategory {
+        switch error {
+        case .httpStatus(let code, _, _):
+            if code == 429 { return .rateLimited }
+            if (500...599).contains(code) { return .serverError }
+            return .other
+        case .transport(let underlying as URLError):
+            switch underlying.code {
+            case .timedOut:
+                return .timeout
+            case .notConnectedToInternet, .cannotFindHost, .cannotConnectToHost, .networkConnectionLost:
+                return .networkUnreachable
+            default:
+                return .other
+            }
+        case .transport:
+            return .other
+        case .timeoutBudgetExceeded:
+            return .timeout
+        default:
+            return .other
+        }
     }
 
     private func requestIsRetryEligible(_ request: APIRequest) -> Bool {

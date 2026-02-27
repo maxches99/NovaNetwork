@@ -1,0 +1,6 @@
+{
+  "retryStormExpectedTransportCalls": 240,
+  "retryStormExpectedSuccesses": 120,
+  "breakerFlappingMinimumTransitions": 60,
+  "runtimeUpdateMinimumSuccesses": 40
+}

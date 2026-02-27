@@ -44,6 +44,7 @@ targets: [
 - Basic HTTP cache directive support (`Cache-Control`, `Expires`, `Vary`) for freshness and variant checks.
 - Configurable fingerprint policy (`query`, `headers`, `body`).
 - Coalescer limits (`maxInFlightKeys`, `maxWaitersPerKey`, `inFlightTimeout`).
+- Configurable waiter overflow behavior for coalescing limits (`bypass` or explicit failure).
 - Per-request execution options (priority, per-request limits override, capacity scheduling, deadline budget, coalescing mode, circuit breaker).
 - Client-side per-key rate limiting (`RateLimitPolicy`).
 - Request middleware pipeline (`beforeSend` / `afterResponse`).
@@ -51,7 +52,8 @@ targets: [
   - `keepRunning`
   - `cancelWhenNoWaiters`
 - Retry/backoff policy for transient failures (for example `429`, `5xx`, network timeouts) with idempotency-aware gating.
-- Adaptive retry options (`Retry-After` support, retry budget).
+- Adaptive retry options (failure-category profiles, `Retry-After` support, retry budget).
+- Runtime policy updates (global/host/endpoint scope) without recreating `NetworkClient`.
 - Testable retry behavior via injectable clock and random generator.
 - Data and typed `Decodable` loading APIs.
 - Typed error mapping overloads (`errorMapper`).
@@ -64,6 +66,7 @@ targets: [
 - Async event stream (`events() -> AsyncStream<NetworkClientEvent>`).
 - In-flight diagnostics (`inFlightRequests()`).
 - Optional telemetry hooks for tracing/metrics adapters, including coalescer, queue metrics, retry, retry exhaustion, cancellation, and circuit-breaker transition callbacks.
+- Extended telemetry fields for retry schedule source/profile/scope, retry-skipped reasons, and runtime policy update events.
 
 ## Quick Start
 
@@ -135,6 +138,27 @@ let data = try await client.load(
 )
 ```
 
+## Runtime Policy Updates
+
+```swift
+await client.updateRuntimePolicy(
+    .init(
+        retryPolicy: RetryPolicy(
+            maxAttempts: 3,
+            adaptiveProfiles: [
+                .rateLimited: .init(maxAttempts: 2, baseDelayNanoseconds: 1_000_000_000, jitterRange: nil)
+            ]
+        )
+    ),
+    scope: .host("api.example.com")
+)
+
+await client.updateRuntimePolicy(
+    .init(deadlineBudgetSeconds: 0.5),
+    scope: .endpoint(host: "api.example.com", pathPrefix: "/critical")
+)
+```
+
 ## Middleware
 
 ```swift
@@ -181,6 +205,13 @@ print(inFlight.map(\.key))
 
 ```bash
 swift run NovaNetworkClientBenchmarks --check-baseline
+```
+
+## Stress Benchmark Suite
+
+```bash
+swift run NovaNetworkClientBenchmarks --stress-suite
+swift run NovaNetworkClientBenchmarks --check-stress-baseline
 ```
 
 ## Request Builder

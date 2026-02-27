@@ -84,6 +84,9 @@ public struct TelemetryRetryContext: Sendable {
     public let nextAttempt: Int
     public let delayMilliseconds: Double
     public let reason: String
+    public let scheduleSource: String
+    public let retryProfile: String
+    public let policyScope: String
     public let coalescingMode: TelemetryCoalescingMode
     public let request: APIRequest
 
@@ -93,6 +96,9 @@ public struct TelemetryRetryContext: Sendable {
         nextAttempt: Int,
         delayMilliseconds: Double,
         reason: String,
+        scheduleSource: String = RetryScheduleSource.policy.rawValue,
+        retryProfile: String = RetryFailureCategory.other.rawValue,
+        policyScope: String = RuntimePolicySource.global.rawValue,
         coalescingMode: TelemetryCoalescingMode = .default,
         request: APIRequest
     ) {
@@ -101,6 +107,9 @@ public struct TelemetryRetryContext: Sendable {
         self.nextAttempt = nextAttempt
         self.delayMilliseconds = delayMilliseconds
         self.reason = reason
+        self.scheduleSource = scheduleSource
+        self.retryProfile = retryProfile
+        self.policyScope = policyScope
         self.coalescingMode = coalescingMode
         self.request = request
     }
@@ -162,6 +171,38 @@ public struct TelemetryRetryExhaustedContext: Sendable {
     }
 }
 
+public struct TelemetryRetrySkippedContext: Sendable {
+    public let key: String
+    public let attempt: Int
+    public let reason: String
+    public let coalescingMode: TelemetryCoalescingMode
+    public let request: APIRequest
+
+    public init(
+        key: String,
+        attempt: Int,
+        reason: String,
+        coalescingMode: TelemetryCoalescingMode,
+        request: APIRequest
+    ) {
+        self.key = key
+        self.attempt = attempt
+        self.reason = reason
+        self.coalescingMode = coalescingMode
+        self.request = request
+    }
+}
+
+public struct TelemetryPolicyUpdateContext: Sendable {
+    public let scope: String
+    public let changedFields: [String]
+
+    public init(scope: String, changedFields: [String]) {
+        self.scope = scope
+        self.changedFields = changedFields
+    }
+}
+
 public struct TelemetryCircuitBreakerTransitionContext: Sendable {
     public let identifier: String
     public let fromState: String
@@ -190,18 +231,22 @@ public struct NetworkTelemetryHooks: Sendable {
     public typealias OnCoalescerEvent = @Sendable (TelemetryCoalescerContext) -> Void
     public typealias OnRetryScheduled = @Sendable (TelemetryRetryContext) -> Void
     public typealias OnRetryExhausted = @Sendable (TelemetryRetryExhaustedContext) -> Void
+    public typealias OnRetrySkipped = @Sendable (TelemetryRetrySkippedContext) -> Void
     public typealias OnRequestCancelled = @Sendable (TelemetryCancellationContext) -> Void
     public typealias OnQueueMetrics = @Sendable (TelemetryQueueContext) -> Void
     public typealias OnCircuitBreakerTransition = @Sendable (TelemetryCircuitBreakerTransitionContext) -> Void
+    public typealias OnPolicyUpdated = @Sendable (TelemetryPolicyUpdateContext) -> Void
 
     public let onRequestStart: OnRequestStart?
     public let onRequestEnd: OnRequestEnd?
     public let onCoalescerEvent: OnCoalescerEvent?
     public let onRetryScheduled: OnRetryScheduled?
     public let onRetryExhausted: OnRetryExhausted?
+    public let onRetrySkipped: OnRetrySkipped?
     public let onRequestCancelled: OnRequestCancelled?
     public let onQueueMetrics: OnQueueMetrics?
     public let onCircuitBreakerTransition: OnCircuitBreakerTransition?
+    public let onPolicyUpdated: OnPolicyUpdated?
 
     public init(
         onRequestStart: OnRequestStart? = nil,
@@ -209,17 +254,21 @@ public struct NetworkTelemetryHooks: Sendable {
         onCoalescerEvent: OnCoalescerEvent? = nil,
         onRetryScheduled: OnRetryScheduled? = nil,
         onRetryExhausted: OnRetryExhausted? = nil,
+        onRetrySkipped: OnRetrySkipped? = nil,
         onRequestCancelled: OnRequestCancelled? = nil,
         onQueueMetrics: OnQueueMetrics? = nil,
-        onCircuitBreakerTransition: OnCircuitBreakerTransition? = nil
+        onCircuitBreakerTransition: OnCircuitBreakerTransition? = nil,
+        onPolicyUpdated: OnPolicyUpdated? = nil
     ) {
         self.onRequestStart = onRequestStart
         self.onRequestEnd = onRequestEnd
         self.onCoalescerEvent = onCoalescerEvent
         self.onRetryScheduled = onRetryScheduled
         self.onRetryExhausted = onRetryExhausted
+        self.onRetrySkipped = onRetrySkipped
         self.onRequestCancelled = onRequestCancelled
         self.onQueueMetrics = onQueueMetrics
         self.onCircuitBreakerTransition = onCircuitBreakerTransition
+        self.onPolicyUpdated = onPolicyUpdated
     }
 }
