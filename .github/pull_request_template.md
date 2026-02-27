@@ -25,7 +25,9 @@
 
 ## Coverage
 - Unit test coverage (%):
+- E2E coverage (%) (`RUN_E2E_TESTS=1`, `E2ECoverageTests`):
 - [ ] Coverage is above 90%
+- [ ] E2E coverage is at or above 50%
 
 ## Release Notes ("What's New")
 - [ ] Added or updated

@@ -10,6 +10,10 @@ let package = Package(
         .library(name: "NovaNetworkClient", targets: ["NovaNetworkClient"]),
         .library(name: "NovaNetworkClientTestSupport", targets: ["NovaNetworkClientTestSupport"]),
         .executable(name: "NovaNetworkClientBenchmarks", targets: ["NovaNetworkClientBenchmarks"]),
+        .executable(name: "NovaNetworkClientJSONPlaceholderExample", targets: ["NovaNetworkClientJSONPlaceholderExample"]),
+        .executable(name: "NovaNetworkClientBatchTodosExample", targets: ["NovaNetworkClientBatchTodosExample"]),
+        .executable(name: "NovaNetworkClientMiddlewareExample", targets: ["NovaNetworkClientMiddlewareExample"]),
+        .executable(name: "NovaNetworkClientOfflineQueueExample", targets: ["NovaNetworkClientOfflineQueueExample"]),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
@@ -32,6 +36,26 @@ let package = Package(
             name: "NovaNetworkClientBenchmarks",
             dependencies: ["NovaNetworkClient"],
             path: "Sources/NovaNetworkClientBenchmarks"
+        ),
+        .executableTarget(
+            name: "NovaNetworkClientJSONPlaceholderExample",
+            dependencies: ["NovaNetworkClient"],
+            path: "Examples/JSONPlaceholder"
+        ),
+        .executableTarget(
+            name: "NovaNetworkClientBatchTodosExample",
+            dependencies: ["NovaNetworkClient"],
+            path: "Examples/BatchTodos"
+        ),
+        .executableTarget(
+            name: "NovaNetworkClientMiddlewareExample",
+            dependencies: ["NovaNetworkClient"],
+            path: "Examples/Middleware"
+        ),
+        .executableTarget(
+            name: "NovaNetworkClientOfflineQueueExample",
+            dependencies: ["NovaNetworkClient"],
+            path: "Examples/OfflineQueue"
         ),
     ]
 )

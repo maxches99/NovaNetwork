@@ -8,6 +8,7 @@ When multiple callers ask for the same resource at the same time, only one under
 
 - [Setup & Usage Guide](docs/SETUP_GUIDE.md)
 - [Unit Test Policy](docs/UNIT_TEST_POLICY.md)
+- [Examples](Examples/README.md)
 
 ## Product Delivery Templates
 
@@ -92,6 +93,64 @@ async let second = client.load(request: request, authScope: "user:42")
 
 let (a, b) = try await (first, second)
 print(a == b) // true
+```
+
+## Examples
+
+### 1) Typed GET Request
+
+```swift
+struct UserProfile: Decodable, Sendable {
+    let id: Int
+    let name: String
+}
+
+let request = APIRequest(
+    method: .get,
+    url: URL(string: "https://api.example.com/profile")!,
+    queryItems: [URLQueryItem(name: "id", value: "42")]
+)
+
+let profile: UserProfile = try await client.load(
+    request: request,
+    authScope: "user:42"
+)
+```
+
+### 2) POST With Idempotency + Offline Queue
+
+```swift
+let createItem = APIRequest(
+    method: .post,
+    url: URL(string: "https://api.example.com/items")!,
+    body: Data("{\"name\":\"draft\"}".utf8)
+)
+.withIdempotencyKey("create-item-user-42")
+
+let result = try await client.enqueueWrite(
+    request: createItem,
+    authScope: "user:42",
+    options: .init(offlineQueuePolicy: .init(mode: .enqueueWhenOffline))
+)
+
+switch result {
+case .completed:
+    print("Request sent immediately")
+case .queued(let receipt):
+    print("Saved for replay: \\(receipt.queueID)")
+}
+```
+
+### 3) Observe Runtime Events
+
+```swift
+let stream = client.events()
+
+Task {
+    for await event in stream {
+        print("event:", event)
+    }
+}
 ```
 
 ## Cache Policy
@@ -355,4 +414,14 @@ let responses = try await client.loadBatch(
 
 ```bash
 swift test
+```
+
+## Run E2E Tests (Optional)
+
+E2E tests use public APIs (`jsonplaceholder.typicode.com`, `httpbin.org`) and are disabled by default.
+Scenarios include typed load, coalescing, batch loading, cache hit path, middleware, stream fallback, offline queue enqueue/flush/drop, rate limit, error mapping, runtime policy updates, circuit breaker, and invalidation paths.
+Project target for this suite: `>= 50%` line coverage.
+
+```bash
+RUN_E2E_TESTS=1 swift test --filter E2ECoverageTests
 ```

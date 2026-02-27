@@ -35,5 +35,7 @@ Use this as a reference for mapping DFR requirements to tests.
 
 ## Coverage Gate
 - Unit coverage target: `> 90%`
+- E2E coverage target (`RUN_E2E_TESTS=1`, `E2ECoverageTests`): `>= 50%`
 - Current unit coverage: `<fill from CI/local report>`
+- Current E2E coverage: `<fill from CI/local report>`
 - Action if below threshold: add targeted unit tests before merge.
