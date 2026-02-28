@@ -43,3 +43,19 @@ Run:
 ```bash
 swift run NovaNetworkClientOfflineQueueExample
 ```
+
+## WebSocket
+
+Shows realtime connect/send/receive over a public echo endpoint (`wss://ws.postman-echo.com/raw`) with state observation.
+
+Run:
+
+```bash
+swift run NovaNetworkClientWebSocketExample
+```
+
+Optional endpoint override:
+
+```bash
+NOVA_WS_URL=wss://ws.ifelse.io swift run NovaNetworkClientWebSocketExample
+```

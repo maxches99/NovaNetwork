@@ -192,6 +192,43 @@ public struct TelemetryOfflineQueueContext: Sendable {
     }
 }
 
+public enum TelemetryWebSocketEventType: String, Sendable {
+    case connectStarted = "connect_started"
+    case connectSuccess = "connect_success"
+    case connectFailed = "connect_failed"
+    case disconnect
+    case messageSent = "message_sent"
+    case messageReceived = "message_received"
+    case reconnectAttempt = "reconnect_attempt"
+    case reconnectSuccess = "reconnect_success"
+    case reconnectExhausted = "reconnect_exhausted"
+}
+
+public struct TelemetryWebSocketContext: Sendable {
+    public let type: TelemetryWebSocketEventType
+    public let connectionID: String
+    public let attempt: Int?
+    public let reason: String?
+    public let error: String?
+    public let messageKind: String?
+
+    public init(
+        type: TelemetryWebSocketEventType,
+        connectionID: String,
+        attempt: Int? = nil,
+        reason: String? = nil,
+        error: String? = nil,
+        messageKind: String? = nil
+    ) {
+        self.type = type
+        self.connectionID = connectionID
+        self.attempt = attempt
+        self.reason = reason
+        self.error = error
+        self.messageKind = messageKind
+    }
+}
+
 public struct TelemetryRetryExhaustedContext: Sendable {
     public let key: String
     public let attempts: Int
@@ -278,6 +315,7 @@ public struct NetworkTelemetryHooks: Sendable {
     public typealias OnRequestCancelled = @Sendable (TelemetryCancellationContext) -> Void
     public typealias OnQueueMetrics = @Sendable (TelemetryQueueContext) -> Void
     public typealias OnOfflineQueueEvent = @Sendable (TelemetryOfflineQueueContext) -> Void
+    public typealias OnWebSocketEvent = @Sendable (TelemetryWebSocketContext) -> Void
     public typealias OnCircuitBreakerTransition = @Sendable (TelemetryCircuitBreakerTransitionContext) -> Void
     public typealias OnPolicyUpdated = @Sendable (TelemetryPolicyUpdateContext) -> Void
 
@@ -290,6 +328,7 @@ public struct NetworkTelemetryHooks: Sendable {
     public let onRequestCancelled: OnRequestCancelled?
     public let onQueueMetrics: OnQueueMetrics?
     public let onOfflineQueueEvent: OnOfflineQueueEvent?
+    public let onWebSocketEvent: OnWebSocketEvent?
     public let onCircuitBreakerTransition: OnCircuitBreakerTransition?
     public let onPolicyUpdated: OnPolicyUpdated?
 
@@ -303,6 +342,7 @@ public struct NetworkTelemetryHooks: Sendable {
         onRequestCancelled: OnRequestCancelled? = nil,
         onQueueMetrics: OnQueueMetrics? = nil,
         onOfflineQueueEvent: OnOfflineQueueEvent? = nil,
+        onWebSocketEvent: OnWebSocketEvent? = nil,
         onCircuitBreakerTransition: OnCircuitBreakerTransition? = nil,
         onPolicyUpdated: OnPolicyUpdated? = nil
     ) {
@@ -315,6 +355,7 @@ public struct NetworkTelemetryHooks: Sendable {
         self.onRequestCancelled = onRequestCancelled
         self.onQueueMetrics = onQueueMetrics
         self.onOfflineQueueEvent = onOfflineQueueEvent
+        self.onWebSocketEvent = onWebSocketEvent
         self.onCircuitBreakerTransition = onCircuitBreakerTransition
         self.onPolicyUpdated = onPolicyUpdated
     }

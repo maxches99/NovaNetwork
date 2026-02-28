@@ -331,6 +331,35 @@ for try await chunk in client.loadStream(request: request, authScope: "user:42")
 }
 ```
 
+## WebSocket (MVP)
+
+```swift
+let socket = WebSocketClient(
+    configuration: WebSocketConfiguration(
+        url: URL(string: "wss://ws.postman-echo.com/raw")!,
+        headers: ["Authorization": "Bearer token"]
+    )
+)
+
+let stateStream = await socket.connectionStates()
+Task {
+    for await state in stateStream {
+        print("ws state:", state)
+    }
+}
+
+let messageStream = await socket.messages()
+Task {
+    for try await message in messageStream {
+        print("ws message:", message)
+    }
+}
+
+try await socket.connect()
+try await socket.send(.text("{\"type\":\"ping\"}"))
+await socket.disconnect(reason: "done")
+```
+
 ## In-Flight Diagnostics
 
 ```swift
