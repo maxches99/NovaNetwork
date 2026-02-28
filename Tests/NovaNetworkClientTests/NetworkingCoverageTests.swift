@@ -405,7 +405,44 @@ struct NetworkingCoverageTests {
     }
 
     @Test
-    func flushOfflineQueueDeadLettersTerminalClientError() async throws {
+    func flushOfflineQueueSuppressesDuplicateReplayWhenRecentSuccessExists() async throws {
+        let recorder = TelemetryRecorder()
+        let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("RequestCoalescer-ReplayDedupe-\(UUID().uuidString)")
+        let store = DiskOfflineWriteStore(directoryURL: baseURL)
+        let transport = StubNetworkTransport(delayNanos: 0, response: .success(Data("ok".utf8)))
+        let client = NetworkClient(
+            transport: transport,
+            offlineWriteStore: store,
+            telemetryHooks: .init(
+                onOfflineQueueEvent: { context in Task { await recorder.appendOfflineQueue(context) } }
+            )
+        )
+        let request = APIRequest(method: .post, url: URL(string: "https://example.com/dedupe")!)
+        let enqueueOptions = RequestExecutionOptions(
+            idempotencyPolicy: .init(keyStrategy: .fingerprintDigest),
+            offlineQueuePolicy: .init(mode: .alwaysEnqueue, replayDedupeWindowSeconds: 3600)
+        )
+
+        _ = try await client.enqueueWrite(request: request, authScope: "user-1", options: enqueueOptions)
+        _ = try await client.enqueueWrite(request: request, authScope: "user-1", options: enqueueOptions)
+        #expect(await store.depth(now: Date()) == 2)
+
+        let replayed = await client.flushOfflineQueue(limit: 8)
+        #expect(replayed == 2)
+        #expect(await transport.calls() == 1)
+        #expect(await store.depth(now: Date()) == 0)
+
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let events = await recorder.offlineQueueSnapshot()
+        let hasSuppressed = events.contains {
+            $0.type == .replaySuppressed && $0.resultType == "dedupe_suppressed"
+        }
+        #expect(hasSuppressed)
+    }
+
+    @Test
+    func flushOfflineQueueManualReviewPolicyMarksManualReviewState() async throws {
         let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("RequestCoalescer-DeadLetter-\(UUID().uuidString)")
         let store = DiskOfflineWriteStore(directoryURL: baseURL)
@@ -419,14 +456,46 @@ struct NetworkingCoverageTests {
         _ = try await client.enqueueWrite(
             request: request,
             authScope: nil,
-            options: .init(offlineQueuePolicy: .init(mode: .alwaysEnqueue))
+            options: .init(
+                offlineQueuePolicy: .init(
+                    mode: .alwaysEnqueue,
+                    replayConflictPolicy: .manualReview
+                )
+            )
         )
         _ = await client.flushOfflineQueue()
 
         let snapshot = await store.snapshot(now: Date())
         #expect(snapshot.count == 1)
-        #expect(snapshot[0].state == .deadLetter)
+        #expect(snapshot[0].state == .manualReview)
         #expect(snapshot[0].lastFailureReason == "http_status_422")
+    }
+
+    @Test
+    func flushOfflineQueueDropPolicyDropsTerminalConflict() async throws {
+        let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("RequestCoalescer-DropConflict-\(UUID().uuidString)")
+        let store = DiskOfflineWriteStore(directoryURL: baseURL)
+        let transport = StubNetworkTransport(
+            delayNanos: 0,
+            response: Result<NetworkResponse, NetworkError>.failure(.httpStatus(code: 422, body: Data()))
+        )
+        let client = NetworkClient(transport: transport, offlineWriteStore: store)
+        let request = APIRequest(method: .post, url: URL(string: "https://example.com/drop-conflict")!)
+
+        _ = try await client.enqueueWrite(
+            request: request,
+            authScope: nil,
+            options: .init(
+                offlineQueuePolicy: .init(
+                    mode: .alwaysEnqueue,
+                    replayConflictPolicy: .drop
+                )
+            )
+        )
+        _ = await client.flushOfflineQueue()
+
+        #expect(await store.depth(now: Date()) == 0)
     }
 
     @Test
@@ -1678,10 +1747,13 @@ struct NetworkingCoverageTests {
 
         let events = await recorder.offlineQueueSnapshot()
         #expect(!events.contains(where: { $0.type == .replaySucceeded }))
-        let hasDeadLetter422 = events.contains { event in
-            event.type == .deadLettered && event.reason == "http_status_422"
+        let hasRetryFailure422 = events.contains { event in
+            event.type == .replayFailed &&
+                event.reason == "http_status_422" &&
+                event.willRetry == true &&
+                event.resultType == "failed"
         }
-        #expect(hasDeadLetter422)
+        #expect(hasRetryFailure422)
     }
 
     @Test
@@ -2036,5 +2108,72 @@ struct NetworkingCoverageTests {
 
         #expect(successCount == 0)
         #expect(failureCount == 1)
+    }
+
+    @Test
+    func retrySkipsWhenBudgetIsInsufficientForScheduledDelay() async {
+        let recorder = EventRecorder()
+        let transport = SequenceThrowingTransport(remainingFailures: 1, error: URLError(.timedOut))
+        let client = NetworkClient(
+            transport: transport,
+            retryPolicy: .init(maxAttempts: 3, baseDelayNanoseconds: 1_000_000_000, jitterRange: nil),
+            networkObserver: { event in Task { await recorder.append(event) } }
+        )
+        let request = APIRequest(method: .get, url: URL(string: "https://example.com/retry-budget-insufficient")!)
+
+        do {
+            _ = try await client.load(
+                request: request,
+                authScope: nil,
+                options: .init(deadlineBudgetSeconds: 0.05)
+            )
+            Issue.record("Expected timeout budget exhaustion")
+        } catch let error as NetworkError {
+            if case .timeoutBudgetExceeded = error {
+                // Expected path.
+            } else {
+                Issue.record("Expected timeout budget exhaustion")
+            }
+        } catch {
+            Issue.record("Expected NetworkError.timeoutBudgetExceeded")
+        }
+
+        let events = await recorder.snapshot()
+        let hasRetrySkippedBudget = events.contains { event in
+            if case .retrySkipped(_, _, let reason) = event {
+                return reason == "budget_insufficient"
+            }
+            return false
+        }
+        #expect(hasRetrySkippedBudget)
+    }
+
+    @Test
+    func offlineQueueEventsStreamReceivesEnqueuedEvent() async throws {
+        let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("RequestCoalescer-OfflineStream-\(UUID().uuidString)")
+        let store = DiskOfflineWriteStore(directoryURL: baseURL)
+        let client = NetworkClient(
+            transport: StubNetworkTransport(delayNanos: 0, response: .success(Data("ok".utf8))),
+            offlineWriteStore: store
+        )
+        let stream = client.offlineQueueEvents()
+
+        let consumer = Task { () -> OfflineQueueEvent? in
+            var iterator = stream.makeAsyncIterator()
+            return await iterator.next()
+        }
+
+        let request = APIRequest(method: .post, url: URL(string: "https://example.com/offline-stream")!)
+        _ = try await client.enqueueWrite(
+            request: request,
+            authScope: nil,
+            options: .init(offlineQueuePolicy: .init(mode: .alwaysEnqueue))
+        )
+
+        guard case .enqueued? = await consumer.value else {
+            Issue.record("Expected enqueued offline queue event")
+            return
+        }
     }
 }

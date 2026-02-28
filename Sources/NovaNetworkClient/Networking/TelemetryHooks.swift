@@ -152,7 +152,10 @@ public struct TelemetryQueueContext: Sendable {
 public enum TelemetryOfflineQueueEventType: String, Sendable {
     case enqueued
     case replayStarted
+    case replaySuppressed
     case replaySucceeded
+    case manualReviewRequired
+    case replayDroppedConflict
     case replayFailed
     case deadLettered
     case dropped
@@ -166,6 +169,7 @@ public struct TelemetryOfflineQueueContext: Sendable {
     public let ageMilliseconds: Double?
     public let reason: String?
     public let willRetry: Bool?
+    public let resultType: String?
 
     public init(
         type: TelemetryOfflineQueueEventType,
@@ -174,7 +178,8 @@ public struct TelemetryOfflineQueueContext: Sendable {
         attempt: Int? = nil,
         ageMilliseconds: Double? = nil,
         reason: String? = nil,
-        willRetry: Bool? = nil
+        willRetry: Bool? = nil,
+        resultType: String? = nil
     ) {
         self.type = type
         self.queueID = queueID
@@ -183,6 +188,7 @@ public struct TelemetryOfflineQueueContext: Sendable {
         self.ageMilliseconds = ageMilliseconds
         self.reason = reason
         self.willRetry = willRetry
+        self.resultType = resultType
     }
 }
 

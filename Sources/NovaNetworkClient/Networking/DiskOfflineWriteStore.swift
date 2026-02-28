@@ -7,6 +7,10 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
     private let ttlSeconds: TimeInterval?
     private let overflowPolicy: OfflineWriteStoreOverflowPolicy
     private let schemaVersion: Int
+    private let cipher: (any OfflineWriteStoreCipher)?
+
+    private var replaySuccessIndex: [String: Date] = [:]
+    private var didLoadReplaySuccessIndex = false
 
     public init(
         directoryURL: URL,
@@ -14,7 +18,8 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
         maxEntries: Int? = nil,
         ttlSeconds: TimeInterval? = nil,
         overflowPolicy: OfflineWriteStoreOverflowPolicy = .evictOldest,
-        schemaVersion: Int = 1
+        schemaVersion: Int = 1,
+        cipher: (any OfflineWriteStoreCipher)? = nil
     ) {
         self.directoryURL = directoryURL
         self.fileManager = fileManager
@@ -22,10 +27,26 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
         self.ttlSeconds = ttlSeconds.map { max(0, $0) }
         self.overflowPolicy = overflowPolicy
         self.schemaVersion = max(1, schemaVersion)
+        self.cipher = cipher
     }
 
     @discardableResult
     public func enqueue(request: APIRequest, requestKey: String, now: Date = Date()) async throws -> QueuedWriteReceipt {
+        try await enqueue(
+            request: request,
+            requestKey: requestKey,
+            replayMetadata: .init(replayIdentity: requestKey),
+            now: now
+        )
+    }
+
+    @discardableResult
+    public func enqueue(
+        request: APIRequest,
+        requestKey: String,
+        replayMetadata: OfflineReplayMetadata,
+        now: Date = Date()
+    ) async throws -> QueuedWriteReceipt {
         ensureDirectory()
         await prune(now: now)
 
@@ -52,9 +73,10 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
             nextRetryAt: nil,
             lastFailureReason: nil,
             state: .queued,
-            updatedAt: now
+            updatedAt: now,
+            replayMetadata: replayMetadata
         )
-        write(entry)
+        try write(entry)
         return receipt
     }
 
@@ -69,7 +91,7 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
                 case .retryWaiting:
                     guard let nextRetryAt = entry.nextRetryAt else { return true }
                     return nextRetryAt <= now
-                case .replaying, .deadLetter:
+                case .replaying, .deadLetter, .manualReview:
                     return false
                 }
             }
@@ -87,7 +109,10 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
                 nextRetryAt: nil,
                 lastFailureReason: entry.lastFailureReason,
                 state: .replaying,
-                updatedAt: now
+                updatedAt: now,
+                replayMetadata: entry.replayMetadata,
+                lastTerminalStatus: entry.lastTerminalStatus,
+                lastTerminalAt: entry.lastTerminalAt
             )
         }
     }
@@ -107,7 +132,10 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
                 nextRetryAt: nextRetryAt,
                 lastFailureReason: reason,
                 state: .retryWaiting,
-                updatedAt: now
+                updatedAt: now,
+                replayMetadata: entry.replayMetadata,
+                lastTerminalStatus: .failed,
+                lastTerminalAt: now
             )
         }
     }
@@ -125,9 +153,43 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
                 nextRetryAt: nil,
                 lastFailureReason: reason,
                 state: .deadLetter,
-                updatedAt: now
+                updatedAt: now,
+                replayMetadata: entry.replayMetadata,
+                lastTerminalStatus: .failed,
+                lastTerminalAt: now
             )
         }
+    }
+
+    public func markManualReview(queueID: String, reason: String, now: Date = Date()) async {
+        await mutate(queueID: queueID) { entry in
+            OfflineWriteStoreEntry(
+                receipt: entry.receipt,
+                request: entry.request,
+                attempt: entry.attempt,
+                nextRetryAt: nil,
+                lastFailureReason: reason,
+                state: .manualReview,
+                updatedAt: now,
+                replayMetadata: entry.replayMetadata,
+                lastTerminalStatus: .manualReview,
+                lastTerminalAt: now
+            )
+        }
+    }
+
+    public func hasReplayTerminalSuccess(replayIdentity: String, within: TimeInterval, now: Date = Date()) async -> Bool {
+        await loadReplaySuccessIndexIfNeeded()
+        guard let successAt = replaySuccessIndex[replayIdentity] else {
+            return false
+        }
+        return now.timeIntervalSince(successAt) <= max(0, within)
+    }
+
+    public func recordReplayTerminalSuccess(replayIdentity: String, now: Date = Date()) async {
+        await loadReplaySuccessIndexIfNeeded()
+        replaySuccessIndex[replayIdentity] = now
+        writeReplaySuccessIndex()
     }
 
     public func depth(now: Date = Date()) async -> Int {
@@ -166,6 +228,10 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
         directoryURL.appendingPathComponent("\(queueID).json")
     }
 
+    private func replaySuccessIndexURL() -> URL {
+        directoryURL.appendingPathComponent("replay_success_index.json")
+    }
+
     private func entryFileURLs() -> [URL] {
         guard let files = try? fileManager.contentsOfDirectory(
             at: directoryURL,
@@ -174,56 +240,142 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
             return []
         }
 
-        return files.filter { $0.pathExtension == "json" }
+        return files.filter {
+            $0.pathExtension == "json" &&
+                $0.lastPathComponent != replaySuccessIndexURL().lastPathComponent
+        }
+    }
+
+    private enum DecodeOutcome {
+        case entry(OfflineWriteStoreEntry)
+        case skipAndKeep
+        case skipAndRemove
     }
 
     private func loadEntries() async -> [OfflineWriteStoreEntry] {
         ensureDirectory()
         var entries: [OfflineWriteStoreEntry] = []
         for file in entryFileURLs() {
-            guard
-                let data = try? Data(contentsOf: file),
-                let envelope = try? JSONDecoder().decode(PersistedOfflineWriteEnvelope.self, from: data),
-                envelope.schemaVersion == schemaVersion,
-                let entry = envelope.entry.toRuntimeEntry()
-            else {
-                // Corrupted or unknown schema entries are skipped and removed.
-                try? fileManager.removeItem(at: file)
+            switch decodeEntry(file: file) {
+            case .entry(let entry):
+                entries.append(entry)
+            case .skipAndKeep:
                 continue
+            case .skipAndRemove:
+                try? fileManager.removeItem(at: file)
             }
-
-            entries.append(entry)
         }
         return entries
     }
 
-    private func write(_ entry: OfflineWriteStoreEntry) {
+    private func decodeEntry(file: URL) -> DecodeOutcome {
+        guard
+            let data = try? Data(contentsOf: file),
+            let envelope = try? JSONDecoder().decode(PersistedOfflineWriteEnvelope.self, from: data),
+            envelope.schemaVersion == schemaVersion
+        else {
+            return .skipAndRemove
+        }
+
+        if let persisted = envelope.entry,
+           let runtime = persisted.toRuntimeEntry() {
+            return .entry(runtime)
+        }
+
+        guard
+            let encryptedEntry = envelope.encryptedEntry,
+            let encryption = envelope.encryption,
+            let cipher
+        else {
+            return .skipAndRemove
+        }
+
+        do {
+            let decrypted = try cipher.decrypt(
+                encryptedEntry,
+                algorithm: encryption.algorithm,
+                version: encryption.version
+            )
+            guard
+                let persisted = try? JSONDecoder().decode(PersistedOfflineWriteEntry.self, from: decrypted),
+                let runtime = persisted.toRuntimeEntry()
+            else {
+                return .skipAndRemove
+            }
+            return .entry(runtime)
+        } catch let error as OfflineWriteStoreCipherError {
+            switch error {
+            case .keyUnavailable, .unsupportedVersion:
+                return .skipAndKeep
+            case .decryptionFailed:
+                return .skipAndRemove
+            }
+        } catch {
+            return .skipAndRemove
+        }
+    }
+
+    private func write(_ entry: OfflineWriteStoreEntry) throws {
         ensureDirectory()
-        let envelope = PersistedOfflineWriteEnvelope(
-            schemaVersion: schemaVersion,
-            entry: PersistedOfflineWriteEntry(from: entry)
-        )
-        guard let data = try? JSONEncoder().encode(envelope) else { return }
-        try? data.write(to: fileURL(forQueueID: entry.receipt.queueID), options: .atomic)
+
+        let persisted = PersistedOfflineWriteEntry(from: entry)
+        let envelope: PersistedOfflineWriteEnvelope
+
+        if let cipher {
+            let encoded = try JSONEncoder().encode(persisted)
+            let encrypted: Data
+            do {
+                encrypted = try cipher.encrypt(encoded)
+            } catch let error as OfflineWriteStoreCipherError {
+                switch error {
+                case .keyUnavailable:
+                    throw OfflineWriteStoreError.encryptionKeyUnavailable
+                case .unsupportedVersion(let version):
+                    throw OfflineWriteStoreError.unsupportedEncryptionVersion(version)
+                case .decryptionFailed:
+                    throw OfflineWriteStoreError.encryptionFailure
+                }
+            } catch {
+                throw OfflineWriteStoreError.encryptionFailure
+            }
+            envelope = PersistedOfflineWriteEnvelope(
+                schemaVersion: schemaVersion,
+                entry: nil,
+                encryptedEntry: encrypted,
+                encryption: PersistedOfflineWriteEncryptionMetadata(
+                    algorithm: cipher.algorithm,
+                    version: cipher.version
+                )
+            )
+        } else {
+            envelope = PersistedOfflineWriteEnvelope(
+                schemaVersion: schemaVersion,
+                entry: persisted,
+                encryptedEntry: nil,
+                encryption: nil
+            )
+        }
+
+        let data = try JSONEncoder().encode(envelope)
+        try data.write(to: fileURL(forQueueID: entry.receipt.queueID), options: .atomic)
     }
 
     private func mutate(queueID: String, transform: (OfflineWriteStoreEntry) -> OfflineWriteStoreEntry) async {
         guard let current = await loadEntry(queueID: queueID) else { return }
-        write(transform(current))
+        try? write(transform(current))
     }
 
     private func loadEntry(queueID: String) async -> OfflineWriteStoreEntry? {
         let fileURL = fileURL(forQueueID: queueID)
-        guard
-            let data = try? Data(contentsOf: fileURL),
-            let envelope = try? JSONDecoder().decode(PersistedOfflineWriteEnvelope.self, from: data),
-            envelope.schemaVersion == schemaVersion,
-            let entry = envelope.entry.toRuntimeEntry()
-        else {
+        switch decodeEntry(file: fileURL) {
+        case .entry(let entry):
+            return entry
+        case .skipAndKeep:
+            return nil
+        case .skipAndRemove:
             try? fileManager.removeItem(at: fileURL)
             return nil
         }
-        return entry
     }
 
     private func prune(now: Date) async {
@@ -250,5 +402,25 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
             return
         }
         try? fileManager.removeItem(at: fileURL(forQueueID: oldest.receipt.queueID))
+    }
+
+    private func loadReplaySuccessIndexIfNeeded() async {
+        guard !didLoadReplaySuccessIndex else { return }
+        didLoadReplaySuccessIndex = true
+        ensureDirectory()
+        guard
+            let data = try? Data(contentsOf: replaySuccessIndexURL()),
+            let persisted = try? JSONDecoder().decode([String: Date].self, from: data)
+        else {
+            replaySuccessIndex = [:]
+            return
+        }
+        replaySuccessIndex = persisted
+    }
+
+    private func writeReplaySuccessIndex() {
+        ensureDirectory()
+        guard let data = try? JSONEncoder().encode(replaySuccessIndex) else { return }
+        try? data.write(to: replaySuccessIndexURL(), options: .atomic)
     }
 }

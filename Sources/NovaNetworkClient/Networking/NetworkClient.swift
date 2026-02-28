@@ -362,7 +362,12 @@ public final class NetworkClient: @unchecked Sendable {
         )
 
         if queuePolicy.mode == .alwaysEnqueue, isQueueEligibleMethod {
-            return try await enqueuePreparedWrite(request: queuePreparedRequest, requestKey: key)
+            return try await enqueuePreparedWrite(
+                request: queuePreparedRequest,
+                requestKey: key,
+                authScope: authScope,
+                queuePolicy: queuePolicy
+            )
         }
 
         do {
@@ -379,7 +384,12 @@ public final class NetworkClient: @unchecked Sendable {
             guard queuePolicy.mode == .enqueueWhenOffline, isQueueEligibleMethod, Self.isOfflineError(error) else {
                 throw error
             }
-            return try await enqueuePreparedWrite(request: queuePreparedRequest, requestKey: key)
+            return try await enqueuePreparedWrite(
+                request: queuePreparedRequest,
+                requestKey: key,
+                authScope: authScope,
+                queuePolicy: queuePolicy
+            )
         }
     }
 
@@ -1411,14 +1421,26 @@ public final class NetworkClient: @unchecked Sendable {
         )
     }
 
-    private func enqueuePreparedWrite(request: APIRequest, requestKey: String) async throws -> QueuedWriteResult {
+    private func enqueuePreparedWrite(
+        request: APIRequest,
+        requestKey: String,
+        authScope: String?,
+        queuePolicy: OfflineQueuePolicy
+    ) async throws -> QueuedWriteResult {
         guard let offlineWriteStore else {
             throw NetworkError.offlineQueueUnavailable
         }
+        let replayMetadata = OfflineReplayMetadata(
+            replayIdentity: replayIdentity(for: request, requestKey: requestKey, authScope: authScope),
+            maxReplayAttempts: queuePolicy.maxReplayAttempts,
+            dedupeWindowSeconds: queuePolicy.replayDedupeWindowSeconds,
+            conflictPolicy: queuePolicy.replayConflictPolicy
+        )
         do {
             let receipt = try await offlineWriteStore.enqueue(
                 request: request,
                 requestKey: requestKey,
+                replayMetadata: replayMetadata,
                 now: Date()
             )
             await emitOfflineQueueEvent(
@@ -1428,7 +1450,8 @@ public final class NetworkClient: @unchecked Sendable {
                     queueID: receipt.queueID,
                     requestKey: receipt.requestKey,
                     attempt: 0,
-                    enqueuedAt: receipt.enqueuedAt
+                    enqueuedAt: receipt.enqueuedAt,
+                    resultType: nil
                 )
             )
             return .queued(receipt)
@@ -1436,6 +1459,8 @@ public final class NetworkClient: @unchecked Sendable {
             switch error {
             case .queueCapacityExceeded(let limit):
                 throw NetworkError.queueCapacityExceeded(limit: limit)
+            case .encryptionKeyUnavailable, .unsupportedEncryptionVersion, .encryptionFailure:
+                throw NetworkError.offlineQueueUnavailable
             }
         } catch {
             throw NetworkError.offlineQueueUnavailable
@@ -1467,7 +1492,44 @@ public final class NetworkClient: @unchecked Sendable {
         return request.withMergedHeaders([idempotencyPolicy.headerName: idempotencyKey])
     }
 
+    private func replayIdentity(for request: APIRequest, requestKey: String, authScope: String?) -> String {
+        let endpoint = "\(request.url.host ?? "")\(request.url.path)"
+        let idempotencyValue = request.headers.first(where: {
+            $0.key.caseInsensitiveCompare("idempotency-key") == .orderedSame
+        })?.value ?? "none"
+        let authHash = SHA256Util.hex(Data((authScope ?? "").utf8))
+        let raw = "\(idempotencyValue)|\(endpoint)|\(authHash)|\(requestKey)"
+        return SHA256Util.hex(Data(raw.utf8))
+    }
+
     private func replayOfflineEntry(_ entry: OfflineWriteStoreEntry, store: any OfflineWriteStore) async {
+        if await store.hasReplayTerminalSuccess(
+            replayIdentity: entry.replayMetadata.replayIdentity,
+            within: entry.replayMetadata.dedupeWindowSeconds,
+            now: Date()
+        ) {
+            await store.markSucceeded(queueID: entry.receipt.queueID)
+            await emitOfflineQueueEvent(
+                .replaySuppressed(
+                    queueID: entry.receipt.queueID,
+                    requestKey: entry.receipt.requestKey,
+                    replayIdentity: entry.replayMetadata.replayIdentity,
+                    reason: "dedupe_success_window"
+                ),
+                telemetry: telemetryOfflineQueueContext(
+                    type: .replaySuppressed,
+                    queueID: entry.receipt.queueID,
+                    requestKey: entry.receipt.requestKey,
+                    attempt: entry.attempt,
+                    enqueuedAt: entry.receipt.enqueuedAt,
+                    reason: "dedupe_success_window",
+                    willRetry: false,
+                    resultType: "dedupe_suppressed"
+                )
+            )
+            return
+        }
+
         let nextAttempt = max(1, entry.attempt + 1)
         await store.markReplaying(queueID: entry.receipt.queueID, attempt: nextAttempt, now: Date())
         await emitOfflineQueueEvent(
@@ -1477,7 +1539,8 @@ public final class NetworkClient: @unchecked Sendable {
                 queueID: entry.receipt.queueID,
                 requestKey: entry.receipt.requestKey,
                 attempt: nextAttempt,
-                enqueuedAt: entry.receipt.enqueuedAt
+                enqueuedAt: entry.receipt.enqueuedAt,
+                resultType: nil
             )
         )
 
@@ -1491,6 +1554,10 @@ public final class NetworkClient: @unchecked Sendable {
                 options: .init()
             )
             await store.markSucceeded(queueID: entry.receipt.queueID)
+            await store.recordReplayTerminalSuccess(
+                replayIdentity: entry.replayMetadata.replayIdentity,
+                now: Date()
+            )
             await emitOfflineQueueEvent(
                 .replaySucceeded(
                     queueID: entry.receipt.queueID,
@@ -1502,34 +1569,90 @@ public final class NetworkClient: @unchecked Sendable {
                     queueID: entry.receipt.queueID,
                     requestKey: entry.receipt.requestKey,
                     attempt: nextAttempt,
-                    enqueuedAt: entry.receipt.enqueuedAt
+                    enqueuedAt: entry.receipt.enqueuedAt,
+                    resultType: "executed"
                 )
             )
         } catch let error as NetworkError {
-            if shouldDeadLetterReplay(error: error, attempt: nextAttempt) {
+            if shouldDeadLetterReplay(error: error, attempt: nextAttempt, maxReplayAttempts: entry.replayMetadata.maxReplayAttempts) {
                 let reason = Self.failureReason(error: error)
-                await store.markDeadLetter(
-                    queueID: entry.receipt.queueID,
-                    reason: reason,
-                    now: Date()
-                )
-                await emitOfflineQueueEvent(
-                    .deadLettered(
-                        queueID: entry.receipt.queueID,
-                        requestKey: entry.receipt.requestKey,
-                        reason: reason
-                    ),
-                    telemetry: telemetryOfflineQueueContext(
-                        type: .deadLettered,
-                        queueID: entry.receipt.queueID,
-                        requestKey: entry.receipt.requestKey,
-                        attempt: nextAttempt,
-                        enqueuedAt: entry.receipt.enqueuedAt,
-                        reason: reason,
-                        willRetry: false
+                switch entry.replayMetadata.conflictPolicy {
+                case .drop:
+                    await store.markSucceeded(queueID: entry.receipt.queueID)
+                    await emitOfflineQueueEvent(
+                        .dropped(
+                            queueID: entry.receipt.queueID,
+                            requestKey: entry.receipt.requestKey,
+                            reason: "conflict_policy_drop:\(reason)"
+                        ),
+                        telemetry: telemetryOfflineQueueContext(
+                            type: .replayDroppedConflict,
+                            queueID: entry.receipt.queueID,
+                            requestKey: entry.receipt.requestKey,
+                            attempt: nextAttempt,
+                            enqueuedAt: entry.receipt.enqueuedAt,
+                            reason: reason,
+                            willRetry: false,
+                            resultType: "dropped_conflict"
+                        )
                     )
-                )
-                return
+                    return
+                case .manualReview:
+                    await store.markManualReview(
+                        queueID: entry.receipt.queueID,
+                        reason: reason,
+                        now: Date()
+                    )
+                    await emitOfflineQueueEvent(
+                        .manualReviewRequired(
+                            queueID: entry.receipt.queueID,
+                            requestKey: entry.receipt.requestKey,
+                            attempt: nextAttempt,
+                            reason: reason
+                        ),
+                        telemetry: telemetryOfflineQueueContext(
+                            type: .manualReviewRequired,
+                            queueID: entry.receipt.queueID,
+                            requestKey: entry.receipt.requestKey,
+                            attempt: nextAttempt,
+                            enqueuedAt: entry.receipt.enqueuedAt,
+                            reason: reason,
+                            willRetry: false,
+                            resultType: "manual_review_required"
+                        )
+                    )
+                    return
+                case .retry:
+                    let delaySeconds = min(pow(2, Double(nextAttempt)), 60)
+                    let nextRetryAt = Date().addingTimeInterval(delaySeconds)
+                    await store.markRetryWaiting(
+                        queueID: entry.receipt.queueID,
+                        attempt: nextAttempt,
+                        reason: reason,
+                        nextRetryAt: nextRetryAt,
+                        now: Date()
+                    )
+                    await emitOfflineQueueEvent(
+                        .replayFailed(
+                            queueID: entry.receipt.queueID,
+                            requestKey: entry.receipt.requestKey,
+                            attempt: nextAttempt,
+                            reason: reason,
+                            willRetry: true
+                        ),
+                        telemetry: telemetryOfflineQueueContext(
+                            type: .replayFailed,
+                            queueID: entry.receipt.queueID,
+                            requestKey: entry.receipt.requestKey,
+                            attempt: nextAttempt,
+                            enqueuedAt: entry.receipt.enqueuedAt,
+                            reason: reason,
+                            willRetry: true,
+                            resultType: "failed"
+                        )
+                    )
+                    return
+                }
             }
 
             let delaySeconds = min(pow(2, Double(nextAttempt)), 60)
@@ -1557,7 +1680,8 @@ public final class NetworkClient: @unchecked Sendable {
                     attempt: nextAttempt,
                     enqueuedAt: entry.receipt.enqueuedAt,
                     reason: reason,
-                    willRetry: true
+                    willRetry: true,
+                    resultType: "failed"
                 )
             )
         } catch {
@@ -1587,14 +1711,15 @@ public final class NetworkClient: @unchecked Sendable {
                     attempt: nextAttempt,
                     enqueuedAt: entry.receipt.enqueuedAt,
                     reason: reason,
-                    willRetry: true
+                    willRetry: true,
+                    resultType: "failed"
                 )
             )
         }
     }
 
-    private func shouldDeadLetterReplay(error: NetworkError, attempt: Int) -> Bool {
-        if attempt >= 5 {
+    private func shouldDeadLetterReplay(error: NetworkError, attempt: Int, maxReplayAttempts: Int) -> Bool {
+        if attempt >= max(1, maxReplayAttempts) {
             return true
         }
         guard case .httpStatus(let code, _, _) = error else {
@@ -1620,7 +1745,8 @@ public final class NetworkClient: @unchecked Sendable {
         attempt: Int? = nil,
         enqueuedAt: Date? = nil,
         reason: String? = nil,
-        willRetry: Bool? = nil
+        willRetry: Bool? = nil,
+        resultType: String? = nil
     ) -> TelemetryOfflineQueueContext {
         let ageMilliseconds: Double?
         if let enqueuedAt {
@@ -1635,7 +1761,8 @@ public final class NetworkClient: @unchecked Sendable {
             attempt: attempt,
             ageMilliseconds: ageMilliseconds,
             reason: reason,
-            willRetry: willRetry
+            willRetry: willRetry,
+            resultType: resultType
         )
     }
 

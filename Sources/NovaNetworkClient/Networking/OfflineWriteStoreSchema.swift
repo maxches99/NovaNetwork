@@ -2,7 +2,14 @@ import Foundation
 
 struct PersistedOfflineWriteEnvelope: Codable {
     let schemaVersion: Int
-    let entry: PersistedOfflineWriteEntry
+    let entry: PersistedOfflineWriteEntry?
+    let encryptedEntry: Data?
+    let encryption: PersistedOfflineWriteEncryptionMetadata?
+}
+
+struct PersistedOfflineWriteEncryptionMetadata: Codable {
+    let algorithm: String
+    let version: Int
 }
 
 struct PersistedOfflineWriteEntry: Codable {
@@ -26,6 +33,9 @@ struct PersistedOfflineWriteEntry: Codable {
     let lastFailureReason: String?
     let stateRaw: String
     let updatedAt: Date
+    let replayMetadata: OfflineReplayMetadata?
+    let lastTerminalStatusRaw: String?
+    let lastTerminalAt: Date?
 }
 
 extension PersistedOfflineWriteEntry {
@@ -45,11 +55,20 @@ extension PersistedOfflineWriteEntry {
         self.lastFailureReason = entry.lastFailureReason
         self.stateRaw = entry.state.rawValue
         self.updatedAt = entry.updatedAt
+        self.replayMetadata = entry.replayMetadata
+        self.lastTerminalStatusRaw = entry.lastTerminalStatus?.rawValue
+        self.lastTerminalAt = entry.lastTerminalAt
     }
 
     func toRuntimeEntry() -> OfflineWriteStoreEntry? {
         guard let state = OfflineQueueEntryState(rawValue: stateRaw) else {
             return nil
+        }
+        let terminalStatus: OfflineQueueTerminalStatus?
+        if let lastTerminalStatusRaw {
+            terminalStatus = OfflineQueueTerminalStatus(rawValue: lastTerminalStatusRaw)
+        } else {
+            terminalStatus = nil
         }
 
         let receipt = QueuedWriteReceipt(
@@ -73,7 +92,10 @@ extension PersistedOfflineWriteEntry {
             nextRetryAt: nextRetryAt,
             lastFailureReason: lastFailureReason,
             state: state,
-            updatedAt: updatedAt
+            updatedAt: updatedAt,
+            replayMetadata: replayMetadata ?? OfflineReplayMetadata(replayIdentity: requestKey),
+            lastTerminalStatus: terminalStatus,
+            lastTerminalAt: lastTerminalAt
         )
     }
 }
@@ -91,6 +113,8 @@ extension OfflineQueueEntryState {
             self = .retryWaiting
         case OfflineQueueEntryState.deadLetter.rawValue:
             self = .deadLetter
+        case OfflineQueueEntryState.manualReview.rawValue:
+            self = .manualReview
         default:
             return nil
         }
@@ -108,6 +132,8 @@ extension OfflineQueueEntryState {
             return "retryWaiting"
         case .deadLetter:
             return "deadLetter"
+        case .manualReview:
+            return "manualReview"
         }
     }
 }
