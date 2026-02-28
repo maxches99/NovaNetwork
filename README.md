@@ -337,7 +337,8 @@ for try await chunk in client.loadStream(request: request, authScope: "user:42")
 let socket = WebSocketClient(
     configuration: WebSocketConfiguration(
         url: URL(string: "wss://ws.postman-echo.com/raw")!,
-        headers: ["Authorization": "Bearer token"]
+        headers: ["Authorization": "Bearer token"],
+        outboundQueuePolicy: .init(maxQueuedMessages: 100, overflowPolicy: .dropOldest)
     )
 )
 
@@ -356,7 +357,13 @@ Task {
 }
 
 try await socket.connect()
-try await socket.send(.text("{\"type\":\"ping\"}"))
+try await socket.send(
+    .text("{\"type\":\"ping\"}"),
+    options: .init(requiresAck: true, messageID: "ping-1", ackTimeoutNanoseconds: 5_000_000_000)
+)
+let health = await socket.connectionHealth()
+print("ws health:", health)
+await socket.forceReconnect(reason: "manual_recovery")
 await socket.disconnect(reason: "done")
 ```
 

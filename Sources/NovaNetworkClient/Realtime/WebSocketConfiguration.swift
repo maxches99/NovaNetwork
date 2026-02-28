@@ -1,5 +1,26 @@
 import Foundation
 
+public enum WebSocketOutboundQueueOverflowPolicy: Sendable, Equatable {
+    case dropOldest
+    case dropNewest
+    case failFast
+}
+
+public struct WebSocketOutboundQueuePolicy: Sendable, Equatable {
+    public let maxQueuedMessages: Int
+    public let overflowPolicy: WebSocketOutboundQueueOverflowPolicy
+
+    public init(
+        maxQueuedMessages: Int = 0,
+        overflowPolicy: WebSocketOutboundQueueOverflowPolicy = .failFast
+    ) {
+        self.maxQueuedMessages = max(0, maxQueuedMessages)
+        self.overflowPolicy = overflowPolicy
+    }
+
+    public static let disabled = WebSocketOutboundQueuePolicy()
+}
+
 public struct WebSocketReconnectPolicy: Sendable, Equatable {
     public let maxAttempts: Int
     public let baseDelayNanoseconds: UInt64
@@ -44,16 +65,19 @@ public struct WebSocketConfiguration: Sendable, Equatable {
     public let headers: [String: String]
     public let reconnectPolicy: WebSocketReconnectPolicy
     public let heartbeatPolicy: WebSocketHeartbeatPolicy
+    public let outboundQueuePolicy: WebSocketOutboundQueuePolicy
 
     public init(
         url: URL,
         headers: [String: String] = [:],
         reconnectPolicy: WebSocketReconnectPolicy = .init(),
-        heartbeatPolicy: WebSocketHeartbeatPolicy = .init()
+        heartbeatPolicy: WebSocketHeartbeatPolicy = .init(),
+        outboundQueuePolicy: WebSocketOutboundQueuePolicy = .disabled
     ) {
         self.url = url
         self.headers = headers
         self.reconnectPolicy = reconnectPolicy
         self.heartbeatPolicy = heartbeatPolicy
+        self.outboundQueuePolicy = outboundQueuePolicy
     }
 }

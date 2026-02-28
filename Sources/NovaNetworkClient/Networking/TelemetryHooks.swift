@@ -196,12 +196,16 @@ public enum TelemetryWebSocketEventType: String, Sendable {
     case connectStarted = "connect_started"
     case connectSuccess = "connect_success"
     case connectFailed = "connect_failed"
+    case reconnectFailed = "reconnect_failed"
     case disconnect
     case messageSent = "message_sent"
     case messageReceived = "message_received"
     case reconnectAttempt = "reconnect_attempt"
     case reconnectSuccess = "reconnect_success"
     case reconnectExhausted = "reconnect_exhausted"
+    case messageQueued = "message_queued"
+    case messageDropped = "message_dropped"
+    case ackTimeout = "ack_timeout"
 }
 
 public struct TelemetryWebSocketContext: Sendable {
@@ -211,6 +215,9 @@ public struct TelemetryWebSocketContext: Sendable {
     public let reason: String?
     public let error: String?
     public let messageKind: String?
+    public let queueSize: Int?
+    public let queuePolicy: String?
+    public let messageID: String?
 
     public init(
         type: TelemetryWebSocketEventType,
@@ -218,7 +225,10 @@ public struct TelemetryWebSocketContext: Sendable {
         attempt: Int? = nil,
         reason: String? = nil,
         error: String? = nil,
-        messageKind: String? = nil
+        messageKind: String? = nil,
+        queueSize: Int? = nil,
+        queuePolicy: String? = nil,
+        messageID: String? = nil
     ) {
         self.type = type
         self.connectionID = connectionID
@@ -226,6 +236,9 @@ public struct TelemetryWebSocketContext: Sendable {
         self.reason = reason
         self.error = error
         self.messageKind = messageKind
+        self.queueSize = queueSize
+        self.queuePolicy = queuePolicy
+        self.messageID = messageID
     }
 }
 
