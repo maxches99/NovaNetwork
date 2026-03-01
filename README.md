@@ -338,7 +338,14 @@ let socket = WebSocketClient(
     configuration: WebSocketConfiguration(
         url: URL(string: "wss://ws.postman-echo.com/raw")!,
         headers: ["Authorization": "Bearer token"],
-        outboundQueuePolicy: .init(maxQueuedMessages: 100, overflowPolicy: .dropOldest)
+        outboundQueuePolicy: .init(maxQueuedMessages: 100, overflowPolicy: .dropOldest),
+        ackPolicy: .init(dedupeWindowNanoseconds: 120_000_000_000, maxTrackedMessageIDs: 2_048),
+        authRefreshPolicy: .init(maxAttempts: 1)
+    ),
+    authRefreshProvider: .init(
+        refreshHeaders: {
+            ["Authorization": "Bearer refreshed-token"]
+        }
     )
 )
 
@@ -361,11 +368,35 @@ try await socket.send(
     .text("{\"type\":\"ping\"}"),
     options: .init(requiresAck: true, messageID: "ping-1", ackTimeoutNanoseconds: 5_000_000_000)
 )
+await socket.registerSubscription(
+    id: "orders-stream",
+    message: .text("{\"type\":\"subscribe\",\"channel\":\"orders\"}")
+)
 let health = await socket.connectionHealth()
 print("ws health:", health)
+let diagnostics = await socket.webSocketDiagnostics()
+print("ws queue depth:", diagnostics.queuedOutboundMessages)
 await socket.forceReconnect(reason: "manual_recovery")
 await socket.disconnect(reason: "done")
 ```
+
+You can override ACK parsing for custom backend protocols:
+
+```swift
+let socket = WebSocketClient(
+    configuration: .init(url: URL(string: "wss://example.com/ws")!),
+    ackMatcher: .init { message in
+        guard case .text(let value) = message, value.hasPrefix("ACK|") else { return nil }
+        return String(value.dropFirst(4))
+    }
+)
+```
+
+For connectivity-aware reconnect suppression/resume, pass `connectivityMonitor` (`OfflineConnectivityMonitor`) when creating `WebSocketClient`.
+
+For durable outbound buffering across app restarts, pass `outboundQueueStore` (for example `DiskWebSocketOutboundQueueStore`).
+
+For optional subscription restore after reconnect, register subscriptions via `registerSubscription(id:message:options:)`.
 
 ## In-Flight Diagnostics
 

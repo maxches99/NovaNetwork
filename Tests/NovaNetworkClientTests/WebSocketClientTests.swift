@@ -10,6 +10,7 @@ private actor MockWebSocketTransport: WebSocketTransport {
     private var pingResults: [Result<Void, Error>] = []
     private var sendResults: [Result<Void, Error>] = []
     private var sentMessages: [WebSocketMessage] = []
+    private var connectedHeaders: [[String: String]] = []
 
     init(connectResults: [Result<Void, Error>] = [.success(())]) {
         self.connectResults = connectResults
@@ -17,6 +18,7 @@ private actor MockWebSocketTransport: WebSocketTransport {
 
     func connect(url: URL, headers: [String: String]) async throws {
         connectCalls += 1
+        connectedHeaders.append(headers)
         let result: Result<Void, Error>
         if connectResults.isEmpty {
             result = .success(())
@@ -100,10 +102,50 @@ private actor MockWebSocketTransport: WebSocketTransport {
     func snapshotSentMessages() -> [WebSocketMessage] {
         sentMessages
     }
+
+    func snapshotConnectedHeaders() -> [[String: String]] {
+        connectedHeaders
+    }
 }
 
 private actor ImmediateRetryClock: RetryClock {
     func sleep(nanoseconds: UInt64) async throws {}
+}
+
+private actor MockWebSocketOutboundQueueStore: WebSocketOutboundQueueStore {
+    private var messages: [WebSocketQueuedMessage]
+    private var loadError: Error?
+    private var persistError: Error?
+
+    init(initial: [WebSocketQueuedMessage] = []) {
+        self.messages = initial
+    }
+
+    func loadQueuedMessages() async throws -> [WebSocketQueuedMessage] {
+        if let loadError {
+            throw loadError
+        }
+        return messages
+    }
+
+    func persistQueuedMessages(_ messages: [WebSocketQueuedMessage]) async throws {
+        if let persistError {
+            throw persistError
+        }
+        self.messages = messages
+    }
+
+    func snapshot() async -> [WebSocketQueuedMessage] {
+        messages
+    }
+
+    func setLoadError(_ error: Error?) async {
+        loadError = error
+    }
+
+    func setPersistError(_ error: Error?) async {
+        persistError = error
+    }
 }
 
 private actor CancellationRetryClock: RetryClock {
@@ -118,6 +160,15 @@ private struct WSFixedRetryRandom: RetryRandomGenerator {
     func nextDouble(in range: ClosedRange<Double>) -> Double {
         min(max(value, range.lowerBound), range.upperBound)
     }
+}
+
+private func p95Nanoseconds(_ samples: [UInt64]) -> UInt64 {
+    guard !samples.isEmpty else {
+        return 0
+    }
+    let sorted = samples.sorted()
+    let index = min(sorted.count - 1, Int(Double(sorted.count - 1) * 0.95))
+    return sorted[index]
 }
 
 private final class MockURLSessionWebSocketTask: URLSessionWebSocketTasking, @unchecked Sendable {
@@ -236,6 +287,32 @@ private actor WebSocketTelemetryRecorder {
     }
 }
 
+final class TestWebSocketConnectivityMonitor: OfflineConnectivityMonitor, @unchecked Sendable {
+    private let queue = DispatchQueue(label: "TestWebSocketConnectivityMonitor.state")
+    private var continuation: AsyncStream<Bool>.Continuation?
+    private var latestStatus: Bool
+
+    init(initialStatus: Bool) {
+        self.latestStatus = initialStatus
+    }
+
+    func statusStream() -> AsyncStream<Bool> {
+        AsyncStream { continuation in
+            queue.sync {
+                self.continuation = continuation
+                continuation.yield(self.latestStatus)
+            }
+        }
+    }
+
+    func emit(_ isOnline: Bool) {
+        queue.async {
+            self.latestStatus = isOnline
+            self.continuation?.yield(isOnline)
+        }
+    }
+}
+
 @Suite(.serialized)
 struct WebSocketClientTests {
     @Test
@@ -273,6 +350,47 @@ struct WebSocketClientTests {
         } else {
             Issue.record("Expected .connected state at index 2")
         }
+    }
+
+    @Test
+    func legacyWebSocketClientCallsitesRemainSourceCompatible() async throws {
+        let url = URL(string: "wss://example.com/ws")!
+
+        // Public initializer remains additive: existing callsites can construct with configuration only.
+        let publicClient = WebSocketClient(configuration: .init(url: url))
+        #expect(await publicClient.connectionHealth() == .disconnected)
+        await publicClient.disconnect(reason: nil)
+
+        // Legacy internal initializer callsite with transport still compiles with defaulted new params.
+        let transport = MockWebSocketTransport()
+        let legacyClient = WebSocketClient(
+            configuration: .init(url: url, heartbeatPolicy: .disabled),
+            transport: transport
+        )
+        try await legacyClient.connect()
+        try await legacyClient.send(.text("legacy-message"))
+        await legacyClient.disconnect(reason: nil)
+        #expect(await transport.connectCount() == 1)
+    }
+
+    @Test
+    func telemetryWebSocketContextLegacyInitializerRemainsCompatible() async {
+        let context = TelemetryWebSocketContext(
+            type: .messageSent,
+            connectionID: "conn-legacy",
+            attempt: 1,
+            reason: "legacy",
+            error: nil,
+            messageKind: "text",
+            queueSize: 1,
+            queuePolicy: "dropOldest",
+            messageID: "msg-legacy"
+        )
+
+        #expect(context.type == .messageSent)
+        #expect(context.connectionID == "conn-legacy")
+        #expect(context.subscriptionRestoreTotalCount == nil)
+        #expect(context.subscriptionRestoreFailedCount == nil)
     }
 
     @Test
@@ -664,6 +782,546 @@ struct WebSocketClientTests {
     }
 
     @Test
+    func connectAuthRefreshRecoversWithUpdatedHeaders() async throws {
+        let transport = MockWebSocketTransport(
+            connectResults: [
+                .failure(WebSocketError.auth(description: "expired")),
+                .success(())
+            ]
+        )
+        let client = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                headers: ["Authorization": "Bearer old"],
+                authRefreshPolicy: .init(maxAttempts: 1)
+            ),
+            transport: transport,
+            authRefreshProvider: .init(
+                refreshHeaders: { ["Authorization": "Bearer fresh"] }
+            )
+        )
+
+        try await client.connect()
+        #expect(await transport.connectCount() == 2)
+        #expect(await client.connectionHealth() == .healthy)
+        let connectHeaders = await transport.snapshotConnectedHeaders()
+        #expect(connectHeaders.first?["Authorization"] == "Bearer old")
+        #expect(connectHeaders.last?["Authorization"] == "Bearer fresh")
+    }
+
+    @Test
+    func connectAuthRefreshFailureTransitionsToTerminalAuthErrorAndTelemetry() async {
+        let transport = MockWebSocketTransport(
+            connectResults: [.failure(WebSocketError.auth(description: "expired"))]
+        )
+        let recorder = WebSocketTelemetryRecorder()
+        let hooks = NetworkTelemetryHooks(
+            onWebSocketEvent: { context in
+                Task { await recorder.append(context) }
+            }
+        )
+        let client = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                authRefreshPolicy: .init(maxAttempts: 1)
+            ),
+            transport: transport,
+            authRefreshProvider: .init(
+                refreshHeaders: {
+                    throw WebSocketError.auth(description: "refresh denied")
+                }
+            ),
+            telemetryHooks: hooks
+        )
+
+        do {
+            try await client.connect()
+            Issue.record("Expected connect to fail when auth refresh fails.")
+        } catch let error as WebSocketError {
+            if case .auth(let description) = error {
+                #expect(description.range(of: "auth_refresh_failed") != nil)
+            } else {
+                Issue.record("Expected terminal auth error, got \(error)")
+            }
+        } catch {
+            Issue.record("Unexpected error type: \(error)")
+        }
+
+        let diagnostics = await client.webSocketDiagnostics()
+        if case .auth? = diagnostics.lastError {
+            // expected
+        } else {
+            Issue.record("Expected diagnostics.lastError to contain auth refresh failure.")
+        }
+
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let events = await recorder.snapshot()
+        let types = events.map(\.type)
+        #expect(types.contains(.authRefreshStarted))
+        #expect(types.contains(.authRefreshFailed))
+        #expect(!types.contains(.authRefreshSucceeded))
+    }
+
+    @Test
+    func reconnectAuthRefreshRecoversAfterAuthError() async throws {
+        let transport = MockWebSocketTransport(
+            connectResults: [
+                .success(()),
+                .failure(WebSocketError.auth(description: "expired")),
+                .success(())
+            ]
+        )
+        let client = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                headers: ["Authorization": "Bearer old"],
+                reconnectPolicy: .init(
+                    maxAttempts: 1,
+                    baseDelayNanoseconds: 0,
+                    maxDelayNanoseconds: 0,
+                    jitterRange: nil
+                ),
+                heartbeatPolicy: .disabled,
+                authRefreshPolicy: .init(maxAttempts: 1)
+            ),
+            transport: transport,
+            authRefreshProvider: .init(
+                refreshHeaders: { ["Authorization": "Bearer refreshed"] }
+            ),
+            retryClock: ImmediateRetryClock(),
+            retryRandomGenerator: WSFixedRetryRandom(value: 1)
+        )
+
+        let states = await client.connectionStates()
+        let stateConsumer = Task { () -> [WebSocketConnectionState] in
+            var iterator = states.makeAsyncIterator()
+            var received: [WebSocketConnectionState] = []
+            let deadline = Date().addingTimeInterval(1.0)
+            while Date() < deadline, let next = await iterator.next() {
+                received.append(next)
+                if received.count >= 6, case .connected = next {
+                    break
+                }
+            }
+            return received
+        }
+
+        try await client.connect()
+        await transport.enqueue(.failure(WebSocketError.transport(description: "drop")))
+        let received = await stateConsumer.value
+
+        #expect(await transport.connectCount() == 3)
+        #expect(received.contains { if case .reconnecting(let attempt, _) = $0 { return attempt == 1 }; return false })
+        #expect(received.last.map { if case .connected = $0 { return true }; return false } == true)
+
+        let connectHeaders = await transport.snapshotConnectedHeaders()
+        #expect(connectHeaders.count == 3)
+        #expect(connectHeaders[1]["Authorization"] == "Bearer old")
+        #expect(connectHeaders[2]["Authorization"] == "Bearer refreshed")
+    }
+
+    @Test
+    func reconnectIsSuppressedWhileOfflineAndResumesOnOnlineWithTelemetry() async throws {
+        let monitor = TestWebSocketConnectivityMonitor(initialStatus: false)
+        let transport = MockWebSocketTransport(connectResults: [.success(()), .success(())])
+        let recorder = WebSocketTelemetryRecorder()
+        let hooks = NetworkTelemetryHooks(
+            onWebSocketEvent: { context in
+                Task { await recorder.append(context) }
+            }
+        )
+        let client = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                reconnectPolicy: .init(
+                    maxAttempts: 1,
+                    baseDelayNanoseconds: 1_000_000_000,
+                    maxDelayNanoseconds: 1_000_000_000,
+                    jitterRange: nil
+                ),
+                heartbeatPolicy: .disabled
+            ),
+            transport: transport,
+            connectivityMonitor: monitor,
+            retryClock: ImmediateRetryClock(),
+            retryRandomGenerator: WSFixedRetryRandom(value: 1),
+            telemetryHooks: hooks
+        )
+
+        try await client.connect()
+        await transport.enqueue(.failure(WebSocketError.transport(description: "drop")))
+
+        let suppressedDeadline = Date().addingTimeInterval(1.0)
+        var sawOfflineWait = false
+        while Date() < suppressedDeadline {
+            let state = await client.webSocketDiagnostics().state
+            if case .reconnectingWaitingForConnectivity(let attempt) = state, attempt == 1 {
+                sawOfflineWait = true
+                break
+            }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(sawOfflineWait)
+        #expect(await transport.connectCount() == 1)
+
+        monitor.emit(true)
+
+        let reconnectDeadline = Date().addingTimeInterval(1.0)
+        while Date() < reconnectDeadline, await transport.connectCount() < 2 {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(await transport.connectCount() == 2)
+
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let telemetryEvents = await recorder.snapshot()
+        let types = telemetryEvents.map(\.type)
+        #expect(types.contains(.reconnectSuppressedOffline))
+        #expect(types.contains(.reconnectResumedOnline))
+        #expect(types.contains(.reconnectSuccess))
+
+        let suppressedIndex = types.firstIndex(of: .reconnectSuppressedOffline) ?? -1
+        let resumedIndex = types.firstIndex(of: .reconnectResumedOnline) ?? -1
+        let successIndex = types.firstIndex(of: .reconnectSuccess) ?? -1
+        #expect(suppressedIndex >= 0)
+        #expect(resumedIndex > suppressedIndex)
+        #expect(successIndex > resumedIndex)
+    }
+
+    @Test
+    func connectivityFlapStabilityDoesNotSpawnDuplicateReconnectLoops() async throws {
+        let monitor = TestWebSocketConnectivityMonitor(initialStatus: false)
+        let transport = MockWebSocketTransport(connectResults: [.success(()), .success(())])
+        let recorder = WebSocketTelemetryRecorder()
+        let hooks = NetworkTelemetryHooks(
+            onWebSocketEvent: { context in
+                Task { await recorder.append(context) }
+            }
+        )
+        let client = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                reconnectPolicy: .init(
+                    maxAttempts: 1,
+                    baseDelayNanoseconds: 500_000_000,
+                    maxDelayNanoseconds: 500_000_000,
+                    jitterRange: nil
+                ),
+                heartbeatPolicy: .disabled
+            ),
+            transport: transport,
+            connectivityMonitor: monitor,
+            retryClock: ImmediateRetryClock(),
+            retryRandomGenerator: WSFixedRetryRandom(value: 1),
+            telemetryHooks: hooks
+        )
+
+        try await client.connect()
+        await transport.enqueue(.failure(WebSocketError.transport(description: "drop")))
+
+        let waitDeadline = Date().addingTimeInterval(1.0)
+        var sawWaitingState = false
+        while Date() < waitDeadline {
+            let state = await client.webSocketDiagnostics().state
+            if case .reconnectingWaitingForConnectivity(let attempt) = state, attempt == 1 {
+                sawWaitingState = true
+                break
+            }
+            try? await Task.sleep(nanoseconds: 2_000_000)
+        }
+        #expect(sawWaitingState)
+        #expect(await transport.connectCount() == 1)
+
+        for status in [true, false, true, false, true, false, true] {
+            monitor.emit(status)
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        let reconnectDeadline = Date().addingTimeInterval(1.0)
+        while Date() < reconnectDeadline, await transport.connectCount() < 2 {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(await transport.connectCount() == 2)
+
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let events = await recorder.snapshot()
+        let types = events.map(\.type)
+        let suppressedIndex = types.firstIndex(of: .reconnectSuppressedOffline) ?? -1
+        let resumedIndex = types.firstIndex(of: .reconnectResumedOnline) ?? -1
+        let successIndex = types.firstIndex(of: .reconnectSuccess) ?? -1
+        #expect(suppressedIndex >= 0)
+        #expect(resumedIndex > suppressedIndex)
+        #expect(successIndex > resumedIndex)
+        #expect(!types.contains(.reconnectExhausted))
+    }
+
+    @Test
+    func reconnectRestoresRegisteredSubscriptionsAndEmitsSuccessTelemetry() async throws {
+        let transport = MockWebSocketTransport(connectResults: [.success(()), .success(())])
+        let recorder = WebSocketTelemetryRecorder()
+        let hooks = NetworkTelemetryHooks(
+            onWebSocketEvent: { context in
+                Task { await recorder.append(context) }
+            }
+        )
+        let client = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                reconnectPolicy: .init(
+                    maxAttempts: 1,
+                    baseDelayNanoseconds: 0,
+                    maxDelayNanoseconds: 0,
+                    jitterRange: nil
+                ),
+                heartbeatPolicy: .disabled
+            ),
+            transport: transport,
+            retryClock: ImmediateRetryClock(),
+            retryRandomGenerator: WSFixedRetryRandom(value: 1),
+            telemetryHooks: hooks
+        )
+
+        try await client.connect()
+        await client.registerSubscription(id: "sub.orders", message: .text("{\"type\":\"subscribe\",\"channel\":\"orders\"}"))
+        await client.registerSubscription(id: "sub.prices", message: .text("{\"type\":\"subscribe\",\"channel\":\"prices\"}"))
+
+        await transport.enqueue(.failure(WebSocketError.transport(description: "drop")))
+        let deadline = Date().addingTimeInterval(1.0)
+        while Date() < deadline, await transport.connectCount() < 2 {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(await transport.connectCount() == 2)
+
+        let sentDeadline = Date().addingTimeInterval(1.0)
+        while Date() < sentDeadline, (await transport.snapshotSentMessages()).count < 2 {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        let sent = await transport.snapshotSentMessages()
+        #expect(sent == [
+            .text("{\"type\":\"subscribe\",\"channel\":\"orders\"}"),
+            .text("{\"type\":\"subscribe\",\"channel\":\"prices\"}")
+        ])
+
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let events = await recorder.snapshot()
+        let types = events.map(\.type)
+        #expect(types.contains(.subscriptionRestoreStarted))
+        #expect(types.contains(.subscriptionRestoreSucceeded))
+        #expect(!types.contains(.subscriptionRestoreFailed))
+
+        let started = events.first { $0.type == .subscriptionRestoreStarted }
+        #expect(started?.subscriptionRestoreTotalCount == 2)
+        #expect(started?.subscriptionRestoreFailedCount == 0)
+        let succeeded = events.first { $0.type == .subscriptionRestoreSucceeded }
+        #expect(succeeded?.subscriptionRestoreTotalCount == 2)
+        #expect(succeeded?.subscriptionRestoreFailedCount == 0)
+    }
+
+    @Test
+    func reconnectSubscriptionRestorePartialFailureEmitsFailureWithoutSuccess() async throws {
+        let transport = MockWebSocketTransport(connectResults: [.success(()), .success(())])
+        let recorder = WebSocketTelemetryRecorder()
+        let hooks = NetworkTelemetryHooks(
+            onWebSocketEvent: { context in
+                Task { await recorder.append(context) }
+            }
+        )
+        let client = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                reconnectPolicy: .init(
+                    maxAttempts: 1,
+                    baseDelayNanoseconds: 0,
+                    maxDelayNanoseconds: 0,
+                    jitterRange: nil
+                ),
+                heartbeatPolicy: .disabled
+            ),
+            transport: transport,
+            retryClock: ImmediateRetryClock(),
+            retryRandomGenerator: WSFixedRetryRandom(value: 1),
+            telemetryHooks: hooks
+        )
+
+        try await client.connect()
+        await client.registerSubscription(id: "sub.alpha", message: .text("{\"type\":\"subscribe\",\"channel\":\"alpha\"}"))
+        await client.registerSubscription(id: "sub.beta", message: .text("{\"type\":\"subscribe\",\"channel\":\"beta\"}"))
+        await transport.enqueueSend(.failure(WebSocketError.transport(description: "subscription-send-failed")))
+
+        await transport.enqueue(.failure(WebSocketError.transport(description: "drop")))
+        let deadline = Date().addingTimeInterval(1.0)
+        while Date() < deadline, await transport.connectCount() < 2 {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(await transport.connectCount() == 2)
+
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let events = await recorder.snapshot()
+        let types = events.map(\.type)
+        #expect(types.contains(.subscriptionRestoreStarted))
+        #expect(types.contains(.subscriptionRestoreFailed))
+        #expect(!types.contains(.subscriptionRestoreSucceeded))
+
+        let failed = events.first { $0.type == .subscriptionRestoreFailed }
+        #expect(failed?.subscriptionRestoreTotalCount == 2)
+        #expect(failed?.subscriptionRestoreFailedCount == 1)
+        #expect((failed?.reason ?? "").range(of: "sub.alpha") != nil)
+    }
+
+    @Test
+    func persistedOutboundQueueSurvivesRestartAndFlushesInFIFOOrder() async throws {
+        let store = MockWebSocketOutboundQueueStore()
+        let writerTransport = MockWebSocketTransport()
+        let writerClient = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                heartbeatPolicy: .disabled,
+                outboundQueuePolicy: .init(maxQueuedMessages: 8, overflowPolicy: .dropOldest)
+            ),
+            transport: writerTransport,
+            outboundQueueStore: store
+        )
+
+        try await writerClient.send(.text("persisted-one"))
+        try await writerClient.send(.text("persisted-two"))
+        #expect((await store.snapshot()).map(\.message) == [.text("persisted-one"), .text("persisted-two")])
+
+        let readerTransport = MockWebSocketTransport()
+        let readerClient = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                heartbeatPolicy: .disabled,
+                outboundQueuePolicy: .init(maxQueuedMessages: 8, overflowPolicy: .dropOldest)
+            ),
+            transport: readerTransport,
+            outboundQueueStore: store
+        )
+
+        try await readerClient.connect()
+        let sent = await readerTransport.snapshotSentMessages()
+        #expect(sent == [.text("persisted-one"), .text("persisted-two")])
+        #expect((await store.snapshot()).isEmpty)
+    }
+
+    @Test
+    func persistedQueueTelemetryEmitsRestoreAndReplayLifecycle() async throws {
+        let store = MockWebSocketOutboundQueueStore(initial: [
+            .init(
+                message: .text("persisted"),
+                options: .init(requiresAck: false),
+                resolvedMessageID: nil,
+                enqueuedAt: Date()
+            )
+        ])
+        let transport = MockWebSocketTransport()
+        let recorder = WebSocketTelemetryRecorder()
+        let hooks = NetworkTelemetryHooks(
+            onWebSocketEvent: { context in
+                Task { await recorder.append(context) }
+            }
+        )
+        let client = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                heartbeatPolicy: .disabled,
+                outboundQueuePolicy: .init(maxQueuedMessages: 8, overflowPolicy: .dropOldest)
+            ),
+            transport: transport,
+            outboundQueueStore: store,
+            telemetryHooks: hooks
+        )
+
+        try await client.connect()
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let types = await recorder.snapshot().map(\.type)
+        #expect(types.contains(.persistedQueueRestored))
+        #expect(types.contains(.persistedQueueSaved))
+        #expect(types.contains(.persistedReplaySucceeded))
+    }
+
+    @Test
+    func persistedQueueTelemetryEmitsLoadFailureWhenStoreDecodeFails() async throws {
+        let store = MockWebSocketOutboundQueueStore()
+        await store.setLoadError(WebSocketOutboundQueueStoreError.decodeFailed)
+        let transport = MockWebSocketTransport()
+        let recorder = WebSocketTelemetryRecorder()
+        let hooks = NetworkTelemetryHooks(
+            onWebSocketEvent: { context in
+                Task { await recorder.append(context) }
+            }
+        )
+        let client = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                heartbeatPolicy: .disabled
+            ),
+            transport: transport,
+            outboundQueueStore: store,
+            telemetryHooks: hooks
+        )
+
+        try await client.connect()
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let types = await recorder.snapshot().map(\.type)
+        #expect(types.contains(.persistedQueueLoadFailed))
+    }
+
+    @Test
+    func persistedQueueCorruptedRecordIsSkippedAndValidRecordsReplayWithTelemetry() async throws {
+        let baseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ws-queue-corrupted-\(UUID().uuidString)", isDirectory: true)
+        let fileURL = baseURL.appendingPathComponent("queue.json")
+        try FileManager.default.createDirectory(at: baseURL, withIntermediateDirectories: true)
+
+        let validRecord = WebSocketQueuedMessage(
+            message: .text("valid-replayed"),
+            options: .init(requiresAck: false),
+            resolvedMessageID: nil,
+            enqueuedAt: Date()
+        )
+        let validData = try JSONEncoder().encode(validRecord)
+        let validJSON = try JSONSerialization.jsonObject(with: validData)
+        let corruptedJSON: [String: Any] = ["invalid": true]
+        let root: [String: Any] = [
+            "schemaVersion": 1,
+            "messages": [validJSON, corruptedJSON]
+        ]
+        let raw = try JSONSerialization.data(withJSONObject: root)
+        try raw.write(to: fileURL, options: .atomic)
+
+        let store = DiskWebSocketOutboundQueueStore(fileURL: fileURL)
+        let transport = MockWebSocketTransport()
+        let recorder = WebSocketTelemetryRecorder()
+        let hooks = NetworkTelemetryHooks(
+            onWebSocketEvent: { context in
+                Task { await recorder.append(context) }
+            }
+        )
+        let client = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                heartbeatPolicy: .disabled,
+                outboundQueuePolicy: .init(maxQueuedMessages: 8, overflowPolicy: .dropOldest)
+            ),
+            transport: transport,
+            outboundQueueStore: store,
+            telemetryHooks: hooks
+        )
+
+        try await client.connect()
+
+        let sent = await transport.snapshotSentMessages()
+        #expect(sent == [.text("valid-replayed")])
+
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let events = await recorder.snapshot()
+        let loadFailed = events.first { $0.type == .persistedQueueLoadFailed }
+        #expect(loadFailed != nil)
+        #expect((loadFailed?.reason ?? "").range(of: "partially_corrupted") != nil)
+        #expect((loadFailed?.reason ?? "").range(of: "dropped=1") != nil)
+        #expect(events.contains { $0.type == .persistedQueueRestored && $0.queueSize == 1 })
+    }
+
+    @Test
     func sendMapsTransportErrorsAndEmitsBinaryTelemetryKind() async throws {
         let recorder = WebSocketTelemetryRecorder()
         let hooks = NetworkTelemetryHooks(
@@ -926,6 +1584,236 @@ struct WebSocketClientTests {
     }
 
     @Test
+    func sendWithCustomAckMatcherCompletesWhenMatcherResolvesMessageID() async throws {
+        let transport = MockWebSocketTransport()
+        let matcher = WebSocketAckMatcher { message in
+            guard case .text(let value) = message, value.hasPrefix("ACK|") else { return nil }
+            return String(value.dropFirst(4))
+        }
+        let client = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                heartbeatPolicy: .disabled
+            ),
+            transport: transport,
+            ackMatcher: matcher
+        )
+
+        try await client.connect()
+        let sendTask = Task {
+            try await client.send(
+                .text("{\"type\":\"event\"}"),
+                options: .init(requiresAck: true, messageID: "custom-1", ackTimeoutNanoseconds: 1_000_000_000)
+            )
+        }
+
+        await transport.enqueue(.success(.text("ACK|custom-1")))
+        try await sendTask.value
+    }
+
+    @Test
+    func ackDedupeTTLAllowsMessageIDReuseAfterWindowExpires() async throws {
+        let transport = MockWebSocketTransport()
+        let client = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                heartbeatPolicy: .disabled,
+                ackPolicy: .init(
+                    dedupeWindowNanoseconds: 1_000_000,
+                    maxTrackedMessageIDs: 8
+                )
+            ),
+            transport: transport,
+            retryClock: ImmediateRetryClock()
+        )
+
+        try await client.connect()
+        let firstSend = Task {
+            try await client.send(
+                .text("{\"type\":\"event\"}"),
+                options: .init(requiresAck: true, messageID: "ttl-1", ackTimeoutNanoseconds: 1_000_000_000)
+            )
+        }
+        await transport.enqueue(.success(.text("{\"type\":\"ack\",\"messageId\":\"ttl-1\"}")))
+        try await firstSend.value
+
+        try? await Task.sleep(nanoseconds: 5_000_000)
+        do {
+            try await client.send(
+                .text("{\"type\":\"event\"}"),
+                options: .init(requiresAck: true, messageID: "ttl-1", ackTimeoutNanoseconds: 1)
+            )
+            Issue.record("Expected timeout when ACK dedupe window expires and ACK is absent.")
+        } catch let error as WebSocketError {
+            #expect(error == .ackTimeout(messageID: "ttl-1"))
+        } catch {
+            Issue.record("Unexpected error type: \(error)")
+        }
+    }
+
+    @Test
+    func ackDedupeStoreRemainsBoundedUnderSoak() async throws {
+        let maxTracked = 32
+        let transport = MockWebSocketTransport()
+        let client = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                heartbeatPolicy: .disabled,
+                ackPolicy: .init(
+                    dedupeWindowNanoseconds: 300_000_000_000,
+                    maxTrackedMessageIDs: maxTracked
+                )
+            ),
+            transport: transport
+        )
+
+        try await client.connect()
+
+        for index in 0..<500 {
+            await transport.enqueue(
+                .success(.text("{\"type\":\"ack\",\"messageId\":\"soak-\(index)\"}"))
+            )
+        }
+
+        let deadline = Date().addingTimeInterval(1.0)
+        while Date() < deadline {
+            let tracked = await client.webSocketDiagnostics().trackedAckMessageIDs
+            if tracked == maxTracked {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 2_000_000)
+        }
+
+        for index in 500..<1_000 {
+            await transport.enqueue(
+                .success(.text("{\"type\":\"ack\",\"messageId\":\"soak-\(index)\"}"))
+            )
+        }
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        let diagnostics = await client.webSocketDiagnostics()
+        #expect(diagnostics.trackedAckMessageIDs > 0)
+        #expect(diagnostics.trackedAckMessageIDs <= maxTracked)
+    }
+
+    @Test
+    func sendForceReconnectRaceStressDoesNotLeakAckWaitersOrDeadlock() async throws {
+        let iterations = 1_000
+        let transport = MockWebSocketTransport(connectResults: [.success(())])
+        let client = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                reconnectPolicy: .init(
+                    maxAttempts: 1,
+                    baseDelayNanoseconds: 0,
+                    maxDelayNanoseconds: 0,
+                    jitterRange: nil
+                ),
+                heartbeatPolicy: .disabled,
+                ackPolicy: .init(
+                    dedupeWindowNanoseconds: 120_000_000_000,
+                    maxTrackedMessageIDs: 64
+                )
+            ),
+            transport: transport,
+            retryClock: ImmediateRetryClock(),
+            retryRandomGenerator: WSFixedRetryRandom(value: 1)
+        )
+
+        try await client.connect()
+
+        for index in 0..<iterations {
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    do {
+                        try await client.send(
+                            .text("{\"type\":\"event\",\"index\":\(index)}"),
+                            options: .init(
+                                requiresAck: true,
+                                messageID: "race-\(index)",
+                                ackTimeoutNanoseconds: 1
+                            )
+                        )
+                    } catch {
+                        // Races are expected to fail with disconnected/ack-timeout while reconnecting.
+                    }
+                }
+                group.addTask {
+                    await client.forceReconnect(reason: "race-\(index)")
+                }
+                await group.waitForAll()
+            }
+        }
+
+        let settleDeadline = Date().addingTimeInterval(1.0)
+        while Date() < settleDeadline {
+            if case .connected = await client.webSocketDiagnostics().state {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 2_000_000)
+        }
+
+        let diagnostics = await client.webSocketDiagnostics()
+        #expect(diagnostics.pendingAckCount == 0)
+        #expect(diagnostics.trackedAckMessageIDs <= 64)
+        #expect(await transport.connectCount() >= 2)
+    }
+
+    @Test
+    func webSocketDiagnosticsReflectsQueueAndPendingAckState() async throws {
+        let transport = MockWebSocketTransport()
+        let client = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                heartbeatPolicy: .disabled,
+                outboundQueuePolicy: .init(maxQueuedMessages: 2, overflowPolicy: .dropOldest),
+                ackPolicy: .init(maxTrackedMessageIDs: 4)
+            ),
+            transport: transport
+        )
+
+        let initial = await client.webSocketDiagnostics()
+        #expect(initial.state == .disconnected)
+        #expect(initial.queuedOutboundMessages == 0)
+        #expect(initial.pendingAckCount == 0)
+        #expect(initial.trackedAckMessageIDs == 0)
+
+        try await client.send(.text("queued-message"))
+        let queued = await client.webSocketDiagnostics()
+        #expect(queued.queuedOutboundMessages == 1)
+
+        try await client.connect()
+        let pendingSend = Task {
+            try await client.send(
+                .text("{\"type\":\"event\"}"),
+                options: .init(requiresAck: true, messageID: "diag-ack", ackTimeoutNanoseconds: 30_000_000_000)
+            )
+        }
+
+        let deadline = Date().addingTimeInterval(1.0)
+        var observedPending = false
+        while Date() < deadline {
+            let diagnostics = await client.webSocketDiagnostics()
+            if diagnostics.pendingAckCount == 1 {
+                observedPending = true
+                break
+            }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(observedPending)
+
+        await client.disconnect(reason: "test-finish")
+        do {
+            try await pendingSend.value
+            Issue.record("Expected pending ACK send to fail on disconnect.")
+        } catch let error as WebSocketError {
+            #expect(error == .disconnected || error == .ackTimeout(messageID: "diag-ack"))
+        } catch {
+            Issue.record("Unexpected error type: \(error)")
+        }
+    }
+
+    @Test
     func sendWithAckTimeoutThrowsTypedErrorAndEmitsTelemetry() async throws {
         let transport = MockWebSocketTransport()
         let recorder = WebSocketTelemetryRecorder()
@@ -1156,5 +2044,100 @@ struct WebSocketClientTests {
         let transport = URLSessionWebSocketTransport(session: URLSession(configuration: .ephemeral))
         try await transport.connect(url: URL(string: "ws://127.0.0.1:9/ws")!, headers: [:])
         await transport.disconnect(reason: nil)
+    }
+
+    @Test
+    func diskWebSocketOutboundQueueStoreRoundTripPersistsMessages() async throws {
+        let baseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ws-queue-store-\(UUID().uuidString)", isDirectory: true)
+        let fileURL = baseURL.appendingPathComponent("queue.json")
+        let store = DiskWebSocketOutboundQueueStore(fileURL: fileURL)
+        let now = Date()
+        let messages: [WebSocketQueuedMessage] = [
+            .init(
+                message: .text("hello"),
+                options: .init(requiresAck: true, messageID: "id-1", ackTimeoutNanoseconds: 1_000_000_000),
+                resolvedMessageID: "id-1",
+                enqueuedAt: now
+            ),
+            .init(
+                message: .binary(Data([1, 2, 3])),
+                options: .init(requiresAck: false),
+                resolvedMessageID: nil,
+                enqueuedAt: now.addingTimeInterval(1)
+            )
+        ]
+
+        try await store.persistQueuedMessages(messages)
+        let restored = try await store.loadQueuedMessages()
+        #expect(restored == messages)
+    }
+
+    @Test
+    func diskWebSocketOutboundQueueStoreIgnoresMismatchedSchemaVersion() async throws {
+        let baseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ws-queue-schema-\(UUID().uuidString)", isDirectory: true)
+        let fileURL = baseURL.appendingPathComponent("queue.json")
+        let writer = DiskWebSocketOutboundQueueStore(fileURL: fileURL, schemaVersion: 1)
+        let reader = DiskWebSocketOutboundQueueStore(fileURL: fileURL, schemaVersion: 2)
+
+        try await writer.persistQueuedMessages([
+            .init(
+                message: .text("payload"),
+                options: .init(requiresAck: false),
+                resolvedMessageID: nil,
+                enqueuedAt: Date()
+            )
+        ])
+
+        do {
+            _ = try await reader.loadQueuedMessages()
+            Issue.record("Expected schema mismatch when reading with different store schema version.")
+        } catch let error as WebSocketOutboundQueueStoreError {
+            #expect(error == .schemaMismatch(expected: 2, actual: 1))
+        } catch {
+            Issue.record("Unexpected error type: \(error)")
+        }
+    }
+
+    @Test
+    func diskWebSocketOutboundQueueStoreMeetsP95LatencyBudget() async throws {
+        let baseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ws-queue-latency-\(UUID().uuidString)", isDirectory: true)
+        let fileURL = baseURL.appendingPathComponent("queue.json")
+        let store = DiskWebSocketOutboundQueueStore(fileURL: fileURL)
+        let sampleCount = 120
+        let budgetNanoseconds: UInt64 = 10_000_000 // 10ms
+
+        var persistSamples: [UInt64] = []
+        var loadSamples: [UInt64] = []
+        persistSamples.reserveCapacity(sampleCount)
+        loadSamples.reserveCapacity(sampleCount)
+
+        for index in 0..<sampleCount {
+            let messages: [WebSocketQueuedMessage] = [
+                .init(
+                    message: .text("latency-\(index)"),
+                    options: .init(requiresAck: false),
+                    resolvedMessageID: nil,
+                    enqueuedAt: Date()
+                )
+            ]
+
+            let persistStart = DispatchTime.now().uptimeNanoseconds
+            try await store.persistQueuedMessages(messages)
+            let persistDuration = DispatchTime.now().uptimeNanoseconds &- persistStart
+            persistSamples.append(persistDuration)
+
+            let loadStart = DispatchTime.now().uptimeNanoseconds
+            _ = try await store.loadQueuedMessages()
+            let loadDuration = DispatchTime.now().uptimeNanoseconds &- loadStart
+            loadSamples.append(loadDuration)
+        }
+
+        let persistP95 = p95Nanoseconds(persistSamples)
+        let loadP95 = p95Nanoseconds(loadSamples)
+        #expect(persistP95 < budgetNanoseconds)
+        #expect(loadP95 < budgetNanoseconds)
     }
 }

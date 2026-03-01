@@ -196,15 +196,29 @@ public enum TelemetryWebSocketEventType: String, Sendable {
     case connectStarted = "connect_started"
     case connectSuccess = "connect_success"
     case connectFailed = "connect_failed"
+    case authRefreshStarted = "auth_refresh_started"
+    case authRefreshSucceeded = "auth_refresh_succeeded"
+    case authRefreshFailed = "auth_refresh_failed"
     case reconnectFailed = "reconnect_failed"
     case disconnect
     case messageSent = "message_sent"
     case messageReceived = "message_received"
     case reconnectAttempt = "reconnect_attempt"
     case reconnectSuccess = "reconnect_success"
+    case reconnectSuppressedOffline = "reconnect_suppressed_offline"
+    case reconnectResumedOnline = "reconnect_resumed_online"
     case reconnectExhausted = "reconnect_exhausted"
     case messageQueued = "message_queued"
     case messageDropped = "message_dropped"
+    case persistedQueueSaved = "persisted_queue_saved"
+    case persistedQueueRestored = "persisted_queue_restored"
+    case persistedQueueLoadFailed = "persisted_queue_load_failed"
+    case persistedQueuePersistFailed = "persisted_queue_persist_failed"
+    case persistedReplaySucceeded = "persisted_replay_succeeded"
+    case persistedReplayFailed = "persisted_replay_failed"
+    case subscriptionRestoreStarted = "subscription_restore_started"
+    case subscriptionRestoreSucceeded = "subscription_restore_succeeded"
+    case subscriptionRestoreFailed = "subscription_restore_failed"
     case ackTimeout = "ack_timeout"
 }
 
@@ -218,6 +232,8 @@ public struct TelemetryWebSocketContext: Sendable {
     public let queueSize: Int?
     public let queuePolicy: String?
     public let messageID: String?
+    public let subscriptionRestoreTotalCount: Int?
+    public let subscriptionRestoreFailedCount: Int?
 
     public init(
         type: TelemetryWebSocketEventType,
@@ -228,7 +244,9 @@ public struct TelemetryWebSocketContext: Sendable {
         messageKind: String? = nil,
         queueSize: Int? = nil,
         queuePolicy: String? = nil,
-        messageID: String? = nil
+        messageID: String? = nil,
+        subscriptionRestoreTotalCount: Int? = nil,
+        subscriptionRestoreFailedCount: Int? = nil
     ) {
         self.type = type
         self.connectionID = connectionID
@@ -239,6 +257,8 @@ public struct TelemetryWebSocketContext: Sendable {
         self.queueSize = queueSize
         self.queuePolicy = queuePolicy
         self.messageID = messageID
+        self.subscriptionRestoreTotalCount = subscriptionRestoreTotalCount
+        self.subscriptionRestoreFailedCount = subscriptionRestoreFailedCount
     }
 }
 
