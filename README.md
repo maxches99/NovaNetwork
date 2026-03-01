@@ -9,6 +9,7 @@ When multiple callers ask for the same resource at the same time, only one under
 - [Setup & Usage Guide](docs/SETUP_GUIDE.md)
 - [Unit Test Policy](docs/UNIT_TEST_POLICY.md)
 - [Examples](Examples/README.md)
+- [v1.15 Traceability Pack](docs/TRACEABILITY_PACK_v1.15.md)
 
 ## Product Delivery Templates
 
@@ -62,6 +63,11 @@ targets: [
 - Runtime policy updates (global/host/endpoint scope) without recreating `NetworkClient`.
 - Coalescing dedupe TTL policy with scope overrides and priority `endpoint > host > global`.
 - Runtime tuning for coalescer fairness scheduler and circuit-breaker thresholds/probe policy.
+- DX presets for faster adoption:
+  - `NetworkClientPreset.restHeavy`
+  - `NetworkClientPreset.realtimeHeavy`
+  - `NetworkClientPreset.offlineFirst`
+- Safe preset override points via `NetworkClientPreset.RequestOverrides` (merge-only overrides).
 - Testable retry behavior via injectable clock and random generator.
 - Data and typed `Decodable` loading APIs.
 - Typed error mapping overloads (`errorMapper`).
@@ -99,6 +105,37 @@ async let second = client.load(request: request, authScope: "user:42")
 
 let (a, b) = try await (first, second)
 print(a == b) // true
+```
+
+## Preset Quick Start (v1.15)
+
+```swift
+import Foundation
+import NovaNetworkClient
+
+let preset = NetworkClientPreset.offlineFirst
+
+let client = NetworkClient(
+    transport: Transport(),
+    retryPolicy: preset.retryPolicy,
+    defaultCachePolicy: preset.defaultCachePolicy,
+    offlineWriteStore: DiskOfflineWriteStore(directoryURL: queueURL)
+)
+
+await client.applyRuntimePolicy(from: preset)
+
+let safeOptions = preset.requestOptions(
+    overrides: .init(
+        priority: .high,
+        rateLimitPolicy: RateLimitPolicy(maxRequests: 6, intervalSeconds: 1)
+    )
+)
+
+let payload = try await client.load(
+    request: request,
+    authScope: "user:42",
+    options: safeOptions
+)
 ```
 
 ## Examples

@@ -15,6 +15,10 @@ let package = Package(
         .executable(name: "NovaNetworkClientMiddlewareExample", targets: ["NovaNetworkClientMiddlewareExample"]),
         .executable(name: "NovaNetworkClientOfflineQueueExample", targets: ["NovaNetworkClientOfflineQueueExample"]),
         .executable(name: "NovaNetworkClientWebSocketExample", targets: ["NovaNetworkClientWebSocketExample"]),
+        .executable(name: "NovaNetworkClientAuthRefreshReferenceExample", targets: ["NovaNetworkClientAuthRefreshReferenceExample"]),
+        .executable(name: "NovaNetworkClientReconnectRecoveryReferenceExample", targets: ["NovaNetworkClientReconnectRecoveryReferenceExample"]),
+        .executable(name: "NovaNetworkClientOfflineReplayReferenceExample", targets: ["NovaNetworkClientOfflineReplayReferenceExample"]),
+        .executable(name: "NovaNetworkClientDiagnosticsReferenceExample", targets: ["NovaNetworkClientDiagnosticsReferenceExample"]),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
@@ -62,6 +66,26 @@ let package = Package(
             name: "NovaNetworkClientWebSocketExample",
             dependencies: ["NovaNetworkClient"],
             path: "Examples/WebSocket"
+        ),
+        .executableTarget(
+            name: "NovaNetworkClientAuthRefreshReferenceExample",
+            dependencies: ["NovaNetworkClient"],
+            path: "Examples/AuthRefreshReference"
+        ),
+        .executableTarget(
+            name: "NovaNetworkClientReconnectRecoveryReferenceExample",
+            dependencies: ["NovaNetworkClient"],
+            path: "Examples/ReconnectRecoveryReference"
+        ),
+        .executableTarget(
+            name: "NovaNetworkClientOfflineReplayReferenceExample",
+            dependencies: ["NovaNetworkClient"],
+            path: "Examples/OfflineReplayReference"
+        ),
+        .executableTarget(
+            name: "NovaNetworkClientDiagnosticsReferenceExample",
+            dependencies: ["NovaNetworkClient"],
+            path: "Examples/DiagnosticsReference"
         ),
     ]
 )

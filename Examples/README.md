@@ -59,3 +59,49 @@ Optional endpoint override:
 ```bash
 NOVA_WS_URL=wss://ws.ifelse.io swift run NovaNetworkClientWebSocketExample
 ```
+
+## Reference: Auth Refresh
+
+Shows a reference app flow where an expired bearer token gets a `401`, refreshes token state, and retries with `NetworkClientPreset.restHeavy`.
+
+Run:
+
+```bash
+swift run NovaNetworkClientAuthRefreshReferenceExample
+```
+
+## Reference: Reconnect Recovery
+
+Shows a reference app flow for WebSocket reconnect recovery with queue pressure diagnostics and telemetry stream output.
+
+Run:
+
+```bash
+swift run NovaNetworkClientReconnectRecoveryReferenceExample
+```
+
+Optional endpoint override:
+
+```bash
+NOVA_WS_URL=wss://ws.ifelse.io swift run NovaNetworkClientReconnectRecoveryReferenceExample
+```
+
+## Reference: Offline Replay
+
+Shows `NetworkClientPreset.offlineFirst` with durable writes and replay/metrics inspection.
+
+Run:
+
+```bash
+swift run NovaNetworkClientOfflineReplayReferenceExample
+```
+
+## Reference: Observability and Diagnostics
+
+Shows request event stream + telemetry hooks + runtime policy update events as a diagnostics baseline.
+
+Run:
+
+```bash
+swift run NovaNetworkClientDiagnosticsReferenceExample
+```
