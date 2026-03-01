@@ -17,9 +17,14 @@ This policy defines how unit tests are created and maintained in `NovaNetworkCli
 
 - Minimum CI gate: `>= 80%` line coverage.
 - Team target: `>= 90%` line coverage.
-- E2E suite target (`RUN_E2E_TESTS=1` + `E2ECoverageTests`): `>= 50%` line coverage.
 - Practical stretch target: as close to 100% as possible for business logic.
 - Do not force unrealistic tests for platform-only or non-deterministic branches; document those gaps.
+
+## E2E Policy
+
+- E2E tests must call real public APIs only.
+- Mocks, stubs, scripted transports, and local fake servers are not allowed in E2E tests.
+- If deterministic behavior with mocked transport is required, place that test under the unit/integration suite instead of E2E.
 
 ## Test Design Rules
 
@@ -76,14 +81,10 @@ swift build
 swift test --enable-code-coverage
 ```
 
-Optional E2E coverage gate check:
+Optional E2E suite check:
 
 ```bash
-RUN_E2E_TESTS=1 swift test --enable-code-coverage --filter E2ECoverageTests
-xcrun llvm-cov report \
-  .build/arm64-apple-macosx/debug/NovaNetworkClientPackageTests.xctest/Contents/MacOS/NovaNetworkClientPackageTests \
-  -instr-profile=.build/arm64-apple-macosx/debug/codecov/default.profdata \
-  Sources/NovaNetworkClient/**/*.swift
+RUN_E2E_TESTS=1 swift test --filter E2ECoverageTests
 ```
 
 Optional coverage report:

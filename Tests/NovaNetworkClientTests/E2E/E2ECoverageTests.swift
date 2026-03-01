@@ -42,23 +42,6 @@ final class E2EEventRecorder: @unchecked Sendable {
     }
 }
 
-actor E2EAlwaysSuccessTransport: NetworkTransport {
-    private(set) var calls: Int = 0
-
-    func execute(_ request: APIRequest) async throws -> NetworkResponse {
-        calls += 1
-        return NetworkResponse(statusCode: 200, headers: [:], body: Data("{\"ok\":true}".utf8))
-    }
-
-    func callCount() -> Int { calls }
-}
-
-actor E2EAlwaysHTTP422Transport: NetworkTransport {
-    func execute(_ request: APIRequest) async throws -> NetworkResponse {
-        throw NetworkError.httpStatus(code: 422, body: Data())
-    }
-}
-
 func e2eWebSocketCandidates() -> [URL] {
     var candidates: [URL] = []
     if let explicit = ProcessInfo.processInfo.environment[e2eWebSocketURLFlag],

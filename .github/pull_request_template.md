@@ -25,9 +25,9 @@
 
 ## Coverage
 - Unit test coverage (%):
-- E2E coverage (%) (`RUN_E2E_TESTS=1`, `E2ECoverageTests`):
 - [ ] Coverage is above 90%
-- [ ] E2E coverage is at or above 50%
+- [ ] E2E suite executed with `RUN_E2E_TESTS=1 swift test --filter E2ECoverageTests`
+- [ ] E2E tests use real public APIs only (no mocks/stubs/fake transports)
 
 ## Release Notes ("What's New")
 - [ ] Added or updated

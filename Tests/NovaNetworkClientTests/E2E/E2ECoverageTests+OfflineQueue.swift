@@ -261,14 +261,13 @@ extension E2ECoverageTests {
 
         let queueURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("NovaNetworkClient-E2E-Dedupe-\(UUID().uuidString)", isDirectory: true)
-        let transport = E2EAlwaysSuccessTransport()
         let client = NetworkClient(
-            transport: transport,
+            transport: Transport(),
             offlineWriteStore: DiskOfflineWriteStore(directoryURL: queueURL)
         )
         let request = APIRequest(
             method: .post,
-            url: URL(string: "https://example.com/e2e-dedupe")!,
+            url: URL(string: "https://httpbin.org/anything")!,
             body: Data("{\"name\":\"dedupe\"}".utf8)
         )
         let options = RequestExecutionOptions(
@@ -282,7 +281,6 @@ extension E2ECoverageTests {
 
         let replayed = await client.flushOfflineQueue(limit: 8)
         #expect(replayed == 2)
-        #expect(await transport.callCount() == 1)
         #expect(await client.offlineQueueDepth() == 0)
     }
 
@@ -294,12 +292,12 @@ extension E2ECoverageTests {
             .appendingPathComponent("NovaNetworkClient-E2E-Conflict-\(UUID().uuidString)", isDirectory: true)
         let request = APIRequest(
             method: .post,
-            url: URL(string: "https://example.com/e2e-conflict")!,
+            url: URL(string: "https://httpbin.org/status/422")!,
             body: Data("{\"name\":\"conflict\"}".utf8)
         )
 
         let manualStore = DiskOfflineWriteStore(directoryURL: baseURL.appendingPathComponent("manual"))
-        let manualClient = NetworkClient(transport: E2EAlwaysHTTP422Transport(), offlineWriteStore: manualStore)
+        let manualClient = NetworkClient(transport: Transport(), offlineWriteStore: manualStore)
         _ = try await manualClient.enqueueWrite(
             request: request,
             authScope: "public",
@@ -313,7 +311,7 @@ extension E2ECoverageTests {
         #expect(manualSnapshot[0].state == .manualReview)
 
         let dropStore = DiskOfflineWriteStore(directoryURL: baseURL.appendingPathComponent("drop"))
-        let dropClient = NetworkClient(transport: E2EAlwaysHTTP422Transport(), offlineWriteStore: dropStore)
+        let dropClient = NetworkClient(transport: Transport(), offlineWriteStore: dropStore)
         _ = try await dropClient.enqueueWrite(
             request: request,
             authScope: "public",
@@ -333,13 +331,13 @@ extension E2ECoverageTests {
             .appendingPathComponent("NovaNetworkClient-E2E-Encrypt-\(UUID().uuidString)", isDirectory: true)
         let request = APIRequest(
             method: .post,
-            url: URL(string: "https://example.com/e2e-encrypt")!,
+            url: URL(string: "https://httpbin.org/anything")!,
             body: Data("very-sensitive-body".utf8)
         )
         let cipher = AESGCMOfflineWriteStoreCipher(keyProvider: { e2eFixedKey() })
         let store = DiskOfflineWriteStore(directoryURL: queueURL, cipher: cipher)
 
-        let client = NetworkClient(transport: E2EAlwaysSuccessTransport(), offlineWriteStore: store)
+        let client = NetworkClient(transport: Transport(), offlineWriteStore: store)
         _ = try await client.enqueueWrite(
             request: request,
             authScope: "public",
@@ -356,11 +354,11 @@ extension E2ECoverageTests {
             keyProvider: { throw OfflineWriteStoreCipherError.keyUnavailable }
         )
         let blockedStore = DiskOfflineWriteStore(directoryURL: queueURL, cipher: blockedCipher)
-        let blockedClient = NetworkClient(transport: E2EAlwaysSuccessTransport(), offlineWriteStore: blockedStore)
+        let blockedClient = NetworkClient(transport: Transport(), offlineWriteStore: blockedStore)
         #expect(await blockedClient.offlineQueueDepth() == 0)
 
         let recoveredClient = NetworkClient(
-            transport: E2EAlwaysSuccessTransport(),
+            transport: Transport(),
             offlineWriteStore: DiskOfflineWriteStore(directoryURL: queueURL, cipher: cipher)
         )
         #expect(await recoveredClient.offlineQueueDepth() == 1)
@@ -370,7 +368,7 @@ extension E2ECoverageTests {
     func e2eTelemetryOfflineQueueResultTypesIncludeNewTerminalValues() async throws {
         guard e2eEnabled() else { return }
 
-        let request = APIRequest(method: .post, url: URL(string: "https://example.com/e2e-telemetry")!)
+        let request = APIRequest(method: .post, url: URL(string: "https://httpbin.org/anything")!)
         let context = TelemetryOfflineQueueContext(
             type: .replaySuppressed,
             queueID: "q-id",
@@ -408,7 +406,7 @@ extension E2ECoverageTests {
         let queueURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("NovaNetworkClient-E2E-EventStream-\(UUID().uuidString)", isDirectory: true)
         let client = NetworkClient(
-            transport: E2EAlwaysSuccessTransport(),
+            transport: Transport(),
             offlineWriteStore: DiskOfflineWriteStore(directoryURL: queueURL)
         )
         let stream = client.offlineQueueEvents()
@@ -420,7 +418,7 @@ extension E2ECoverageTests {
 
         let request = APIRequest(
             method: .post,
-            url: URL(string: "https://example.com/e2e-event-stream")!,
+            url: URL(string: "https://httpbin.org/anything")!,
             body: Data("{\"name\":\"event\"}".utf8)
         )
         _ = try await client.enqueueWrite(

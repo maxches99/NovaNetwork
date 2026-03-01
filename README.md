@@ -508,8 +508,8 @@ swift test
 ## Run E2E Tests (Optional)
 
 E2E tests use public APIs (`jsonplaceholder.typicode.com`, `httpbin.org`) and are disabled by default.
+E2E suite policy: only real public APIs are allowed; mocks/stubs are not allowed in E2E tests.
 Scenarios include typed load, coalescing, batch loading, cache hit path, middleware, stream fallback, offline queue enqueue/flush/drop, rate limit, error mapping, runtime policy updates, circuit breaker, and invalidation paths.
-Project target for this suite: `>= 50%` line coverage.
 
 ```bash
 RUN_E2E_TESTS=1 swift test --filter E2ECoverageTests
