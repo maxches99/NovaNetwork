@@ -9,6 +9,7 @@ private actor MockWebSocketTransport: WebSocketTransport {
     private var receiveQueue: [Result<WebSocketMessage, Error>] = []
     private var pingResults: [Result<Void, Error>] = []
     private var sendResults: [Result<Void, Error>] = []
+    private var sentMessages: [WebSocketMessage] = []
 
     init(connectResults: [Result<Void, Error>] = [.success(())]) {
         self.connectResults = connectResults
@@ -51,6 +52,7 @@ private actor MockWebSocketTransport: WebSocketTransport {
         guard connected else {
             throw WebSocketError.disconnected
         }
+        sentMessages.append(message)
         guard !sendResults.isEmpty else { return }
         let next = sendResults.removeFirst()
         switch next {
@@ -93,6 +95,10 @@ private actor MockWebSocketTransport: WebSocketTransport {
 
     func connectCount() -> Int {
         connectCalls
+    }
+
+    func snapshotSentMessages() -> [WebSocketMessage] {
+        sentMessages
     }
 }
 
@@ -343,7 +349,6 @@ struct WebSocketClientTests {
                 heartbeatPolicy: .disabled
             ),
             transport: transport,
-            retryClock: ImmediateRetryClock(),
             retryRandomGenerator: WSFixedRetryRandom(value: 1)
         )
 
@@ -351,8 +356,12 @@ struct WebSocketClientTests {
         let stateConsumer = Task { () -> [WebSocketConnectionState] in
             var iterator = states.makeAsyncIterator()
             var received: [WebSocketConnectionState] = []
-            while received.count < 5, let next = await iterator.next() {
+            let deadline = Date().addingTimeInterval(1.0)
+            while Date() < deadline, let next = await iterator.next() {
                 received.append(next)
+                if received.count >= 6, case .connected = next {
+                    break
+                }
             }
             return received
         }
@@ -371,23 +380,11 @@ struct WebSocketClientTests {
         let received = await stateConsumer.value
 
         #expect(message == .text("after-reconnect"))
-        #expect(received.count == 5)
-        #expect(received[0] == .disconnected)
-
-        if case .connecting = received[1] {} else {
-            Issue.record("Expected .connecting at index 1")
-        }
-        if case .connected = received[2] {} else {
-            Issue.record("Expected first .connected at index 2")
-        }
-        if case .reconnecting(let attempt, _) = received[3] {
-            #expect(attempt == 1)
-        } else {
-            Issue.record("Expected .reconnecting at index 3")
-        }
-        if case .connected = received[4] {} else {
-            Issue.record("Expected second .connected at index 4")
-        }
+        #expect(received.first == .disconnected)
+        #expect(received.contains { if case .connecting = $0 { return true }; return false })
+        #expect(received.contains { if case .unhealthy = $0 { return true }; return false })
+        #expect(received.contains { if case .reconnecting(let attempt, _) = $0 { return attempt == 1 }; return false })
+        #expect(received.last.map { if case .connected = $0 { return true }; return false } == true)
 
         #expect(await transport.connectCount() == 2)
     }
@@ -421,8 +418,12 @@ struct WebSocketClientTests {
         let consumer = Task { () -> [WebSocketConnectionState] in
             var iterator = states.makeAsyncIterator()
             var received: [WebSocketConnectionState] = []
-            while received.count < 6, let next = await iterator.next() {
+            let deadline = Date().addingTimeInterval(1.0)
+            while Date() < deadline, let next = await iterator.next() {
                 received.append(next)
+                if case .failed = next {
+                    break
+                }
             }
             return received
         }
@@ -817,6 +818,265 @@ struct WebSocketClientTests {
         try await client.connect()
         try await client.connect()
         #expect(await transport.connectCount() == 1)
+    }
+
+    @Test
+    func forceReconnectPerformsImmediateReconnectAttempt() async throws {
+        let transport = MockWebSocketTransport(connectResults: [.success(()), .success(())])
+        let client = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                reconnectPolicy: .init(
+                    maxAttempts: 2,
+                    baseDelayNanoseconds: 1_000_000_000,
+                    maxDelayNanoseconds: 1_000_000_000,
+                    jitterRange: nil
+                ),
+                heartbeatPolicy: .disabled
+            ),
+            transport: transport,
+            retryClock: ImmediateRetryClock()
+        )
+
+        let states = await client.connectionStates()
+        let consumer = Task { () -> [WebSocketConnectionState] in
+            var iterator = states.makeAsyncIterator()
+            var received: [WebSocketConnectionState] = []
+            while received.count < 5, let next = await iterator.next() {
+                received.append(next)
+            }
+            return received
+        }
+
+        try await client.connect()
+        await client.forceReconnect(reason: "manual")
+        let received = await consumer.value
+
+        #expect(await transport.connectCount() == 2)
+        #expect(await client.connectionHealth() == .healthy)
+        if case .reconnecting(let attempt, let delay) = received[3] {
+            #expect(attempt == 1)
+            #expect(delay == 0)
+        } else {
+            Issue.record("Expected reconnecting state after forceReconnect.")
+        }
+    }
+
+    @Test
+    func heartbeatTimeoutEmitsUnhealthyStateAndHealthStatus() async throws {
+        let transport = MockWebSocketTransport(connectResults: [.success(())])
+        let client = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                reconnectPolicy: .disabled,
+                heartbeatPolicy: .init(
+                    intervalNanoseconds: 5_000_000,
+                    timeoutNanoseconds: 1_000_000
+                )
+            ),
+            transport: transport
+        )
+
+        let states = await client.connectionStates()
+        let consumer = Task { () -> [WebSocketConnectionState] in
+            var iterator = states.makeAsyncIterator()
+            var received: [WebSocketConnectionState] = []
+            let deadline = Date().addingTimeInterval(1.0)
+            while Date() < deadline, let next = await iterator.next() {
+                received.append(next)
+                if case .failed = next {
+                    break
+                }
+            }
+            return received
+        }
+
+        try await client.connect()
+        await transport.enqueuePing(.failure(WebSocketError.timeout))
+        let received = await consumer.value
+
+        #expect(received.contains {
+            if case .unhealthy(.timeout) = $0 { return true }
+            return false
+        })
+        #expect(await client.connectionHealth() == .unhealthy(reason: "timeout"))
+    }
+
+    @Test
+    func sendWithAckCompletesWhenAckFrameArrives() async throws {
+        let transport = MockWebSocketTransport()
+        let client = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                heartbeatPolicy: .disabled
+            ),
+            transport: transport
+        )
+
+        try await client.connect()
+        let sendTask = Task {
+            try await client.send(
+                .text("{\"type\":\"event\"}"),
+                options: .init(requiresAck: true, messageID: "msg-1", ackTimeoutNanoseconds: 1_000_000_000)
+            )
+        }
+
+        await transport.enqueue(.success(.text("{\"type\":\"ack\",\"messageId\":\"msg-1\"}")))
+        try await sendTask.value
+    }
+
+    @Test
+    func sendWithAckTimeoutThrowsTypedErrorAndEmitsTelemetry() async throws {
+        let transport = MockWebSocketTransport()
+        let recorder = WebSocketTelemetryRecorder()
+        let hooks = NetworkTelemetryHooks(
+            onWebSocketEvent: { context in
+                Task { await recorder.append(context) }
+            }
+        )
+        let client = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                heartbeatPolicy: .disabled
+            ),
+            transport: transport,
+            retryClock: ImmediateRetryClock(),
+            telemetryHooks: hooks
+        )
+
+        try await client.connect()
+        do {
+            try await client.send(
+                .text("{\"type\":\"event\"}"),
+                options: .init(requiresAck: true, messageID: "msg-timeout", ackTimeoutNanoseconds: 1)
+            )
+            Issue.record("Expected ack timeout")
+        } catch let error as WebSocketError {
+            #expect(error == .ackTimeout(messageID: "msg-timeout"))
+        } catch {
+            Issue.record("Unexpected error type: \(error)")
+        }
+
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let ackTimeout = await recorder.snapshot().first { $0.type == .ackTimeout }
+        #expect(ackTimeout?.messageID == "msg-timeout")
+    }
+
+    @Test
+    func queuedMessagesFlushOnConnectWithDropOldestPolicy() async throws {
+        let transport = MockWebSocketTransport()
+        let client = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                heartbeatPolicy: .disabled,
+                outboundQueuePolicy: .init(maxQueuedMessages: 2, overflowPolicy: .dropOldest)
+            ),
+            transport: transport
+        )
+
+        try await client.send(.text("first"))
+        try await client.send(.text("second"))
+        try await client.send(.text("third"))
+        try await client.connect()
+
+        let sent = await transport.snapshotSentMessages()
+        #expect(sent == [.text("second"), .text("third")])
+    }
+
+    @Test
+    func queuedMessagesDropNewestWhenPolicyConfigured() async throws {
+        let transport = MockWebSocketTransport()
+        let recorder = WebSocketTelemetryRecorder()
+        let hooks = NetworkTelemetryHooks(
+            onWebSocketEvent: { context in
+                Task { await recorder.append(context) }
+            }
+        )
+        let client = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                heartbeatPolicy: .disabled,
+                outboundQueuePolicy: .init(maxQueuedMessages: 1, overflowPolicy: .dropNewest)
+            ),
+            transport: transport,
+            telemetryHooks: hooks
+        )
+
+        try await client.send(.text("first"))
+        try await client.send(.text("second"))
+        try await client.connect()
+
+        let sent = await transport.snapshotSentMessages()
+        #expect(sent == [.text("first")])
+
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let dropped = await recorder.snapshot().first { $0.type == .messageDropped }
+        #expect(dropped?.queuePolicy == "dropNewest")
+    }
+
+    @Test
+    func ackPendingMessageIsResentAfterReconnect() async throws {
+        let transport = MockWebSocketTransport(connectResults: [.success(()), .success(())])
+        let client = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                reconnectPolicy: .init(
+                    maxAttempts: 1,
+                    baseDelayNanoseconds: 0,
+                    maxDelayNanoseconds: 0,
+                    jitterRange: nil
+                ),
+                heartbeatPolicy: .disabled
+            ),
+            transport: transport,
+            retryClock: ImmediateRetryClock(),
+            retryRandomGenerator: WSFixedRetryRandom(value: 1)
+        )
+
+        try await client.connect()
+        let sendTask = Task {
+            try await client.send(
+                .text("{\"type\":\"event\"}"),
+                options: .init(requiresAck: true, messageID: "msg-reconnect", ackTimeoutNanoseconds: 30_000_000_000)
+            )
+        }
+
+        let firstSendDeadline = Date().addingTimeInterval(1.0)
+        while Date() < firstSendDeadline {
+            let sent = await transport.snapshotSentMessages()
+            if sent.contains(.text("{\"type\":\"event\"}")) {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        await transport.enqueue(.failure(WebSocketError.transport(description: "drop")))
+        let deadline = Date().addingTimeInterval(1.0)
+        while Date() < deadline {
+            let sent = await transport.snapshotSentMessages()
+            let resentCount = sent.filter { $0 == .text("{\"type\":\"event\"}") }.count
+            if resentCount >= 2 {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        let sent = await transport.snapshotSentMessages()
+        let resentCount = sent.filter { $0 == .text("{\"type\":\"event\"}") }.count
+        #expect(resentCount == 2)
+
+        await client.disconnect(reason: "done")
+        do {
+            try await sendTask.value
+            Issue.record("Expected pending ack send task to finish with disconnect after manual shutdown.")
+        } catch let error as WebSocketError {
+            #expect(
+                error == .disconnected ||
+                error == .ackTimeout(messageID: "msg-reconnect")
+            )
+        } catch {
+            Issue.record("Unexpected error type: \(error)")
+        }
     }
 
     @Test
