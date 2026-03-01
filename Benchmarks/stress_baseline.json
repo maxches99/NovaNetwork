@@ -2,5 +2,9 @@
   "retryStormExpectedTransportCalls": 240,
   "retryStormExpectedSuccesses": 120,
   "breakerFlappingMinimumTransitions": 60,
-  "runtimeUpdateMinimumSuccesses": 40
+  "runtimeUpdateMinimumSuccesses": 40,
+  "mixedPriorityMinimumSuccesses": 110,
+  "mixedPriorityMaximumP99LatencyMilliseconds": 3000.0,
+  "cancellationBurstMinimumCancelled": 50,
+  "cancellationBurstMinimumSuccesses": 20
 }

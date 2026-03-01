@@ -307,12 +307,21 @@ public struct TelemetryRetrySkippedContext: Sendable {
 }
 
 public struct TelemetryPolicyUpdateContext: Sendable {
+    public let source: String
     public let scope: String
     public let changedFields: [String]
+    public let effectiveValues: [String]
 
-    public init(scope: String, changedFields: [String]) {
+    public init(
+        source: String = RuntimePolicySource.runtimeUpdate.rawValue,
+        scope: String,
+        changedFields: [String],
+        effectiveValues: [String] = []
+    ) {
+        self.source = source
         self.scope = scope
         self.changedFields = changedFields
+        self.effectiveValues = effectiveValues
     }
 }
 

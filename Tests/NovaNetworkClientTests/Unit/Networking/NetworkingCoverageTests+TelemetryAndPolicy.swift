@@ -539,4 +539,113 @@ extension NetworkingCoverageTests {
             Issue.record("Expected enqueued offline queue event")
             return
         }
-    }}
+    }
+
+    @Test
+    func runtimeCoalescingTTLResolvesByEndpointHostGlobalPriority() async throws {
+        let transport = StubNetworkTransport(delayNanos: 120_000_000, response: .success(Data("ok".utf8)))
+        let client = NetworkClient(transport: transport)
+
+        await client.updateRuntimePolicy(
+            .init(coalescingPolicy: .init(dedupeTTLSeconds: 0)),
+            scope: .global
+        )
+        let hostRequest = APIRequest(method: .get, url: URL(string: "https://example.com/coalescing-host")!)
+        async let disabledA: Data = client.load(request: hostRequest, authScope: nil)
+        async let disabledB: Data = client.load(request: hostRequest, authScope: nil)
+        _ = try await (disabledA, disabledB)
+        let disabledCalls = await transport.calls()
+        #expect(disabledCalls == 2)
+
+        await client.updateRuntimePolicy(
+            .init(coalescingPolicy: .init(dedupeTTLSeconds: 60)),
+            scope: .host("example.com")
+        )
+        async let hostA: Data = client.load(request: hostRequest, authScope: nil)
+        async let hostB: Data = client.load(request: hostRequest, authScope: nil)
+        _ = try await (hostA, hostB)
+        let hostCalls = await transport.calls()
+        #expect(hostCalls == 3)
+
+        await client.updateRuntimePolicy(
+            .init(coalescingPolicy: .init(dedupeTTLSeconds: 0)),
+            scope: .endpoint(host: "example.com", pathPrefix: "/coalescing-host")
+        )
+        async let endpointA: Data = client.load(request: hostRequest, authScope: nil)
+        async let endpointB: Data = client.load(request: hostRequest, authScope: nil)
+        _ = try await (endpointA, endpointB)
+        let endpointCalls = await transport.calls()
+        #expect(endpointCalls == 5)
+    }
+
+    @Test
+    func telemetryPolicyUpdateIncludesSourceScopeAndDeterministicEffectiveValues() async {
+        let recorder = TelemetryRecorder()
+        let client = NetworkClient(
+            transport: StubNetworkTransport(response: .success(Data("ok".utf8))),
+            telemetryHooks: .init(
+                onPolicyUpdated: { context in Task { await recorder.appendPolicyUpdated(context) } }
+            )
+        )
+
+        await client.updateRuntimePolicy(
+            .init(
+                deadlineBudgetSeconds: 1.5,
+                circuitBreakerPolicy: .init(
+                    scope: .host,
+                    failureThreshold: 4,
+                    cooldownSeconds: 2,
+                    probePolicy: .parallelProbes(maxConcurrent: 2)
+                ),
+                coalescingPolicy: .init(dedupeTTLSeconds: 30)
+            ),
+            scope: .host("example.com")
+        )
+        await client.updateCoalescerSchedulerPolicy(.init(highWeight: 3, mediumWeight: 2, lowWeight: 1))
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        let events = await recorder.policyUpdatedSnapshot()
+        #expect(events.count == 2)
+        guard events.count == 2 else { return }
+
+        let runtimeEvent = events[0]
+        #expect(runtimeEvent.source == RuntimePolicySource.runtimeUpdate.rawValue)
+        #expect(runtimeEvent.scope == RuntimePolicySource.host.rawValue)
+        #expect(runtimeEvent.changedFields == ["circuit_breaker_policy", "coalescing_policy", "deadline_budget_seconds"])
+        #expect(
+            runtimeEvent.effectiveValues == [
+                "circuit_breaker_cooldown_seconds=2.0",
+                "circuit_breaker_failure_threshold=4",
+                "circuit_breaker_probe_policy=parallel_probes_2",
+                "coalescing_ttl_seconds=30.0",
+                "deadline_budget_seconds=1.5"
+            ]
+        )
+
+        let fairnessEvent = events[1]
+        #expect(fairnessEvent.source == RuntimePolicySource.runtimeUpdate.rawValue)
+        #expect(fairnessEvent.scope == "coalescer_scheduler")
+        #expect(fairnessEvent.changedFields == ["high_weight", "medium_weight", "low_weight"])
+        #expect(fairnessEvent.effectiveValues == ["high_weight=3", "medium_weight=2", "low_weight=1"])
+    }
+
+    @Test
+    func circuitBreakerParallelProbePolicyAllowsConfiguredHalfOpenProbes() async {
+        let store = CircuitBreakerStore()
+        let policy = CircuitBreakerPolicy(
+            scope: .host,
+            failureThreshold: 1,
+            cooldownSeconds: 0,
+            probePolicy: .parallelProbes(maxConcurrent: 2)
+        )
+        _ = await store.recordFailure(identifier: "host", policy: policy)
+
+        let first = await store.canExecute(identifier: "host", policy: policy)
+        let second = await store.canExecute(identifier: "host", policy: policy)
+        let third = await store.canExecute(identifier: "host", policy: policy)
+
+        #expect(first.canExecute)
+        #expect(second.canExecute)
+        #expect(!third.canExecute)
+    }
+}

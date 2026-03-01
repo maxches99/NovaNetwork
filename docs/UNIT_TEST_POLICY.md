@@ -15,7 +15,7 @@ This policy defines how unit tests are created and maintained in `NovaNetworkCli
 
 ## Coverage Targets
 
-- Minimum CI gate: `>= 80%` line coverage.
+- Minimum CI gate: `>= 90%` line coverage.
 - Team target: `>= 90%` line coverage.
 - Practical stretch target: as close to 100% as possible for business logic.
 - Do not force unrealistic tests for platform-only or non-deterministic branches; document those gaps.
