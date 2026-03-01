@@ -30,6 +30,11 @@ Use ``NetworkClient`` for a batteries-included integration with `URLSession`.
 - ``NetworkTransport``
 - ``Transport``
 - ``NetworkError``
+- ``WebSocketClient``
+- ``WebSocketConfiguration``
+- ``WebSocketConnectionState``
+- ``WebSocketMessage``
+- ``WebSocketError``
 
 ### Resilience
 

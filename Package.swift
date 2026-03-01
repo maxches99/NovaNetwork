@@ -14,6 +14,7 @@ let package = Package(
         .executable(name: "NovaNetworkClientBatchTodosExample", targets: ["NovaNetworkClientBatchTodosExample"]),
         .executable(name: "NovaNetworkClientMiddlewareExample", targets: ["NovaNetworkClientMiddlewareExample"]),
         .executable(name: "NovaNetworkClientOfflineQueueExample", targets: ["NovaNetworkClientOfflineQueueExample"]),
+        .executable(name: "NovaNetworkClientWebSocketExample", targets: ["NovaNetworkClientWebSocketExample"]),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
@@ -56,6 +57,11 @@ let package = Package(
             name: "NovaNetworkClientOfflineQueueExample",
             dependencies: ["NovaNetworkClient"],
             path: "Examples/OfflineQueue"
+        ),
+        .executableTarget(
+            name: "NovaNetworkClientWebSocketExample",
+            dependencies: ["NovaNetworkClient"],
+            path: "Examples/WebSocket"
         ),
     ]
 )
