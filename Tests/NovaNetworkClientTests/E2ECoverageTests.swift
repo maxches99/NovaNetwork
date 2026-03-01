@@ -41,6 +41,27 @@ private final class E2EEventRecorder: @unchecked Sendable {
     }
 }
 
+private actor E2EAlwaysSuccessTransport: NetworkTransport {
+    private(set) var calls: Int = 0
+
+    func execute(_ request: APIRequest) async throws -> NetworkResponse {
+        calls += 1
+        return NetworkResponse(statusCode: 200, headers: [:], body: Data("{\"ok\":true}".utf8))
+    }
+
+    func callCount() -> Int { calls }
+}
+
+private actor E2EAlwaysHTTP422Transport: NetworkTransport {
+    func execute(_ request: APIRequest) async throws -> NetworkResponse {
+        throw NetworkError.httpStatus(code: 422, body: Data())
+    }
+}
+
+private func e2eFixedKey() -> Data {
+    Data(repeating: 11, count: 32)
+}
+
 private func headerValue(_ headers: [String: String], key: String) -> String? {
     headers.first { lhs, _ in lhs.lowercased() == key.lowercased() }?.value
 }
@@ -421,5 +442,186 @@ struct E2ECoverageTests {
         await client.invalidate(fingerprintKey: "non-existing-key")
         await client.invalidateAll(where: { _ in false })
         await client.invalidateAll()
+    }
+
+    @Test
+    func e2eOfflineReplayDedupeSuppressionSkipsSecondTransportExecution() async throws {
+        guard e2eEnabled() else { return }
+
+        let queueURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NovaNetworkClient-E2E-Dedupe-\(UUID().uuidString)", isDirectory: true)
+        let transport = E2EAlwaysSuccessTransport()
+        let client = NetworkClient(
+            transport: transport,
+            offlineWriteStore: DiskOfflineWriteStore(directoryURL: queueURL)
+        )
+        let request = APIRequest(
+            method: .post,
+            url: URL(string: "https://example.com/e2e-dedupe")!,
+            body: Data("{\"name\":\"dedupe\"}".utf8)
+        )
+        let options = RequestExecutionOptions(
+            idempotencyPolicy: .init(keyStrategy: .fingerprintDigest),
+            offlineQueuePolicy: .init(mode: .alwaysEnqueue, replayDedupeWindowSeconds: 3600)
+        )
+
+        _ = try await client.enqueueWrite(request: request, authScope: "public", options: options)
+        _ = try await client.enqueueWrite(request: request, authScope: "public", options: options)
+        #expect(await client.offlineQueueDepth() == 2)
+
+        let replayed = await client.flushOfflineQueue(limit: 8)
+        #expect(replayed == 2)
+        #expect(await transport.callCount() == 1)
+        #expect(await client.offlineQueueDepth() == 0)
+    }
+
+    @Test
+    func e2eOfflineReplayConflictPoliciesManualReviewAndDrop() async throws {
+        guard e2eEnabled() else { return }
+
+        let baseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NovaNetworkClient-E2E-Conflict-\(UUID().uuidString)", isDirectory: true)
+        let request = APIRequest(
+            method: .post,
+            url: URL(string: "https://example.com/e2e-conflict")!,
+            body: Data("{\"name\":\"conflict\"}".utf8)
+        )
+
+        let manualStore = DiskOfflineWriteStore(directoryURL: baseURL.appendingPathComponent("manual"))
+        let manualClient = NetworkClient(transport: E2EAlwaysHTTP422Transport(), offlineWriteStore: manualStore)
+        _ = try await manualClient.enqueueWrite(
+            request: request,
+            authScope: "public",
+            options: .init(
+                offlineQueuePolicy: .init(mode: .alwaysEnqueue, replayConflictPolicy: .manualReview)
+            )
+        )
+        _ = await manualClient.flushOfflineQueue(limit: 4)
+        let manualSnapshot = await manualClient.offlineQueueSnapshot()
+        #expect(manualSnapshot.count == 1)
+        #expect(manualSnapshot[0].state == .manualReview)
+
+        let dropStore = DiskOfflineWriteStore(directoryURL: baseURL.appendingPathComponent("drop"))
+        let dropClient = NetworkClient(transport: E2EAlwaysHTTP422Transport(), offlineWriteStore: dropStore)
+        _ = try await dropClient.enqueueWrite(
+            request: request,
+            authScope: "public",
+            options: .init(
+                offlineQueuePolicy: .init(mode: .alwaysEnqueue, replayConflictPolicy: .drop)
+            )
+        )
+        _ = await dropClient.flushOfflineQueue(limit: 4)
+        #expect(await dropClient.offlineQueueDepth() == 0)
+    }
+
+    @Test
+    func e2eEncryptedOfflineStoreRoundTripAndKeyUnavailableRecovery() async throws {
+        guard e2eEnabled() else { return }
+
+        let queueURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NovaNetworkClient-E2E-Encrypt-\(UUID().uuidString)", isDirectory: true)
+        let request = APIRequest(
+            method: .post,
+            url: URL(string: "https://example.com/e2e-encrypt")!,
+            body: Data("very-sensitive-body".utf8)
+        )
+        let cipher = AESGCMOfflineWriteStoreCipher(keyProvider: { e2eFixedKey() })
+        let store = DiskOfflineWriteStore(directoryURL: queueURL, cipher: cipher)
+
+        let client = NetworkClient(transport: E2EAlwaysSuccessTransport(), offlineWriteStore: store)
+        _ = try await client.enqueueWrite(
+            request: request,
+            authScope: "public",
+            options: .init(offlineQueuePolicy: .init(mode: .alwaysEnqueue))
+        )
+        #expect(await client.offlineQueueDepth() == 1)
+
+        let jsonFiles = try FileManager.default.contentsOfDirectory(at: queueURL, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "json" && $0.lastPathComponent != "replay_success_index.json" }
+        let payloadText = try String(data: Data(contentsOf: try #require(jsonFiles.first)), encoding: .utf8)
+        #expect((payloadText ?? "").contains("very-sensitive-body") == false)
+
+        let blockedCipher = AESGCMOfflineWriteStoreCipher(
+            keyProvider: { throw OfflineWriteStoreCipherError.keyUnavailable }
+        )
+        let blockedStore = DiskOfflineWriteStore(directoryURL: queueURL, cipher: blockedCipher)
+        let blockedClient = NetworkClient(transport: E2EAlwaysSuccessTransport(), offlineWriteStore: blockedStore)
+        #expect(await blockedClient.offlineQueueDepth() == 0)
+
+        let recoveredClient = NetworkClient(
+            transport: E2EAlwaysSuccessTransport(),
+            offlineWriteStore: DiskOfflineWriteStore(directoryURL: queueURL, cipher: cipher)
+        )
+        #expect(await recoveredClient.offlineQueueDepth() == 1)
+    }
+
+    @Test
+    func e2eTelemetryOfflineQueueResultTypesIncludeNewTerminalValues() async throws {
+        guard e2eEnabled() else { return }
+
+        let request = APIRequest(method: .post, url: URL(string: "https://example.com/e2e-telemetry")!)
+        let context = TelemetryOfflineQueueContext(
+            type: .replaySuppressed,
+            queueID: "q-id",
+            requestKey: "k-id",
+            attempt: 1,
+            ageMilliseconds: 1,
+            reason: "dedupe_success_window",
+            willRetry: false,
+            resultType: "dedupe_suppressed"
+        )
+        #expect(context.type == .replaySuppressed)
+        #expect(context.resultType == "dedupe_suppressed")
+
+        let hooks = NetworkTelemetryHooks(
+            onRequestStart: { _ in _ = request.url.absoluteString },
+            onRequestEnd: { _ in },
+            onCoalescerEvent: { _ in },
+            onRetryScheduled: { _ in },
+            onRetryExhausted: { _ in },
+            onRetrySkipped: { _ in },
+            onRequestCancelled: { _ in },
+            onQueueMetrics: { _ in },
+            onOfflineQueueEvent: { _ in },
+            onCircuitBreakerTransition: { _ in },
+            onPolicyUpdated: { _ in }
+        )
+        #expect(hooks.onOfflineQueueEvent != nil)
+        #expect(hooks.onPolicyUpdated != nil)
+    }
+
+    @Test
+    func e2eOfflineQueueEventsStreamYieldsEnqueuedEvent() async throws {
+        guard e2eEnabled() else { return }
+
+        let queueURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NovaNetworkClient-E2E-EventStream-\(UUID().uuidString)", isDirectory: true)
+        let client = NetworkClient(
+            transport: E2EAlwaysSuccessTransport(),
+            offlineWriteStore: DiskOfflineWriteStore(directoryURL: queueURL)
+        )
+        let stream = client.offlineQueueEvents()
+
+        let waiter = Task { () -> OfflineQueueEvent? in
+            var iterator = stream.makeAsyncIterator()
+            return await iterator.next()
+        }
+
+        let request = APIRequest(
+            method: .post,
+            url: URL(string: "https://example.com/e2e-event-stream")!,
+            body: Data("{\"name\":\"event\"}".utf8)
+        )
+        _ = try await client.enqueueWrite(
+            request: request,
+            authScope: "public",
+            options: .init(offlineQueuePolicy: .init(mode: .alwaysEnqueue))
+        )
+
+        let first = await waiter.value
+        guard case .enqueued? = first else {
+            Issue.record("Expected first offline queue event to be enqueued.")
+            return
+        }
     }
 }

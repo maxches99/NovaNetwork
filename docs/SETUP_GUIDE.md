@@ -269,7 +269,15 @@ let queueURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMa
 
 let client = NetworkClient(
     transport: Transport(),
-    offlineWriteStore: DiskOfflineWriteStore(directoryURL: queueURL)
+    offlineWriteStore: DiskOfflineWriteStore(
+        directoryURL: queueURL,
+        cipher: AESGCMOfflineWriteStoreCipher(
+            keyProvider: {
+                // Provide 16/24/32-byte key material from secure storage.
+                Data(repeating: 7, count: 32)
+            }
+        )
+    )
 )
 
 let request = APIRequest(
@@ -282,7 +290,13 @@ let result = try await client.enqueueWrite(
     request: request,
     authScope: "user:42",
     options: .init(
-        offlineQueuePolicy: .init(mode: .enqueueWhenOffline)
+        idempotencyPolicy: .init(keyStrategy: .fingerprintDigest),
+        offlineQueuePolicy: .init(
+            mode: .enqueueWhenOffline,
+            maxReplayAttempts: 5,
+            replayConflictPolicy: .manualReview,
+            replayDedupeWindowSeconds: 24 * 60 * 60
+        )
     )
 )
 ```
@@ -292,6 +306,9 @@ Queue policy modes:
 - `.disabled`: default behavior, no offline queueing
 - `.enqueueWhenOffline`: try network first, enqueue when transport is offline
 - `.alwaysEnqueue`: enqueue immediately and replay later
+- `maxReplayAttempts`: terminal threshold before conflict handling path
+- `replayConflictPolicy`: `.retry`, `.drop`, `.manualReview`
+- `replayDedupeWindowSeconds`: skip duplicate replay when same replay identity already succeeded in time window
 
 Replay and queue management:
 

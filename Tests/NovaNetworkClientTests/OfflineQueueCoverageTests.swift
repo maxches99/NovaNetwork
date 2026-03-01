@@ -4,6 +4,10 @@ import Testing
 
 @Suite
 struct OfflineQueueCoverageTests {
+    private static func fixedKey() -> Data {
+        Data(repeating: 7, count: 32)
+    }
+
     @Test
     func diskOfflineWriteStorePersistsAcrossRestart() async throws {
         let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -141,5 +145,92 @@ struct OfflineQueueCoverageTests {
         let afterReady = await store.nextBatch(limit: 10, now: now.addingTimeInterval(120))
         #expect(afterReady.count == 1)
         #expect(afterReady[0].receipt.queueID == first.queueID)
+    }
+
+    @Test
+    func diskOfflineWriteStoreEncryptedRoundTripAndLegacyReadCompatibility() async throws {
+        let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("RequestCoalescer-OfflineEncrypt-\(UUID().uuidString)")
+        let request = APIRequest(
+            method: .post,
+            url: URL(string: "https://example.com/encrypted")!,
+            headers: ["X-Sensitive": "true"],
+            body: Data("super-secret-payload".utf8)
+        )
+        let now = Date(timeIntervalSince1970: 500)
+        let cipher = AESGCMOfflineWriteStoreCipher(keyProvider: { Self.fixedKey() })
+
+        let legacyPlainStore = DiskOfflineWriteStore(directoryURL: baseURL)
+        _ = try await legacyPlainStore.enqueue(request: request, requestKey: "legacy", now: now)
+
+        let encryptedReader = DiskOfflineWriteStore(directoryURL: baseURL, cipher: cipher)
+        let legacySnapshot = await encryptedReader.snapshot(now: now)
+        #expect(legacySnapshot.count == 1)
+        #expect(legacySnapshot[0].receipt.requestKey == "legacy")
+
+        _ = try await encryptedReader.enqueue(request: request, requestKey: "encrypted", now: now.addingTimeInterval(1))
+
+        let files = try FileManager.default.contentsOfDirectory(at: baseURL, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "json" && $0.lastPathComponent != "replay_success_index.json" }
+        let encryptedFile = try #require(
+            files.first(where: { $0.lastPathComponent != "\(legacySnapshot[0].receipt.queueID).json" })
+        )
+        let encryptedContent = try Data(contentsOf: encryptedFile)
+        let encryptedText = String(data: encryptedContent, encoding: .utf8) ?? ""
+        #expect(!encryptedText.contains("super-secret-payload"))
+
+        let restoredEncrypted = DiskOfflineWriteStore(directoryURL: baseURL, cipher: cipher)
+        let snapshot = await restoredEncrypted.snapshot(now: now.addingTimeInterval(2))
+        #expect(snapshot.count == 2)
+    }
+
+    @Test
+    func diskOfflineWriteStoreKeepsEncryptedEntriesWhenKeyUnavailable() async throws {
+        let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("RequestCoalescer-OfflineEncryptKey-\(UUID().uuidString)")
+        let request = APIRequest(method: .post, url: URL(string: "https://example.com/encrypted-key")!)
+        let now = Date(timeIntervalSince1970: 600)
+        let goodCipher = AESGCMOfflineWriteStoreCipher(keyProvider: { Self.fixedKey() })
+        let unavailableCipher = AESGCMOfflineWriteStoreCipher(
+            keyProvider: { throw OfflineWriteStoreCipherError.keyUnavailable }
+        )
+
+        let writer = DiskOfflineWriteStore(directoryURL: baseURL, cipher: goodCipher)
+        _ = try await writer.enqueue(request: request, requestKey: "k-encrypted", now: now)
+
+        let blockedReader = DiskOfflineWriteStore(directoryURL: baseURL, cipher: unavailableCipher)
+        let blockedSnapshot = await blockedReader.snapshot(now: now)
+        #expect(blockedSnapshot.isEmpty)
+        let filesAfterBlockedRead = try FileManager.default.contentsOfDirectory(at: baseURL, includingPropertiesForKeys: nil)
+        #expect(filesAfterBlockedRead.contains(where: { $0.pathExtension == "json" }))
+
+        let recoveredReader = DiskOfflineWriteStore(directoryURL: baseURL, cipher: goodCipher)
+        let recoveredSnapshot = await recoveredReader.snapshot(now: now)
+        #expect(recoveredSnapshot.count == 1)
+        #expect(recoveredSnapshot[0].receipt.requestKey == "k-encrypted")
+    }
+
+    @Test
+    func diskOfflineWriteStoreSkipsUnknownEncryptionVersionWithoutDeletingEntry() async throws {
+        let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("RequestCoalescer-OfflineEncryptVersion-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: baseURL, withIntermediateDirectories: true)
+        let fileURL = baseURL.appendingPathComponent("unknown-version.json")
+        let unknownEnvelope = PersistedOfflineWriteEnvelope(
+            schemaVersion: 1,
+            entry: nil,
+            encryptedEntry: Data("ciphertext".utf8),
+            encryption: PersistedOfflineWriteEncryptionMetadata(algorithm: "AES.GCM", version: 999)
+        )
+        let encoded = try JSONEncoder().encode(unknownEnvelope)
+        try encoded.write(to: fileURL, options: .atomic)
+
+        let reader = DiskOfflineWriteStore(
+            directoryURL: baseURL,
+            cipher: AESGCMOfflineWriteStoreCipher(version: 1, keyProvider: { Self.fixedKey() })
+        )
+        let snapshot = await reader.snapshot(now: Date())
+        #expect(snapshot.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: fileURL.path))
     }
 }
