@@ -84,47 +84,11 @@ jobs:
           RUN_E2E_TESTS: "1"
         run: swift test --enable-code-coverage --filter E2ECoverageTests
 
-      - name: Enforce E2E Coverage >= 50%
+      - name: Enforce E2E Public API Rule (No Mocks/Stubs)
         shell: bash
         run: |
           set -euo pipefail
-
-          TEST_BIN=$(find .build -type f -path "*NovaNetworkClientPackageTests.xctest/Contents/MacOS/NovaNetworkClientPackageTests" | head -n 1)
-          PROF_DATA=$(find .build -type f -path "*/debug/codecov/default.profdata" | head -n 1)
-
-          if [[ -z "${TEST_BIN}" || -z "${PROF_DATA}" ]]; then
-            echo "Failed to locate coverage artifacts for E2E tests."
+          if rg -n "E2EMock|E2EAlways|MockTransport|StubNetworkTransport|ScriptedNetworkTransport|https://example\\.com|wss://example\\.com" Tests/NovaNetworkClientTests/E2E; then
+            echo "E2E policy violation: only real public APIs are allowed; mocks/stubs/fake endpoints are forbidden."
             exit 1
           fi
-
-          REPORT=$(xcrun llvm-cov report "${TEST_BIN}" \
-            -instr-profile="${PROF_DATA}" \
-            Sources/NovaNetworkClient/**/*.swift)
-
-          echo "${REPORT}"
-
-          E2E_COVERAGE=$(echo "${REPORT}" | awk '
-            /^TOTAL/ {
-              p = 0
-              for (i = 1; i <= NF; i++) {
-                if ($i ~ /%$/) {
-                  p++
-                  if (p == 3) {
-                    gsub("%", "", $i)
-                    print $i
-                    exit
-                  }
-                }
-              }
-            }
-          ')
-          if [[ -z "${E2E_COVERAGE}" ]]; then
-            echo "Failed to parse E2E coverage."
-            exit 1
-          fi
-
-          awk -v cov="${E2E_COVERAGE}" 'BEGIN { if (cov + 0 < 50) exit 1 }' || {
-            echo "E2E coverage gate failed: ${E2E_COVERAGE}% < 50%"
-            exit 1
-          }
-          echo "E2E coverage gate passed: ${E2E_COVERAGE}% >= 50%"

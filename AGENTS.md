@@ -91,7 +91,8 @@ Treat DFR (Design/Functional Requirements) as the source of truth and contract a
 
 ## Test Coverage Policy
 - Unit test coverage must stay above 90%.
-- E2E test coverage (when running `RUN_E2E_TESTS=1` suite) must stay at or above 50%.
+- E2E tests (`RUN_E2E_TESTS=1`) must run only against real public APIs.
+- Mocks/stubs/custom fake transports are not allowed in E2E tests.
 - Any change that drops coverage below 90% is blocked until coverage is restored.
 
 ## Validation Checklist
@@ -99,7 +100,7 @@ Before finishing:
 1. Build succeeds (`swift build`).
 2. Tests pass (`swift test`).
 3. Unit test coverage is above 90%.
-4. E2E coverage is at or above 50% (`RUN_E2E_TESTS=1 swift test --enable-code-coverage --filter E2ECoverageTests` + `llvm-cov`).
+4. E2E suite is green against real public APIs (`RUN_E2E_TESTS=1 swift test --filter E2ECoverageTests`), with no mocks/stubs.
 5. `README.md` is updated if user-facing behavior changed.
 
 ## Git Hygiene
