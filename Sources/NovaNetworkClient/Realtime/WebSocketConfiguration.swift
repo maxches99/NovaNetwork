@@ -26,17 +26,20 @@ public struct WebSocketReconnectPolicy: Sendable, Equatable {
     public let baseDelayNanoseconds: UInt64
     public let maxDelayNanoseconds: UInt64
     public let jitterRange: ClosedRange<Double>?
+    public let burstGuardMaxJitterNanoseconds: UInt64
 
     public init(
         maxAttempts: Int = 3,
         baseDelayNanoseconds: UInt64 = 300_000_000,
         maxDelayNanoseconds: UInt64 = 3_000_000_000,
-        jitterRange: ClosedRange<Double>? = 0.8...1.2
+        jitterRange: ClosedRange<Double>? = 0.8...1.2,
+        burstGuardMaxJitterNanoseconds: UInt64 = 250_000_000
     ) {
         self.maxAttempts = max(0, maxAttempts)
         self.baseDelayNanoseconds = baseDelayNanoseconds
         self.maxDelayNanoseconds = max(baseDelayNanoseconds, maxDelayNanoseconds)
         self.jitterRange = jitterRange
+        self.burstGuardMaxJitterNanoseconds = burstGuardMaxJitterNanoseconds
     }
 
     public static let disabled = WebSocketReconnectPolicy(maxAttempts: 0, jitterRange: nil)
@@ -63,13 +66,50 @@ public struct WebSocketHeartbeatPolicy: Sendable, Equatable {
 public struct WebSocketAckPolicy: Sendable, Equatable {
     public let dedupeWindowNanoseconds: UInt64
     public let maxTrackedMessageIDs: Int
+    public let maxResendAttempts: Int
+    public let fastTimeoutUpperBoundNanoseconds: UInt64
+    public let slowTimeoutUpperBoundNanoseconds: UInt64
 
     public init(
         dedupeWindowNanoseconds: UInt64 = 300_000_000_000,
-        maxTrackedMessageIDs: Int = 2_048
+        maxTrackedMessageIDs: Int = 2_048,
+        maxResendAttempts: Int = 0,
+        fastTimeoutUpperBoundNanoseconds: UInt64 = 1_000_000_000,
+        slowTimeoutUpperBoundNanoseconds: UInt64 = 5_000_000_000
     ) {
         self.dedupeWindowNanoseconds = max(1, dedupeWindowNanoseconds)
         self.maxTrackedMessageIDs = max(1, maxTrackedMessageIDs)
+        self.maxResendAttempts = max(0, maxResendAttempts)
+        self.fastTimeoutUpperBoundNanoseconds = max(1, fastTimeoutUpperBoundNanoseconds)
+        self.slowTimeoutUpperBoundNanoseconds = max(
+            self.fastTimeoutUpperBoundNanoseconds,
+            slowTimeoutUpperBoundNanoseconds
+        )
+    }
+}
+
+public extension WebSocketAckPolicy {
+    func timeoutClass(for timeoutNanoseconds: UInt64) -> WebSocketAckTimeoutClass {
+        if timeoutNanoseconds <= fastTimeoutUpperBoundNanoseconds {
+            return .fast
+        }
+        if timeoutNanoseconds <= slowTimeoutUpperBoundNanoseconds {
+            return .slow
+        }
+        return .stalled
+    }
+}
+
+public struct WebSocketSubscriptionReplayPolicy: Sendable, Equatable {
+    public let maxAttemptsPerSubscription: Int
+    public let retryDelayNanoseconds: UInt64
+
+    public init(
+        maxAttemptsPerSubscription: Int = 1,
+        retryDelayNanoseconds: UInt64 = 100_000_000
+    ) {
+        self.maxAttemptsPerSubscription = max(1, maxAttemptsPerSubscription)
+        self.retryDelayNanoseconds = retryDelayNanoseconds
     }
 }
 
@@ -91,6 +131,7 @@ public struct WebSocketConfiguration: Sendable, Equatable {
     public let outboundQueuePolicy: WebSocketOutboundQueuePolicy
     public let ackPolicy: WebSocketAckPolicy
     public let authRefreshPolicy: WebSocketAuthRefreshPolicy
+    public let subscriptionReplayPolicy: WebSocketSubscriptionReplayPolicy
 
     public init(
         url: URL,
@@ -99,7 +140,8 @@ public struct WebSocketConfiguration: Sendable, Equatable {
         heartbeatPolicy: WebSocketHeartbeatPolicy = .init(),
         outboundQueuePolicy: WebSocketOutboundQueuePolicy = .disabled,
         ackPolicy: WebSocketAckPolicy = .init(),
-        authRefreshPolicy: WebSocketAuthRefreshPolicy = .disabled
+        authRefreshPolicy: WebSocketAuthRefreshPolicy = .disabled,
+        subscriptionReplayPolicy: WebSocketSubscriptionReplayPolicy = .init()
     ) {
         self.url = url
         self.headers = headers
@@ -108,5 +150,6 @@ public struct WebSocketConfiguration: Sendable, Equatable {
         self.outboundQueuePolicy = outboundQueuePolicy
         self.ackPolicy = ackPolicy
         self.authRefreshPolicy = authRefreshPolicy
+        self.subscriptionReplayPolicy = subscriptionReplayPolicy
     }
 }

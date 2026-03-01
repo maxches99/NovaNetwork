@@ -304,7 +304,7 @@ struct BenchmarksMain {
                 scope: .host,
                 failureThreshold: 1,
                 cooldownSeconds: 0,
-                halfOpenJitterSeconds: 0.001,
+                halfOpenJitterSeconds: 0,
                 probePolicy: .singleProbe
             )
         )

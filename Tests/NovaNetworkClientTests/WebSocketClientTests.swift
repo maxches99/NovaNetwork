@@ -1168,6 +1168,65 @@ struct WebSocketClientTests {
     }
 
     @Test
+    func subscriptionReplayEmitsRetryAndAggregateCompletionWithCorrelationID() async throws {
+        let transport = MockWebSocketTransport(connectResults: [.success(()), .success(())])
+        let recorder = WebSocketTelemetryRecorder()
+        let hooks = NetworkTelemetryHooks(
+            onWebSocketEvent: { context in
+                Task { await recorder.append(context) }
+            }
+        )
+        let client = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                reconnectPolicy: .init(
+                    maxAttempts: 1,
+                    baseDelayNanoseconds: 0,
+                    maxDelayNanoseconds: 0,
+                    jitterRange: nil
+                ),
+                heartbeatPolicy: .disabled,
+                subscriptionReplayPolicy: .init(
+                    maxAttemptsPerSubscription: 2,
+                    retryDelayNanoseconds: 0
+                )
+            ),
+            transport: transport,
+            retryClock: ImmediateRetryClock(),
+            retryRandomGenerator: WSFixedRetryRandom(value: 1),
+            telemetryHooks: hooks
+        )
+
+        try await client.connect()
+        await client.registerSubscription(
+            id: "sub.retry",
+            message: .text("{\"type\":\"subscribe\",\"channel\":\"retry\"}")
+        )
+        await transport.enqueueSend(.failure(WebSocketError.transport(description: "replay-first-fail")))
+        await transport.enqueue(.failure(WebSocketError.transport(description: "drop")))
+
+        let deadline = Date().addingTimeInterval(1.0)
+        while Date() < deadline, await transport.connectCount() < 2 {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(await transport.connectCount() == 2)
+
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let events = await recorder.snapshot()
+        let started = events.first { $0.type == .subscriptionRestoreStarted }
+        let retry = events.first { $0.type == .subscriptionRestoreRetry }
+        let completed = events.first { $0.type == .subscriptionRestoreCompleted }
+        let succeeded = events.first { $0.type == .subscriptionRestoreSucceeded }
+
+        #expect(started?.correlationID != nil)
+        #expect(retry?.correlationID == started?.correlationID)
+        #expect(completed?.correlationID == started?.correlationID)
+        #expect(succeeded?.correlationID == started?.correlationID)
+        #expect(completed?.reason == "succeeded")
+        #expect(completed?.subscriptionRestoreFailedCount == 0)
+    }
+
+    @Test
     func persistedOutboundQueueSurvivesRestartAndFlushesInFIFOOrder() async throws {
         let store = MockWebSocketOutboundQueueStore()
         let writerTransport = MockWebSocketTransport()
@@ -1851,6 +1910,52 @@ struct WebSocketClientTests {
     }
 
     @Test
+    func ackTimeoutUsesBoundedResendAttemptsAndEmitsResendTelemetry() async throws {
+        let transport = MockWebSocketTransport()
+        let recorder = WebSocketTelemetryRecorder()
+        let hooks = NetworkTelemetryHooks(
+            onWebSocketEvent: { context in
+                Task { await recorder.append(context) }
+            }
+        )
+        let client = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                heartbeatPolicy: .disabled,
+                ackPolicy: .init(maxResendAttempts: 1)
+            ),
+            transport: transport,
+            retryClock: ImmediateRetryClock(),
+            telemetryHooks: hooks
+        )
+
+        try await client.connect()
+        do {
+            try await client.send(
+                .text("{\"type\":\"event\"}"),
+                options: .init(requiresAck: true, messageID: "msg-resend-timeout", ackTimeoutNanoseconds: 1)
+            )
+            Issue.record("Expected bounded ACK resend lifecycle to end in timeout.")
+        } catch let error as WebSocketError {
+            #expect(error == .ackTimeout(messageID: "msg-resend-timeout"))
+        } catch {
+            Issue.record("Unexpected error type: \(error)")
+        }
+
+        let sent = await transport.snapshotSentMessages()
+        #expect(sent.count == 2)
+
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let events = await recorder.snapshot()
+        #expect(events.contains { $0.type == .ackResendAttempt && $0.messageID == "msg-resend-timeout" })
+        #expect(events.contains {
+            $0.type == .ackTimeout &&
+            $0.messageID == "msg-resend-timeout" &&
+            $0.ackTimeoutClass == "fast"
+        })
+    }
+
+    @Test
     func queuedMessagesFlushOnConnectWithDropOldestPolicy() async throws {
         let transport = MockWebSocketTransport()
         let client = WebSocketClient(
@@ -1903,6 +2008,49 @@ struct WebSocketClientTests {
     }
 
     @Test
+    func diagnosticsExposeQueuePressureAckAgeBucketsAndReconnectPhase() async throws {
+        let transport = MockWebSocketTransport()
+        let client = WebSocketClient(
+            configuration: .init(
+                url: URL(string: "wss://example.com/ws")!,
+                heartbeatPolicy: .disabled,
+                outboundQueuePolicy: .init(maxQueuedMessages: 2, overflowPolicy: .dropOldest)
+            ),
+            transport: transport
+        )
+
+        try await client.send(.text("queued-1"))
+        try await client.send(.text("queued-2"))
+        let queued = await client.webSocketDiagnostics()
+        #expect(queued.queuePressureLevel == .critical)
+
+        try await client.connect()
+        let pendingTask = Task {
+            try await client.send(
+                .text("{\"type\":\"event\"}"),
+                options: .init(requiresAck: true, messageID: "diag-age-1", ackTimeoutNanoseconds: 30_000_000_000)
+            )
+        }
+
+        let deadline = Date().addingTimeInterval(1.0)
+        var observed = false
+        while Date() < deadline {
+            let diagnostics = await client.webSocketDiagnostics()
+            if diagnostics.pendingAckCount == 1,
+               diagnostics.ackPendingAgeBuckets.underOneSecond == 1,
+               diagnostics.reconnectPhase == .connected {
+                observed = true
+                break
+            }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(observed)
+
+        await client.disconnect(reason: "end")
+        _ = try? await pendingTask.value
+    }
+
+    @Test
     func ackPendingMessageIsResentAfterReconnect() async throws {
         let transport = MockWebSocketTransport(connectResults: [.success(()), .success(())])
         let client = WebSocketClient(
@@ -1917,7 +2065,6 @@ struct WebSocketClientTests {
                 heartbeatPolicy: .disabled
             ),
             transport: transport,
-            retryClock: ImmediateRetryClock(),
             retryRandomGenerator: WSFixedRetryRandom(value: 1)
         )
 
