@@ -159,6 +159,7 @@ public enum TelemetryOfflineQueueEventType: String, Sendable {
     case replayFailed
     case deadLettered
     case dropped
+    case recoveryLossDetected
 }
 
 public struct TelemetryOfflineQueueContext: Sendable {
@@ -170,6 +171,8 @@ public struct TelemetryOfflineQueueContext: Sendable {
     public let reason: String?
     public let willRetry: Bool?
     public let resultType: String?
+    public let priority: OfflineQueuePriority?
+    public let skippedRecords: Int?
 
     public init(
         type: TelemetryOfflineQueueEventType,
@@ -179,7 +182,9 @@ public struct TelemetryOfflineQueueContext: Sendable {
         ageMilliseconds: Double? = nil,
         reason: String? = nil,
         willRetry: Bool? = nil,
-        resultType: String? = nil
+        resultType: String? = nil,
+        priority: OfflineQueuePriority? = nil,
+        skippedRecords: Int? = nil
     ) {
         self.type = type
         self.queueID = queueID
@@ -189,6 +194,8 @@ public struct TelemetryOfflineQueueContext: Sendable {
         self.reason = reason
         self.willRetry = willRetry
         self.resultType = resultType
+        self.priority = priority
+        self.skippedRecords = skippedRecords
     }
 }
 

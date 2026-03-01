@@ -11,6 +11,7 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
 
     private var replaySuccessIndex: [String: Date] = [:]
     private var didLoadReplaySuccessIndex = false
+    private var pendingRecoveryReport: OfflineStoreRecoveryReport?
 
     public init(
         directoryURL: URL,
@@ -178,6 +179,29 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
         }
     }
 
+    public func requeueManualReview(queueID: String, reason: String?, now: Date = Date()) async -> Bool {
+        guard let current = await loadEntry(queueID: queueID) else { return false }
+        guard current.state == .manualReview else { return false }
+        let updated = OfflineWriteStoreEntry(
+            receipt: current.receipt,
+            request: current.request,
+            attempt: current.attempt,
+            nextRetryAt: nil,
+            lastFailureReason: reason ?? current.lastFailureReason,
+            state: .replayScheduled,
+            updatedAt: now,
+            replayMetadata: current.replayMetadata,
+            lastTerminalStatus: .failed,
+            lastTerminalAt: now
+        )
+        do {
+            try write(updated)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     public func hasReplayTerminalSuccess(replayIdentity: String, within: TimeInterval, now: Date = Date()) async -> Bool {
         await loadReplaySuccessIndexIfNeeded()
         guard let successAt = replaySuccessIndex[replayIdentity] else {
@@ -190,6 +214,35 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
         await loadReplaySuccessIndexIfNeeded()
         replaySuccessIndex[replayIdentity] = now
         writeReplaySuccessIndex()
+    }
+
+    public func rotateEncryption(now: Date = Date()) async -> Int {
+        let entries = await loadEntries()
+        guard !entries.isEmpty else { return 0 }
+        var rewritten = 0
+        for entry in entries {
+            let rewrittenEntry = OfflineWriteStoreEntry(
+                receipt: entry.receipt,
+                request: entry.request,
+                attempt: entry.attempt,
+                nextRetryAt: entry.nextRetryAt,
+                lastFailureReason: entry.lastFailureReason,
+                state: entry.state,
+                updatedAt: now,
+                replayMetadata: entry.replayMetadata,
+                lastTerminalStatus: entry.lastTerminalStatus,
+                lastTerminalAt: entry.lastTerminalAt
+            )
+            if (try? write(rewrittenEntry)) != nil {
+                rewritten += 1
+            }
+        }
+        return rewritten
+    }
+
+    public func consumeRecoveryReport() async -> OfflineStoreRecoveryReport? {
+        defer { pendingRecoveryReport = nil }
+        return pendingRecoveryReport
     }
 
     public func depth(now: Date = Date()) async -> Int {
@@ -248,33 +301,48 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
 
     private enum DecodeOutcome {
         case entry(OfflineWriteStoreEntry)
-        case skipAndKeep
-        case skipAndRemove
+        case skipAndKeepIncompatible
+        case skipAndRemoveCorrupted
     }
 
     private func loadEntries() async -> [OfflineWriteStoreEntry] {
         ensureDirectory()
         var entries: [OfflineWriteStoreEntry] = []
+        var scanned = 0
+        var skippedCorrupted = 0
+        var skippedIncompatible = 0
         for file in entryFileURLs() {
+            scanned += 1
             switch decodeEntry(file: file) {
             case .entry(let entry):
                 entries.append(entry)
-            case .skipAndKeep:
+            case .skipAndKeepIncompatible:
+                skippedIncompatible += 1
                 continue
-            case .skipAndRemove:
+            case .skipAndRemoveCorrupted:
+                skippedCorrupted += 1
                 try? fileManager.removeItem(at: file)
             }
         }
+        pendingRecoveryReport = OfflineStoreRecoveryReport(
+            scannedRecords: scanned,
+            recoveredRecords: entries.count,
+            skippedCorruptedRecords: skippedCorrupted,
+            skippedIncompatibleRecords: skippedIncompatible
+        )
         return entries
     }
 
     private func decodeEntry(file: URL) -> DecodeOutcome {
         guard
             let data = try? Data(contentsOf: file),
-            let envelope = try? JSONDecoder().decode(PersistedOfflineWriteEnvelope.self, from: data),
-            envelope.schemaVersion == schemaVersion
+            let envelope = try? JSONDecoder().decode(PersistedOfflineWriteEnvelope.self, from: data)
         else {
-            return .skipAndRemove
+            return .skipAndRemoveCorrupted
+        }
+
+        if envelope.schemaVersion > schemaVersion {
+            return .skipAndKeepIncompatible
         }
 
         if let persisted = envelope.entry,
@@ -287,7 +355,7 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
             let encryption = envelope.encryption,
             let cipher
         else {
-            return .skipAndRemove
+            return .skipAndRemoveCorrupted
         }
 
         do {
@@ -300,18 +368,18 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
                 let persisted = try? JSONDecoder().decode(PersistedOfflineWriteEntry.self, from: decrypted),
                 let runtime = persisted.toRuntimeEntry()
             else {
-                return .skipAndRemove
+                return .skipAndRemoveCorrupted
             }
             return .entry(runtime)
         } catch let error as OfflineWriteStoreCipherError {
             switch error {
             case .keyUnavailable, .unsupportedVersion:
-                return .skipAndKeep
+                return .skipAndKeepIncompatible
             case .decryptionFailed:
-                return .skipAndRemove
+                return .skipAndRemoveCorrupted
             }
         } catch {
-            return .skipAndRemove
+            return .skipAndRemoveCorrupted
         }
     }
 
@@ -370,9 +438,9 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
         switch decodeEntry(file: fileURL) {
         case .entry(let entry):
             return entry
-        case .skipAndKeep:
+        case .skipAndKeepIncompatible:
             return nil
-        case .skipAndRemove:
+        case .skipAndRemoveCorrupted:
             try? fileManager.removeItem(at: fileURL)
             return nil
         }

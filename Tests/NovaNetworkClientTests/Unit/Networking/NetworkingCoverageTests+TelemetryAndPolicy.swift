@@ -144,6 +144,39 @@ extension NetworkingCoverageTests {
     }
 
     @Test
+    func telemetryHooksEmitRecoveryLossSignalForPartiallyCorruptedOfflineStore() async throws {
+        let recorder = TelemetryRecorder()
+        let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("RequestCoalescer-OfflineRecoveryTelemetry-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: baseURL, withIntermediateDirectories: true)
+
+        let store = DiskOfflineWriteStore(directoryURL: baseURL)
+        let transport = StubNetworkTransport(delayNanos: 0, response: .success(Data("ok".utf8)))
+        let client = NetworkClient(
+            transport: transport,
+            offlineWriteStore: store,
+            telemetryHooks: .init(
+                onOfflineQueueEvent: { context in Task { await recorder.appendOfflineQueue(context) } }
+            )
+        )
+        let request = APIRequest(method: .post, url: URL(string: "https://example.com/recovery-telemetry")!)
+        _ = try await client.enqueueWrite(
+            request: request,
+            authScope: nil,
+            options: .init(offlineQueuePolicy: .init(mode: .alwaysEnqueue))
+        )
+        try Data("not-json".utf8).write(to: baseURL.appendingPathComponent("broken.json"), options: .atomic)
+
+        _ = await client.flushOfflineQueue(limit: 4)
+        await waitUntil {
+            let events = await recorder.offlineQueueSnapshot()
+            return events.contains(where: { $0.type == .recoveryLossDetected })
+        }
+        let events = await recorder.offlineQueueSnapshot()
+        #expect(events.contains(where: { $0.type == .recoveryLossDetected && ($0.skippedRecords ?? 0) > 0 }))
+    }
+
+    @Test
     func telemetryTypesAndHookInitializerCoverExtendedContexts() {
         let request = APIRequest(method: .get, url: URL(string: "https://example.com/telemetry-types")!)
         let requestContext = TelemetryRequestContext(

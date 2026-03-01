@@ -1,5 +1,28 @@
 import Foundation
 
+public struct OfflineStoreRecoveryReport: Sendable, Equatable {
+    public let scannedRecords: Int
+    public let recoveredRecords: Int
+    public let skippedCorruptedRecords: Int
+    public let skippedIncompatibleRecords: Int
+
+    public init(
+        scannedRecords: Int,
+        recoveredRecords: Int,
+        skippedCorruptedRecords: Int,
+        skippedIncompatibleRecords: Int
+    ) {
+        self.scannedRecords = max(0, scannedRecords)
+        self.recoveredRecords = max(0, recoveredRecords)
+        self.skippedCorruptedRecords = max(0, skippedCorruptedRecords)
+        self.skippedIncompatibleRecords = max(0, skippedIncompatibleRecords)
+    }
+
+    public var skippedTotal: Int {
+        skippedCorruptedRecords + skippedIncompatibleRecords
+    }
+}
+
 public enum OfflineWriteStoreOverflowPolicy: Sendable, Equatable {
     case evictOldest
     case rejectNew
@@ -65,8 +88,11 @@ public protocol OfflineWriteStore: Sendable {
     func markSucceeded(queueID: String) async
     func markDeadLetter(queueID: String, reason: String, now: Date) async
     func markManualReview(queueID: String, reason: String, now: Date) async
+    func requeueManualReview(queueID: String, reason: String?, now: Date) async -> Bool
     func hasReplayTerminalSuccess(replayIdentity: String, within: TimeInterval, now: Date) async -> Bool
     func recordReplayTerminalSuccess(replayIdentity: String, now: Date) async
+    func rotateEncryption(now: Date) async -> Int
+    func consumeRecoveryReport() async -> OfflineStoreRecoveryReport?
     func depth(now: Date) async -> Int
     func snapshot(now: Date) async -> [OfflineWriteStoreEntry]
     @discardableResult
@@ -90,9 +116,23 @@ public extension OfflineWriteStore {
         await markDeadLetter(queueID: queueID, reason: reason, now: now)
     }
 
+    func requeueManualReview(queueID: String, reason: String?, now: Date) async -> Bool {
+        _ = queueID
+        _ = reason
+        _ = now
+        return false
+    }
+
     func hasReplayTerminalSuccess(replayIdentity: String, within: TimeInterval, now: Date) async -> Bool {
         false
     }
 
     func recordReplayTerminalSuccess(replayIdentity: String, now: Date) async {}
+
+    func rotateEncryption(now: Date) async -> Int {
+        _ = now
+        return 0
+    }
+
+    func consumeRecoveryReport() async -> OfflineStoreRecoveryReport? { nil }
 }

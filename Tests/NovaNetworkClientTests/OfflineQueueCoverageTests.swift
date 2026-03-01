@@ -233,4 +233,92 @@ struct OfflineQueueCoverageTests {
         #expect(snapshot.isEmpty)
         #expect(FileManager.default.fileExists(atPath: fileURL.path))
     }
+
+    @Test
+    func diskOfflineWriteStoreReadsOlderSchemaWithForwardCompatibility() async throws {
+        let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("RequestCoalescer-OfflineSchemaForward-\(UUID().uuidString)")
+        let request = APIRequest(method: .post, url: URL(string: "https://example.com/schema-forward")!)
+        let now = Date(timeIntervalSince1970: 700)
+
+        let writer = DiskOfflineWriteStore(directoryURL: baseURL, schemaVersion: 1)
+        _ = try await writer.enqueue(request: request, requestKey: "legacy-schema", now: now)
+
+        let reader = DiskOfflineWriteStore(directoryURL: baseURL, schemaVersion: 2)
+        let snapshot = await reader.snapshot(now: now)
+        #expect(snapshot.count == 1)
+        #expect(snapshot[0].receipt.requestKey == "legacy-schema")
+    }
+
+    @Test
+    func diskOfflineWriteStoreRotateEncryptionRewritesEntriesWithNewVersion() async throws {
+        let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("RequestCoalescer-OfflineRotate-\(UUID().uuidString)")
+        let request = APIRequest(method: .post, url: URL(string: "https://example.com/rotate")!)
+        let now = Date(timeIntervalSince1970: 800)
+
+        let rotatingV1 = RotatingAESGCMOfflineWriteStoreCipher(
+            version: 1,
+            currentKeyProvider: { Data(repeating: 1, count: 32) },
+            historicalKeyProvider: { _ in Data(repeating: 1, count: 32) }
+        )
+        let writer = DiskOfflineWriteStore(directoryURL: baseURL, cipher: rotatingV1)
+        _ = try await writer.enqueue(request: request, requestKey: "rotate-me", now: now)
+
+        let rotatingV2 = RotatingAESGCMOfflineWriteStoreCipher(
+            version: 2,
+            currentKeyProvider: { Data(repeating: 2, count: 32) },
+            historicalKeyProvider: { version in
+                if version == 1 {
+                    return Data(repeating: 1, count: 32)
+                }
+                return Data(repeating: 2, count: 32)
+            }
+        )
+        let rotator = DiskOfflineWriteStore(directoryURL: baseURL, cipher: rotatingV2)
+        let rewritten = await rotator.rotateEncryption(now: now.addingTimeInterval(5))
+        #expect(rewritten == 1)
+
+        let files = try FileManager.default.contentsOfDirectory(at: baseURL, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "json" && $0.lastPathComponent != "replay_success_index.json" }
+        let payload = try #require(files.first)
+        let envelopeData = try Data(contentsOf: payload)
+        let envelope = try JSONDecoder().decode(PersistedOfflineWriteEnvelope.self, from: envelopeData)
+        #expect(envelope.encryption?.version == 2)
+
+        let latestReader = DiskOfflineWriteStore(directoryURL: baseURL, cipher: rotatingV2)
+        let snapshot = await latestReader.snapshot(now: now.addingTimeInterval(6))
+        #expect(snapshot.count == 1)
+    }
+
+    @Test
+    func diskOfflineWriteStoreRecoveryReportCapturesPartialCorruption() async throws {
+        let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("RequestCoalescer-OfflineRecoveryReport-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: baseURL, withIntermediateDirectories: true)
+
+        let request = APIRequest(method: .post, url: URL(string: "https://example.com/recovery-good")!)
+        let store = DiskOfflineWriteStore(directoryURL: baseURL)
+        _ = try await store.enqueue(request: request, requestKey: "good", now: Date(timeIntervalSince1970: 900))
+
+        try Data("not-json".utf8).write(to: baseURL.appendingPathComponent("broken.json"), options: .atomic)
+
+        let unknownVersion = PersistedOfflineWriteEnvelope(
+            schemaVersion: 999,
+            entry: nil,
+            encryptedEntry: Data("ciphertext".utf8),
+            encryption: PersistedOfflineWriteEncryptionMetadata(algorithm: "AES.GCM", version: 999)
+        )
+        let unknownData = try JSONEncoder().encode(unknownVersion)
+        try unknownData.write(to: baseURL.appendingPathComponent("future.json"), options: .atomic)
+
+        let snapshot = await store.snapshot(now: Date(timeIntervalSince1970: 900))
+        #expect(snapshot.count == 1)
+
+        let report = await store.consumeRecoveryReport()
+        #expect(report?.scannedRecords == 3)
+        #expect(report?.recoveredRecords == 1)
+        #expect(report?.skippedCorruptedRecords == 1)
+        #expect(report?.skippedIncompatibleRecords == 1)
+    }
 }
