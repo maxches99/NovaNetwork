@@ -28,6 +28,22 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
         }
     }
 
+    public struct FairnessPolicy: Sendable, Equatable {
+        public let highWeight: Int
+        public let mediumWeight: Int
+        public let lowWeight: Int
+
+        public init(
+            highWeight: Int = 4,
+            mediumWeight: Int = 2,
+            lowWeight: Int = 1
+        ) {
+            self.highWeight = max(1, highWeight)
+            self.mediumWeight = max(1, mediumWeight)
+            self.lowWeight = max(1, lowWeight)
+        }
+    }
+
     public struct Limits: Sendable {
         public enum WaiterOverflowBehavior: Sendable {
             case bypass
@@ -157,6 +173,7 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
     private var capacityWaiters: [CapacityWaiter] = []
     private var capacityWaiterSequence: UInt64 = 0
     private var fairnessCycleIndex = 0
+    private var fairnessPolicy: FairnessPolicy
 
     private enum Acquisition {
         case shared(task: Task<Result<Output, Failure>, Never>, waiterID: UUID)
@@ -166,15 +183,26 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
     public init(
         policy: CancellationPolicy = .keepRunning,
         limits: Limits = Limits(),
+        fairnessPolicy: FairnessPolicy = .init(),
         observer: Observer? = nil,
         queueMetricsObserver: QueueMetricsObserver? = nil,
         overflowFailureFactory: (@Sendable () -> Failure)? = nil
     ) {
         self.policy = policy
         self.limits = limits
+        self.fairnessPolicy = fairnessPolicy
         self.observer = observer
         self.queueMetricsObserver = queueMetricsObserver
         self.overflowFailureFactory = overflowFailureFactory
+    }
+
+    public func updateFairnessPolicy(_ newPolicy: FairnessPolicy) {
+        fairnessPolicy = newPolicy
+        fairnessCycleIndex = 0
+    }
+
+    public func currentFairnessPolicy() -> FairnessPolicy {
+        fairnessPolicy
     }
 
     public func run(
@@ -450,7 +478,9 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
     }
 
     private func fairnessCycle() -> [RequestPriority] {
-        [.high, .high, .high, .high, .medium, .medium, .low]
+        Array(repeating: .high, count: fairnessPolicy.highWeight) +
+        Array(repeating: .medium, count: fairnessPolicy.mediumWeight) +
+        Array(repeating: .low, count: fairnessPolicy.lowWeight)
     }
 
     private func resumeAllCapacityWaiters() {

@@ -1,4 +1,6 @@
 {
   "maxElapsedMilliseconds": 2000.0,
-  "maxTransportCalls": 16
+  "maxTransportCalls": 16,
+  "maxP95LatencyMilliseconds": 250.0,
+  "maxAllocatedBytesDelta": 268435456
 }

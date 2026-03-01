@@ -186,11 +186,43 @@ public final class NetworkClient: @unchecked Sendable {
         _ policy: NetworkClientRuntimePolicy,
         scope: RuntimePolicyScope = .global
     ) async {
-        let changedFields = await runtimePolicyStore.update(policy: policy, scope: scope)
+        let changedFields = (await runtimePolicyStore.update(policy: policy, scope: scope)).sorted()
         let scopeName = runtimePolicyScopeName(scope)
         emit(.requestPolicyUpdated(scope: scopeName, changedFields: changedFields))
         telemetryHooks?.onPolicyUpdated?(
-            TelemetryPolicyUpdateContext(scope: scopeName, changedFields: changedFields)
+            TelemetryPolicyUpdateContext(
+                source: RuntimePolicySource.runtimeUpdate.rawValue,
+                scope: scopeName,
+                changedFields: changedFields,
+                effectiveValues: runtimePolicyEffectiveValues(policy: policy)
+            )
+        )
+    }
+
+    public func updateCircuitBreakerRuntimePolicy(
+        _ policy: CircuitBreakerPolicy?,
+        scope: RuntimePolicyScope = .global
+    ) async {
+        await updateRuntimePolicy(.init(circuitBreakerPolicy: policy), scope: scope)
+    }
+
+    public func updateCoalescerSchedulerPolicy(
+        _ policy: RequestCoalescer<NetworkResponse, NetworkError>.FairnessPolicy
+    ) async {
+        await coalescer.updateFairnessPolicy(policy)
+        let changedFields = ["high_weight", "medium_weight", "low_weight"]
+        emit(.requestPolicyUpdated(scope: "coalescer_scheduler", changedFields: changedFields))
+        telemetryHooks?.onPolicyUpdated?(
+            TelemetryPolicyUpdateContext(
+                source: RuntimePolicySource.runtimeUpdate.rawValue,
+                scope: "coalescer_scheduler",
+                changedFields: changedFields,
+                effectiveValues: [
+                    "high_weight=\(policy.highWeight)",
+                    "medium_weight=\(policy.mediumWeight)",
+                    "low_weight=\(policy.lowWeight)"
+                ]
+            )
         )
     }
 
@@ -690,7 +722,12 @@ public final class NetworkClient: @unchecked Sendable {
         let policyScope = hasRequestOverrides ? RuntimePolicySource.requestOverride : resolvedRuntimePolicy.source
         let requestDeadline = makeDeadline(from: resolvedDeadlineBudget)
         let telemetryCoalescingMode = telemetryCoalescingMode(for: options.coalescingMode)
-        let coalescingKey = resolvedCoalescingKey(baseKey: key, mode: options.coalescingMode)
+        let coalescingTTL = resolvedRuntimePolicy.policy.coalescingPolicy?.dedupeTTLSeconds
+        let coalescingKey = resolvedCoalescingKey(
+            baseKey: key,
+            mode: options.coalescingMode,
+            dedupeTTLSeconds: coalescingTTL
+        )
 
         if let rateLimitPolicy = options.rateLimitPolicy,
            let retryAfter = await rateLimiter.acquire(key: key, policy: rateLimitPolicy) {
@@ -844,15 +881,28 @@ public final class NetworkClient: @unchecked Sendable {
         }
     }
 
-    private func resolvedCoalescingKey(baseKey: String, mode: CoalescingMode) -> String {
+    private func resolvedCoalescingKey(
+        baseKey: String,
+        mode: CoalescingMode,
+        dedupeTTLSeconds: TimeInterval?
+    ) -> String {
         switch mode {
         case .default:
-            return baseKey
+            return applyCoalescingTTL(baseKey: baseKey, dedupeTTLSeconds: dedupeTTLSeconds)
         case .custom(let customKey):
-            return customKey
+            return applyCoalescingTTL(baseKey: customKey, dedupeTTLSeconds: dedupeTTLSeconds)
         case .disabled:
             return "\(baseKey)#\(UUID().uuidString)"
         }
+    }
+
+    private func applyCoalescingTTL(baseKey: String, dedupeTTLSeconds: TimeInterval?) -> String {
+        guard let dedupeTTLSeconds else { return baseKey }
+        guard dedupeTTLSeconds > 0 else { return "\(baseKey)#\(UUID().uuidString)" }
+        let ttlNanoseconds = UInt64(dedupeTTLSeconds * 1_000_000_000)
+        guard ttlNanoseconds > 0 else { return "\(baseKey)#\(UUID().uuidString)" }
+        let bucket = DispatchTime.now().uptimeNanoseconds / ttlNanoseconds
+        return "\(baseKey)#ttl:\(bucket)"
     }
 
     private func telemetryCoalescingMode(for mode: CoalescingMode) -> TelemetryCoalescingMode {
@@ -875,6 +925,25 @@ public final class NetworkClient: @unchecked Sendable {
         case .endpoint:
             return RuntimePolicySource.endpoint.rawValue
         }
+    }
+
+    private func runtimePolicyEffectiveValues(policy: NetworkClientRuntimePolicy) -> [String] {
+        var values: [String] = []
+        if let retryPolicy = policy.retryPolicy {
+            values.append("retry_max_attempts=\(retryPolicy.maxAttempts)")
+        }
+        if let deadlineBudgetSeconds = policy.deadlineBudgetSeconds {
+            values.append("deadline_budget_seconds=\(deadlineBudgetSeconds)")
+        }
+        if let circuitBreakerPolicy = policy.circuitBreakerPolicy {
+            values.append("circuit_breaker_failure_threshold=\(circuitBreakerPolicy.failureThreshold)")
+            values.append("circuit_breaker_cooldown_seconds=\(circuitBreakerPolicy.cooldownSeconds)")
+            values.append("circuit_breaker_probe_policy=\(circuitBreakerPolicy.probePolicy.telemetryName)")
+        }
+        if let coalescingTTLSeconds = policy.coalescingPolicy?.dedupeTTLSeconds {
+            values.append("coalescing_ttl_seconds=\(coalescingTTLSeconds)")
+        }
+        return values.sorted()
     }
 
     private func makeDeadline(from budgetSeconds: TimeInterval?) -> RequestDeadline? {

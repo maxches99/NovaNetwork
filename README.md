@@ -56,6 +56,8 @@ targets: [
 - Retry/backoff policy for transient failures (for example `429`, `5xx`, network timeouts) with idempotency-aware gating.
 - Adaptive retry options (failure-category profiles, `Retry-After` support, retry budget).
 - Runtime policy updates (global/host/endpoint scope) without recreating `NetworkClient`.
+- Coalescing dedupe TTL policy with scope overrides and priority `endpoint > host > global`.
+- Runtime tuning for coalescer fairness scheduler and circuit-breaker thresholds/probe policy.
 - Testable retry behavior via injectable clock and random generator.
 - Data and typed `Decodable` loading APIs.
 - Typed error mapping overloads (`errorMapper`).
@@ -216,6 +218,28 @@ await client.updateRuntimePolicy(
 await client.updateRuntimePolicy(
     .init(deadlineBudgetSeconds: 0.5),
     scope: .endpoint(host: "api.example.com", pathPrefix: "/critical")
+)
+
+// Dedupe TTL control for coalescing windows (endpoint > host > global).
+await client.updateRuntimePolicy(
+    .init(coalescingPolicy: .init(dedupeTTLSeconds: 30)),
+    scope: .host("api.example.com")
+)
+
+// Runtime circuit breaker tuning (threshold/cooldown/probe policy).
+await client.updateCircuitBreakerRuntimePolicy(
+    .init(
+        scope: .host,
+        failureThreshold: 5,
+        cooldownSeconds: 8,
+        probePolicy: .parallelProbes(maxConcurrent: 2)
+    ),
+    scope: .host("api.example.com")
+)
+
+// Runtime fairness scheduler tuning for queued coalescer capacity.
+await client.updateCoalescerSchedulerPolicy(
+    .init(highWeight: 4, mediumWeight: 2, lowWeight: 1)
 )
 ```
 

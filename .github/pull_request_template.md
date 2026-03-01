@@ -10,11 +10,13 @@
 | Requirement ID | Code/tests reference |
 |---|---|
 |  |  |
+| Test matrix link/path |  |
 
 ## Test Mapping
 | Test ID | Type (`unit/integration/ui`) | Covers requirement IDs | Result |
 |---|---|---|---|
 | T- |  |  |  |
+| E2E- | e2e |  |  |
 
 ## Analytics Verification
 - [ ] New/updated analytics requirements are implemented (`AR-*`)
@@ -22,6 +24,11 @@
 - [ ] Payload schema/properties validated
 - [ ] Negative path verified (no false success events)
 - Evidence:
+
+## QA Sign-off
+- QA owner:
+- Sign-off date:
+- Evidence links (logs/reports/screenshots):
 
 ## Coverage
 - Unit test coverage (%):

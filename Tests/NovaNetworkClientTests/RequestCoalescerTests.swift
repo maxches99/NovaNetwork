@@ -872,6 +872,72 @@ struct RequestCoalescerTests {
     }
 
     @Test
+    func runtimeFairnessPolicyCanFavorLowPriorityWhenConfigured() async throws {
+        actor StartRecorder {
+            private(set) var starts: [String] = []
+            func append(_ value: String) { starts.append(value) }
+            func values() -> [String] { starts }
+        }
+
+        let recorder = StartRecorder()
+        let coalescer = RequestCoalescer<Data, TestError>(limits: .init(maxInFlightKeys: 1))
+        await coalescer.updateFairnessPolicy(.init(highWeight: 1, mediumWeight: 1, lowWeight: 4))
+        let policy = await coalescer.currentFairnessPolicy()
+        #expect(policy.lowWeight == 4)
+
+        async let blocker: Data = coalescer.run(
+            key: "blocker",
+            options: .init(priority: .medium, capacityScheduling: .queueByPriority)
+        ) {
+            await recorder.append("blocker")
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            return .success(Data("blocker".utf8))
+        }
+
+        try? await Task.sleep(nanoseconds: 10_000_000)
+        let lowTask = Task<Data, Error> {
+            try await coalescer.run(
+                key: "low",
+                options: .init(priority: .low, capacityScheduling: .queueByPriority)
+            ) {
+                await recorder.append("low")
+                return .success(Data("low".utf8))
+            }
+        }
+        let highTaskA = Task<Data, Error> {
+            try await coalescer.run(
+                key: "high-a",
+                options: .init(priority: .high, capacityScheduling: .queueByPriority)
+            ) {
+                await recorder.append("high-a")
+                return .success(Data("high-a".utf8))
+            }
+        }
+        let highTaskB = Task<Data, Error> {
+            try await coalescer.run(
+                key: "high-b",
+                options: .init(priority: .high, capacityScheduling: .queueByPriority)
+            ) {
+                await recorder.append("high-b")
+                return .success(Data("high-b".utf8))
+            }
+        }
+
+        _ = try await blocker
+        _ = try await lowTask.value
+        _ = try await highTaskA.value
+        _ = try await highTaskB.value
+
+        let order = await recorder.values()
+        guard let lowIndex = order.firstIndex(of: "low"),
+              let secondHighIndex = order.firstIndex(of: "high-b") else {
+            Issue.record("Expected low and high queue starts")
+            return
+        }
+        #expect(lowIndex < secondHighIndex)
+    }
+
+    @Test
     func queueByPriorityPreservesFIFOWithinSamePriority() async throws {
         actor StartRecorder {
             private(set) var starts: [String] = []

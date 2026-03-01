@@ -1,3 +1,4 @@
+import Darwin.Mach
 import Foundation
 import NovaNetworkClient
 
@@ -67,9 +68,26 @@ actor EventCounter {
     }
 }
 
+actor LatencyCollector {
+    private var values: [Double] = []
+
+    func append(_ value: Double) {
+        values.append(value)
+    }
+
+    func percentile(_ p: Double) -> Double {
+        guard !values.isEmpty else { return 0 }
+        let sorted = values.sorted()
+        let position = Int(Double(sorted.count - 1) * p)
+        return sorted[max(0, min(position, sorted.count - 1))]
+    }
+}
+
 private struct BenchmarkBaseline: Decodable {
     let maxElapsedMilliseconds: Double
     let maxTransportCalls: Int
+    let maxP95LatencyMilliseconds: Double
+    let maxAllocatedBytesDelta: UInt64
 }
 
 private struct StressBaseline: Decodable {
@@ -77,6 +95,10 @@ private struct StressBaseline: Decodable {
     let retryStormExpectedSuccesses: Int
     let breakerFlappingMinimumTransitions: Int
     let runtimeUpdateMinimumSuccesses: Int
+    let mixedPriorityMinimumSuccesses: Int
+    let mixedPriorityMaximumP99LatencyMilliseconds: Double
+    let cancellationBurstMinimumCancelled: Int
+    let cancellationBurstMinimumSuccesses: Int
 }
 
 @main
@@ -99,22 +121,37 @@ struct BenchmarksMain {
         )
         let request = APIRequest(method: .get, url: URL(string: "https://example.com/benchmark")!)
         let iterations = 2_000
+        let latencyCollector = LatencyCollector()
 
+        let allocatedBefore = currentMemoryFootprintBytes()
         let start = DispatchTime.now().uptimeNanoseconds
         await withTaskGroup(of: Void.self) { group in
             for _ in 0..<iterations {
                 group.addTask {
+                    let opStart = DispatchTime.now().uptimeNanoseconds
                     _ = try? await client.load(request: request, authScope: "bench")
+                    let opElapsedMs = Double(DispatchTime.now().uptimeNanoseconds - opStart) / 1_000_000
+                    await latencyCollector.append(opElapsedMs)
                 }
             }
         }
         let end = DispatchTime.now().uptimeNanoseconds
+        let allocatedAfter = currentMemoryFootprintBytes()
 
         let elapsedMs = Double(end - start) / 1_000_000
         let calls = await transport.calls
+        let p95Latency = await latencyCollector.percentile(0.95)
+        let allocatedDelta = memoryDeltaBytes(before: allocatedBefore, after: allocatedAfter)
+
         print("benchmark_iterations=\(iterations)")
         print("transport_calls=\(calls)")
         print(String(format: "elapsed_ms=%.2f", elapsedMs))
+        print(String(format: "p95_latency_ms=%.2f", p95Latency))
+        if let allocatedDelta {
+            print("allocated_delta_bytes=\(allocatedDelta)")
+        } else {
+            print("allocated_delta_bytes=unknown")
+        }
 
         if shouldCheckBaseline {
             let baselineURL = URL(fileURLWithPath: "Benchmarks/baseline.json")
@@ -128,13 +165,15 @@ struct BenchmarksMain {
 
             let elapsedOK = elapsedMs <= baseline.maxElapsedMilliseconds
             let callsOK = calls <= baseline.maxTransportCalls
-            if elapsedOK && callsOK {
+            let latencyOK = p95Latency <= baseline.maxP95LatencyMilliseconds
+            let allocationOK = (allocatedDelta ?? 0) <= baseline.maxAllocatedBytesDelta
+            if elapsedOK && callsOK && latencyOK && allocationOK {
                 print("baseline_check=passed")
                 return
             }
 
             fputs(
-                "baseline_check=failed elapsed_ms=\(elapsedMs) max_elapsed_ms=\(baseline.maxElapsedMilliseconds) transport_calls=\(calls) max_transport_calls=\(baseline.maxTransportCalls)\n",
+                "baseline_check=failed elapsed_ms=\(elapsedMs) max_elapsed_ms=\(baseline.maxElapsedMilliseconds) transport_calls=\(calls) max_transport_calls=\(baseline.maxTransportCalls) p95_latency_ms=\(p95Latency) max_p95_latency_ms=\(baseline.maxP95LatencyMilliseconds) allocated_delta_bytes=\(allocatedDelta ?? 0) max_allocated_delta_bytes=\(baseline.maxAllocatedBytesDelta)\n",
                 stderr
             )
             Foundation.exit(1)
@@ -145,6 +184,8 @@ struct BenchmarksMain {
         let retryStorm = await runRetryStormScenario()
         let breakerFlapping = await runBreakerFlappingScenario()
         let runtimeUpdates = await runRuntimePolicyUpdateScenario()
+        let mixedPriority = await runMixedPriorityQueuePressureScenario()
+        let cancellationBurst = await runCancellationBurstScenario()
 
         print("stress_retry_storm_transport_calls=\(retryStorm.transportCalls)")
         print("stress_retry_storm_successes=\(retryStorm.successes)")
@@ -153,6 +194,12 @@ struct BenchmarksMain {
         print("stress_breaker_flapping_transport_calls=\(breakerFlapping.transportCalls)")
         print("stress_runtime_policy_successes=\(runtimeUpdates.successes)")
         print("stress_runtime_policy_failures=\(runtimeUpdates.failures)")
+        print("stress_mixed_priority_successes=\(mixedPriority.successes)")
+        print("stress_mixed_priority_failures=\(mixedPriority.failures)")
+        print(String(format: "stress_mixed_priority_p95_ms=%.2f", mixedPriority.p95LatencyMilliseconds))
+        print(String(format: "stress_mixed_priority_p99_ms=%.2f", mixedPriority.p99LatencyMilliseconds))
+        print("stress_cancellation_burst_cancelled=\(cancellationBurst.cancelled)")
+        print("stress_cancellation_burst_successes=\(cancellationBurst.successes)")
 
         guard checkBaseline else { return }
 
@@ -169,15 +216,26 @@ struct BenchmarksMain {
         let retrySuccessOK = retryStorm.successes == baseline.retryStormExpectedSuccesses
         let breakerOK = breakerFlapping.breakerTransitions >= baseline.breakerFlappingMinimumTransitions
         let runtimeOK = runtimeUpdates.successes >= baseline.runtimeUpdateMinimumSuccesses
+        let mixedPriorityOK = mixedPriority.successes >= baseline.mixedPriorityMinimumSuccesses
+        let mixedPriorityLatencyOK = mixedPriority.p99LatencyMilliseconds <= baseline.mixedPriorityMaximumP99LatencyMilliseconds
+        let cancellationCancelledOK = cancellationBurst.cancelled >= baseline.cancellationBurstMinimumCancelled
+        let cancellationSuccessOK = cancellationBurst.successes >= baseline.cancellationBurstMinimumSuccesses
 
-        if retryCallsOK, retrySuccessOK, breakerOK, runtimeOK {
+        if retryCallsOK,
+           retrySuccessOK,
+           breakerOK,
+           runtimeOK,
+           mixedPriorityOK,
+           mixedPriorityLatencyOK,
+           cancellationCancelledOK,
+           cancellationSuccessOK {
             print("stress_baseline_check=passed")
             return
         }
 
         fputs(
             """
-            stress_baseline_check=failed retry_calls=\(retryStorm.transportCalls) expected_retry_calls=\(baseline.retryStormExpectedTransportCalls) retry_successes=\(retryStorm.successes) expected_retry_successes=\(baseline.retryStormExpectedSuccesses) breaker_transitions=\(breakerFlapping.breakerTransitions) min_breaker_transitions=\(baseline.breakerFlappingMinimumTransitions) runtime_successes=\(runtimeUpdates.successes) min_runtime_successes=\(baseline.runtimeUpdateMinimumSuccesses)\n
+            stress_baseline_check=failed retry_calls=\(retryStorm.transportCalls) expected_retry_calls=\(baseline.retryStormExpectedTransportCalls) retry_successes=\(retryStorm.successes) expected_retry_successes=\(baseline.retryStormExpectedSuccesses) breaker_transitions=\(breakerFlapping.breakerTransitions) min_breaker_transitions=\(baseline.breakerFlappingMinimumTransitions) runtime_successes=\(runtimeUpdates.successes) min_runtime_successes=\(baseline.runtimeUpdateMinimumSuccesses) mixed_priority_successes=\(mixedPriority.successes) min_mixed_priority_successes=\(baseline.mixedPriorityMinimumSuccesses) mixed_priority_p99_ms=\(mixedPriority.p99LatencyMilliseconds) max_mixed_priority_p99_ms=\(baseline.mixedPriorityMaximumP99LatencyMilliseconds) cancellation_cancelled=\(cancellationBurst.cancelled) min_cancellation_cancelled=\(baseline.cancellationBurstMinimumCancelled) cancellation_successes=\(cancellationBurst.successes) min_cancellation_successes=\(baseline.cancellationBurstMinimumSuccesses)\n
             """,
             stderr
         )
@@ -246,7 +304,8 @@ struct BenchmarksMain {
                 scope: .host,
                 failureThreshold: 1,
                 cooldownSeconds: 0,
-                halfOpenJitterSeconds: 0.001
+                halfOpenJitterSeconds: 0.001,
+                probePolicy: .singleProbe
             )
         )
         let request = APIRequest(method: .get, url: URL(string: "https://example.com/stress-breaker")!)
@@ -305,6 +364,114 @@ struct BenchmarksMain {
         await client.updateRuntimePolicy(.init(), scope: .global)
         return (successes, failures)
     }
+
+    private static func runMixedPriorityQueuePressureScenario() async -> (
+        successes: Int,
+        failures: Int,
+        p95LatencyMilliseconds: Double,
+        p99LatencyMilliseconds: Double
+    ) {
+        let transport = BenchmarkTransport(delayNanoseconds: 1_000_000)
+        let client = NetworkClient(
+            transport: transport,
+            coalescerLimits: .init(maxInFlightKeys: 1, maxWaitersPerKey: 10_000)
+        )
+        let collector = LatencyCollector()
+        let iterations = 120
+
+        var successes = 0
+        var failures = 0
+        await withTaskGroup(of: Bool.self) { group in
+            for index in 0..<iterations {
+                group.addTask {
+                    let priority: RequestPriority = switch index % 3 {
+                    case 0: .high
+                    case 1: .medium
+                    default: .low
+                    }
+                    let request = APIRequest(
+                        method: .get,
+                        url: URL(string: "https://example.com/stress-mixed-priority?id=\(index)")!
+                    )
+                    let startedAt = DispatchTime.now().uptimeNanoseconds
+                    do {
+                        _ = try await client.load(
+                            request: request,
+                            authScope: "bench",
+                            options: .init(
+                                priority: priority,
+                                capacityScheduling: .queueByPriority,
+                                coalescingMode: .disabled
+                            )
+                        )
+                        let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - startedAt) / 1_000_000
+                        await collector.append(elapsedMs)
+                        return true
+                    } catch {
+                        return false
+                    }
+                }
+            }
+
+            for await success in group {
+                if success {
+                    successes += 1
+                } else {
+                    failures += 1
+                }
+            }
+        }
+
+        return (
+            successes,
+            failures,
+            await collector.percentile(0.95),
+            await collector.percentile(0.99)
+        )
+    }
+
+    private static func runCancellationBurstScenario() async -> (cancelled: Int, successes: Int) {
+        let coalescer = RequestCoalescer<Data, NetworkError>(policy: .cancelWhenNoWaiters)
+        let total = 120
+        let toCancel = 70
+
+        var tasks: [Task<Bool, Never>] = []
+        tasks.reserveCapacity(total)
+
+        for _ in 0..<total {
+            tasks.append(
+                Task {
+                    do {
+                        _ = try await coalescer.run(key: "cancellation-burst") {
+                            do {
+                                try await Task.sleep(nanoseconds: 120_000_000)
+                                return .success(Data("ok".utf8))
+                            } catch {
+                                return .failure(.cancelled)
+                            }
+                        }
+                        return true
+                    } catch {
+                        return false
+                    }
+                }
+            )
+        }
+
+        try? await Task.sleep(nanoseconds: 10_000_000)
+        for task in tasks.prefix(toCancel) {
+            task.cancel()
+        }
+
+        var successes = 0
+        for task in tasks {
+            if await task.value {
+                successes += 1
+            }
+        }
+        let metrics = await coalescer.snapshotMetrics()
+        return (metrics.waiterCancellations, successes)
+    }
 }
 
 private extension URL {
@@ -314,4 +481,21 @@ private extension URL {
             .first(where: { $0.name == name })?
             .value
     }
+}
+
+private func currentMemoryFootprintBytes() -> UInt64? {
+    var info = task_vm_info_data_t()
+    var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+    let result: kern_return_t = withUnsafeMutablePointer(to: &info) { pointer in
+        pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { rebound in
+            task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), rebound, &count)
+        }
+    }
+    guard result == KERN_SUCCESS else { return nil }
+    return info.phys_footprint
+}
+
+private func memoryDeltaBytes(before: UInt64?, after: UInt64?) -> UInt64? {
+    guard let before, let after, after >= before else { return nil }
+    return after - before
 }

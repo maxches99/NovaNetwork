@@ -5,6 +5,29 @@ public enum CircuitBreakerScope: Sendable {
     case host
 }
 
+public enum CircuitBreakerProbePolicy: Sendable, Equatable {
+    case singleProbe
+    case parallelProbes(maxConcurrent: Int)
+
+    var maxConcurrentProbes: Int {
+        switch self {
+        case .singleProbe:
+            return 1
+        case .parallelProbes(let maxConcurrent):
+            return max(1, maxConcurrent)
+        }
+    }
+
+    var telemetryName: String {
+        switch self {
+        case .singleProbe:
+            return "single_probe"
+        case .parallelProbes(let maxConcurrent):
+            return "parallel_probes_\(max(1, maxConcurrent))"
+        }
+    }
+}
+
 public enum CircuitBreakerState: String, Sendable {
     case closed
     case open
@@ -38,17 +61,20 @@ public struct CircuitBreakerPolicy: Sendable, Equatable {
     public let failureThreshold: Int
     public let cooldownSeconds: TimeInterval
     public let halfOpenJitterSeconds: TimeInterval
+    public let probePolicy: CircuitBreakerProbePolicy
 
     public init(
         scope: CircuitBreakerScope = .host,
         failureThreshold: Int = 3,
         cooldownSeconds: TimeInterval = 10,
-        halfOpenJitterSeconds: TimeInterval = 0
+        halfOpenJitterSeconds: TimeInterval = 0,
+        probePolicy: CircuitBreakerProbePolicy = .singleProbe
     ) {
         self.scope = scope
         self.failureThreshold = max(1, failureThreshold)
         self.cooldownSeconds = max(0, cooldownSeconds)
         self.halfOpenJitterSeconds = max(0, halfOpenJitterSeconds)
+        self.probePolicy = probePolicy
     }
 }
 
@@ -57,7 +83,7 @@ actor CircuitBreakerStore {
         var state: CircuitBreakerState
         var failureCount: Int
         var openUntilNanoseconds: UInt64?
-        var halfOpenProbeInFlight: Bool
+        var halfOpenProbeCount: Int
     }
 
     struct GateDecision {
@@ -81,7 +107,7 @@ actor CircuitBreakerStore {
             state: .closed,
             failureCount: 0,
             openUntilNanoseconds: nil,
-            halfOpenProbeInFlight: false
+            halfOpenProbeCount: 0
         )
 
         if entry.state == .open, let openUntil = entry.openUntilNanoseconds, now >= openUntil {
@@ -94,9 +120,10 @@ actor CircuitBreakerStore {
             )
             entry.state = .halfOpen
             entry.openUntilNanoseconds = nil
-            entry.halfOpenProbeInFlight = true
+            entry.halfOpenProbeCount = 0
             entries[identifier] = entry
-            return GateDecision(canExecute: true, transition: transition)
+            let canExecute = reserveHalfOpenProbeIfPossible(&entry, identifier: identifier, policy: policy)
+            return GateDecision(canExecute: canExecute, transition: transition)
         }
 
         switch entry.state {
@@ -107,19 +134,14 @@ actor CircuitBreakerStore {
             entries[identifier] = entry
             return GateDecision(canExecute: false, transition: nil)
         case .halfOpen:
-            if entry.halfOpenProbeInFlight {
-                entries[identifier] = entry
-                return GateDecision(canExecute: false, transition: nil)
-            }
-            entry.halfOpenProbeInFlight = true
-            entries[identifier] = entry
-            return GateDecision(canExecute: true, transition: nil)
+            let canExecute = reserveHalfOpenProbeIfPossible(&entry, identifier: identifier, policy: policy)
+            return GateDecision(canExecute: canExecute, transition: nil)
         }
     }
 
     func recordSuccess(identifier: String, policy: CircuitBreakerPolicy) -> CircuitBreakerTransition? {
         guard var entry = entries[identifier] else {
-            entries[identifier] = Entry(state: .closed, failureCount: 0, openUntilNanoseconds: nil, halfOpenProbeInFlight: false)
+            entries[identifier] = Entry(state: .closed, failureCount: 0, openUntilNanoseconds: nil, halfOpenProbeCount: 0)
             return nil
         }
 
@@ -127,7 +149,7 @@ actor CircuitBreakerStore {
         entry.state = .closed
         entry.failureCount = 0
         entry.openUntilNanoseconds = nil
-        entry.halfOpenProbeInFlight = false
+        entry.halfOpenProbeCount = 0
         entries[identifier] = entry
 
         guard previousState != .closed else { return nil }
@@ -145,7 +167,7 @@ actor CircuitBreakerStore {
             state: .closed,
             failureCount: 0,
             openUntilNanoseconds: nil,
-            halfOpenProbeInFlight: false
+            halfOpenProbeCount: 0
         )
         let now = DispatchTime.now().uptimeNanoseconds
         let cooldownNanoseconds = UInt64(policy.cooldownSeconds * 1_000_000_000)
@@ -157,7 +179,7 @@ actor CircuitBreakerStore {
             current.state = .open
             current.failureCount = max(1, current.failureCount)
             current.openUntilNanoseconds = now.saturatingAdd(cooldownNanoseconds).saturatingAdd(jitterNanoseconds)
-            current.halfOpenProbeInFlight = false
+            current.halfOpenProbeCount = 0
             entries[identifier] = current
             return CircuitBreakerTransition(
                 identifier: identifier,
@@ -173,7 +195,7 @@ actor CircuitBreakerStore {
         case .closed:
             let nextFailureCount = current.failureCount + 1
             current.failureCount = nextFailureCount
-            current.halfOpenProbeInFlight = false
+            current.halfOpenProbeCount = 0
             if nextFailureCount >= policy.failureThreshold {
                 current.state = .open
                 current.openUntilNanoseconds = now.saturatingAdd(cooldownNanoseconds).saturatingAdd(jitterNanoseconds)
@@ -189,6 +211,21 @@ actor CircuitBreakerStore {
             entries[identifier] = current
             return nil
         }
+    }
+
+    private func reserveHalfOpenProbeIfPossible(
+        _ entry: inout Entry,
+        identifier: String,
+        policy: CircuitBreakerPolicy
+    ) -> Bool {
+        let maxConcurrent = policy.probePolicy.maxConcurrentProbes
+        guard entry.halfOpenProbeCount < maxConcurrent else {
+            entries[identifier] = entry
+            return false
+        }
+        entry.halfOpenProbeCount += 1
+        entries[identifier] = entry
+        return true
     }
 }
 

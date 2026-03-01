@@ -11,25 +11,40 @@ public enum RuntimePolicySource: String, Sendable {
     case host
     case endpoint
     case requestOverride = "runtime_override"
+    case runtimeUpdate = "runtime_update"
+}
+
+public struct CoalescingPolicy: Sendable, Equatable {
+    public let dedupeTTLSeconds: TimeInterval?
+
+    public init(dedupeTTLSeconds: TimeInterval? = nil) {
+        self.dedupeTTLSeconds = dedupeTTLSeconds.map { max(0, $0) }
+    }
 }
 
 public struct NetworkClientRuntimePolicy: Sendable, Equatable {
     public let retryPolicy: RetryPolicy?
     public let deadlineBudgetSeconds: TimeInterval?
     public let circuitBreakerPolicy: CircuitBreakerPolicy?
+    public let coalescingPolicy: CoalescingPolicy?
 
     public init(
         retryPolicy: RetryPolicy? = nil,
         deadlineBudgetSeconds: TimeInterval? = nil,
-        circuitBreakerPolicy: CircuitBreakerPolicy? = nil
+        circuitBreakerPolicy: CircuitBreakerPolicy? = nil,
+        coalescingPolicy: CoalescingPolicy? = nil
     ) {
         self.retryPolicy = retryPolicy
         self.deadlineBudgetSeconds = deadlineBudgetSeconds.map { max(0, $0) }
         self.circuitBreakerPolicy = circuitBreakerPolicy
+        self.coalescingPolicy = coalescingPolicy
     }
 
     var isEmpty: Bool {
-        retryPolicy == nil && deadlineBudgetSeconds == nil && circuitBreakerPolicy == nil
+        retryPolicy == nil &&
+        deadlineBudgetSeconds == nil &&
+        circuitBreakerPolicy == nil &&
+        coalescingPolicy == nil
     }
 }
 
@@ -118,7 +133,8 @@ actor RuntimePolicyStore {
         NetworkClientRuntimePolicy(
             retryPolicy: override.retryPolicy ?? base.retryPolicy,
             deadlineBudgetSeconds: override.deadlineBudgetSeconds ?? base.deadlineBudgetSeconds,
-            circuitBreakerPolicy: override.circuitBreakerPolicy ?? base.circuitBreakerPolicy
+            circuitBreakerPolicy: override.circuitBreakerPolicy ?? base.circuitBreakerPolicy,
+            coalescingPolicy: override.coalescingPolicy ?? base.coalescingPolicy
         )
     }
 
@@ -141,6 +157,9 @@ actor RuntimePolicyStore {
         }
         if old.circuitBreakerPolicy != new.circuitBreakerPolicy {
             fields.append("circuit_breaker_policy")
+        }
+        if old.coalescingPolicy != new.coalescingPolicy {
+            fields.append("coalescing_policy")
         }
         return fields
     }
