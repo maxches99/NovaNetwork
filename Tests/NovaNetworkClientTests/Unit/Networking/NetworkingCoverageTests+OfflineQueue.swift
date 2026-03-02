@@ -360,4 +360,163 @@ extension NetworkingCoverageTests {
         #expect(receipt.requestKey == "k1")
         #expect(receipt.position == 1)
     }
+
+    @Test
+    func flushOfflineQueueSchedulerProtectsStarvedBackgroundItems() async throws {
+        let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("RequestCoalescer-SchedulerStarvation-\(UUID().uuidString)")
+        let store = DiskOfflineWriteStore(directoryURL: baseURL)
+        let transport = RequestRecordingTransport()
+        let client = NetworkClient(transport: transport, offlineWriteStore: store)
+        let now = Date()
+
+        let schedulerPolicy = OfflineReplaySchedulerPolicy(
+            fairReplayWeights: [.critical: 4, .normal: 2, .background: 1],
+            starvationProtectionAgeSeconds: 1,
+            priorityBandLimits: [
+                .init(priority: .critical, maxConsecutiveReplays: 3),
+                .init(priority: .normal, maxConsecutiveReplays: 2),
+                .init(priority: .background, maxConsecutiveReplays: 2)
+            ]
+        )
+
+        let starvedBackground = APIRequest(method: .post, url: URL(string: "https://example.com/bkg-starved")!)
+        _ = try await store.enqueue(
+            request: starvedBackground,
+            requestKey: "bkg-starved",
+            replayMetadata: .init(
+                replayIdentity: "bkg-starved",
+                priority: .background,
+                schedulerPolicy: schedulerPolicy
+            ),
+            now: now.addingTimeInterval(-120)
+        )
+
+        for idx in 0..<6 {
+            let request = APIRequest(method: .post, url: URL(string: "https://example.com/critical-\(idx)")!)
+            _ = try await store.enqueue(
+                request: request,
+                requestKey: "critical-\(idx)",
+                replayMetadata: .init(
+                    replayIdentity: "critical-\(idx)",
+                    priority: .critical,
+                    schedulerPolicy: schedulerPolicy
+                ),
+                now: now
+            )
+        }
+
+        _ = await client.flushOfflineQueue(limit: 3)
+        let replayOrder = await transport.snapshot()
+        #expect(replayOrder.count == 3)
+        #expect(replayOrder.contains("/bkg-starved"))
+    }
+
+    @Test
+    func offlineConflictResolverCanOverridePolicyAndDropConflict() async throws {
+        let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("RequestCoalescer-ConflictResolver-\(UUID().uuidString)")
+        let store = DiskOfflineWriteStore(directoryURL: baseURL)
+        let recorder = TelemetryRecorder()
+        let transport = StubNetworkTransport(
+            delayNanos: 0,
+            response: Result<NetworkResponse, NetworkError>.failure(.httpStatus(code: 422, body: Data()))
+        )
+        let client = NetworkClient(
+            transport: transport,
+            offlineWriteStore: store,
+            offlineConflictResolver: { metadata in
+                if metadata.statusCode == 422 {
+                    return .drop(reason: "resolver_drop_422")
+                }
+                return .manualReview(reason: nil)
+            },
+            telemetryHooks: .init(
+                onOfflineQueueEvent: { context in Task { await recorder.appendOfflineQueue(context) } }
+            )
+        )
+        let request = APIRequest(method: .post, url: URL(string: "https://example.com/conflict-resolver")!)
+
+        _ = try await client.enqueueWrite(
+            request: request,
+            authScope: nil,
+            options: .init(
+                offlineQueuePolicy: .init(mode: .alwaysEnqueue, replayConflictPolicy: .manualReview)
+            )
+        )
+
+        _ = await client.flushOfflineQueue(limit: 4)
+        #expect(await store.depth(now: Date()) == 0)
+
+        let events = await recorder.offlineQueueSnapshot()
+        let hasDroppedConflict = events.contains {
+            $0.type == .replayDroppedConflict && $0.reason == "resolver_drop_422"
+        }
+        #expect(hasDroppedConflict)
+    }
+
+    @Test
+    func replayManualReviewItemSchedulesPostResolutionReplay() async throws {
+        let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("RequestCoalescer-ManualReviewReplay-\(UUID().uuidString)")
+        let store = DiskOfflineWriteStore(directoryURL: baseURL)
+        let transport = ScriptedNetworkTransport(
+            responses: [
+                .failure(.httpStatus(code: 422, body: Data())),
+                .success(.init(statusCode: 200, headers: [:], body: Data("ok".utf8)))
+            ]
+        )
+        let client = NetworkClient(transport: transport, offlineWriteStore: store)
+        let request = APIRequest(method: .post, url: URL(string: "https://example.com/manual-review-replay")!)
+
+        _ = try await client.enqueueWrite(
+            request: request,
+            authScope: nil,
+            options: .init(
+                offlineQueuePolicy: .init(mode: .alwaysEnqueue, replayConflictPolicy: .manualReview)
+            )
+        )
+        _ = await client.flushOfflineQueue(limit: 1)
+
+        let manualSnapshot = await store.snapshot(now: Date())
+        #expect(manualSnapshot.count == 1)
+        #expect(manualSnapshot[0].state == .manualReview)
+
+        let requeued = await client.replayManualReviewItem(
+            queueID: manualSnapshot[0].receipt.queueID,
+            resolutionReason: "resolved_by_user"
+        )
+        #expect(requeued)
+        let afterRequeue = await store.snapshot(now: Date())
+        #expect(afterRequeue.count == 1)
+        #expect(afterRequeue[0].state == .replayScheduled)
+
+        _ = await client.flushOfflineQueue(limit: 1)
+        #expect(await store.depth(now: Date()) == 0)
+    }
+
+    @Test
+    func offlineQueuePipelineMetricsExposeAgeThroughputAndOutcomes() async throws {
+        let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("RequestCoalescer-PipelineMetrics-\(UUID().uuidString)")
+        let store = DiskOfflineWriteStore(directoryURL: baseURL)
+        let transport = StubNetworkTransport(delayNanos: 0, response: .success(Data("ok".utf8)))
+        let client = NetworkClient(transport: transport, offlineWriteStore: store)
+        let request = APIRequest(method: .post, url: URL(string: "https://example.com/pipeline-metrics")!)
+        let options = RequestExecutionOptions(
+            idempotencyPolicy: .init(keyStrategy: .fingerprintDigest),
+            offlineQueuePolicy: .init(mode: .alwaysEnqueue, replayDedupeWindowSeconds: 3600)
+        )
+
+        _ = try await client.enqueueWrite(request: request, authScope: "u1", options: options)
+        _ = try await client.enqueueWrite(request: request, authScope: "u1", options: options)
+        _ = await client.flushOfflineQueue(limit: 8)
+
+        let metrics = await client.offlineQueuePipelineMetrics()
+        #expect(metrics.replayThroughput.replayedCount >= 1)
+        #expect(metrics.replayThroughput.replaysPerSecond >= 0)
+        #expect(metrics.ageDistribution.maxSeconds >= metrics.ageDistribution.p50Seconds)
+        #expect((metrics.terminalOutcomes[.succeeded] ?? 0) >= 1)
+        #expect(metrics.terminalOutcomes.values.reduce(0, +) >= 1)
+    }
 }

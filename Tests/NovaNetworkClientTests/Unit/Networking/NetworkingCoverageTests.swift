@@ -70,6 +70,27 @@ actor HeaderCapturingTransport: NetworkTransport {
     func headers() -> [String: String] { lastHeaders }
 }
 
+actor RequestRecordingTransport: NetworkTransport {
+    private(set) var paths: [String] = []
+    private let response: Result<NetworkResponse, NetworkError>
+
+    init(response: Result<NetworkResponse, NetworkError> = .success(.init(statusCode: 200, headers: [:], body: Data("ok".utf8)))) {
+        self.response = response
+    }
+
+    func execute(_ request: APIRequest) async throws -> NetworkResponse {
+        paths.append(request.url.path)
+        switch response {
+        case .success(let value):
+            return value
+        case .failure(let error):
+            throw error
+        }
+    }
+
+    func snapshot() -> [String] { paths }
+}
+
 final class StubStreamingTransport: StreamingNetworkTransport, @unchecked Sendable {
     private let stateQueue = DispatchQueue(label: "StubStreamingTransport.state")
     private let chunks: [Data]

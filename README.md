@@ -50,6 +50,10 @@ targets: [
 - Client-side per-key rate limiting (`RateLimitPolicy`).
 - Request middleware pipeline (`beforeSend` / `afterResponse`).
 - Offline queue for write requests (`POST`/`PUT`/`PATCH`) with durable disk store and replay APIs.
+- Offline-first sync pipeline: priority-aware replay (`critical`/`normal`/`background`), fairness scheduler, starvation protection, replay windows, and rate controls.
+- Conflict workflows with rich metadata resolver hooks plus manual-review requeue API.
+- Offline pipeline observability APIs (`offlineQueuePipelineMetrics`) and recovery-loss telemetry.
+- Encrypted offline store lifecycle controls with forward-compatible schema reads and key-rotation rewrite path.
 - Cancellation policies:
   - `keepRunning`
   - `cancelWhenNoWaiters`
@@ -153,6 +157,73 @@ Task {
         print("event:", event)
     }
 }
+```
+
+### 4) Offline-First Sync Policy (v1.14)
+
+```swift
+let queuePolicy = OfflineQueuePolicy(
+    mode: .enqueueWhenOffline,
+    replayPriority: .critical,
+    replaySchedulerPolicy: .init(
+        fairReplayWeights: [.critical: 4, .normal: 2, .background: 1],
+        starvationProtectionAgeSeconds: 120,
+        priorityBandLimits: [
+            .init(priority: .critical, maxConsecutiveReplays: 8),
+            .init(priority: .normal, maxConsecutiveReplays: 4),
+            .init(priority: .background, maxConsecutiveReplays: 2)
+        ],
+        replayWindow: .init(
+            maxContinuousReplaySeconds: 20,
+            coolDownSeconds: 1,
+            maxReplaysPerSecond: 10
+        )
+    ),
+    replayConflictPolicy: .manualReview
+)
+
+let client = NetworkClient(
+    transport: Transport(),
+    offlineWriteStore: DiskOfflineWriteStore(directoryURL: queueURL),
+    offlineConflictResolver: { metadata in
+        if metadata.statusCode == 409 {
+            return .manualReview(reason: "server_conflict_requires_review")
+        }
+        return .retry(afterSeconds: nil)
+    }
+)
+
+_ = try await client.enqueueWrite(
+    request: createItem,
+    authScope: "user:42",
+    options: .init(offlineQueuePolicy: queuePolicy)
+)
+```
+
+### 5) Manual-Review Replay and Metrics
+
+```swift
+let snapshot = await client.offlineQueueSnapshot()
+if let manualItem = snapshot.first(where: { $0.state == .manualReview }) {
+    let requeued = await client.replayManualReviewItem(
+        queueID: manualItem.receipt.queueID,
+        resolutionReason: "resolved_in_ui"
+    )
+    print("Requeued:", requeued)
+}
+
+let metrics = await client.offlineQueuePipelineMetrics()
+print(metrics.queueDepth)
+print(metrics.ageDistribution.p90Seconds)
+print(metrics.replayThroughput.replaysPerSecond)
+print(metrics.terminalOutcomes)
+```
+
+### 6) Encryption Rotation for Offline Store
+
+```swift
+let rotated = await client.rotateOfflineQueueEncryption()
+print("Rewritten encrypted records:", rotated)
 ```
 
 ## Cache Policy

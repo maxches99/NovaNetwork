@@ -62,6 +62,27 @@ actor OfflineReplayGate {
     }
 }
 
+actor OfflineReplayPipelineMetricsStore {
+    private var replayStartedAt: Date?
+    private var replayedCount: Int = 0
+    private var terminalOutcomes: [OfflineQueueTerminalStatus: Int] = [:]
+
+    func markReplay() {
+        if replayStartedAt == nil {
+            replayStartedAt = Date()
+        }
+        replayedCount += 1
+    }
+
+    func markOutcome(_ status: OfflineQueueTerminalStatus) {
+        terminalOutcomes[status, default: 0] += 1
+    }
+
+    func snapshot(now: Date = Date()) -> (startedAt: Date?, replayedCount: Int, terminalOutcomes: [OfflineQueueTerminalStatus: Int]) {
+        (replayStartedAt, replayedCount, terminalOutcomes)
+    }
+}
+
 public final class NetworkClient: @unchecked Sendable {
     private let coalescer: RequestCoalescer<NetworkResponse, NetworkError>
     private let transport: any NetworkTransport
@@ -73,6 +94,7 @@ public final class NetworkClient: @unchecked Sendable {
     private let cache: any ResponseCache
     private let offlineWriteStore: (any OfflineWriteStore)?
     private let offlineConnectivityMonitor: (any OfflineConnectivityMonitor)?
+    private let offlineConflictResolver: (@Sendable (OfflineQueueConflictMetadata) -> OfflineConflictResolutionDecision)?
     private let decoder: JSONDecoder
     private let networkObserver: (@Sendable (NetworkClientEvent) -> Void)?
     private let middlewares: [NetworkMiddleware]
@@ -80,6 +102,7 @@ public final class NetworkClient: @unchecked Sendable {
     private let eventHub = NetworkClientEventHub()
     private let offlineQueueEventHub = OfflineQueueEventHub()
     private let offlineReplayGate = OfflineReplayGate()
+    private let offlineReplayMetricsStore = OfflineReplayPipelineMetricsStore()
     private let circuitBreakerStore = CircuitBreakerStore()
     private let rateLimiter = KeyRateLimiter()
     private let runtimePolicyStore = RuntimePolicyStore()
@@ -102,6 +125,7 @@ public final class NetworkClient: @unchecked Sendable {
         cache: (any ResponseCache)? = nil,
         offlineWriteStore: (any OfflineWriteStore)? = nil,
         offlineConnectivityMonitor: (any OfflineConnectivityMonitor)? = nil,
+        offlineConflictResolver: (@Sendable (OfflineQueueConflictMetadata) -> OfflineConflictResolutionDecision)? = nil,
         observer: RequestCoalescer<NetworkResponse, NetworkError>.Observer? = nil,
         networkObserver: (@Sendable (NetworkClientEvent) -> Void)? = nil,
         middlewares: [NetworkMiddleware] = [],
@@ -139,6 +163,7 @@ public final class NetworkClient: @unchecked Sendable {
         self.cache = cache ?? MemoryResponseCache(maxEntries: cacheMaxEntries)
         self.offlineWriteStore = offlineWriteStore
         self.offlineConnectivityMonitor = offlineConnectivityMonitor
+        self.offlineConflictResolver = offlineConflictResolver
         self.decoder = decoder
         self.networkObserver = networkObserver
         self.middlewares = middlewares
@@ -435,17 +460,61 @@ public final class NetworkClient: @unchecked Sendable {
         }
 
         var replayedCount = 0
-        while replayedCount < limit {
-            let remaining = max(1, limit - replayedCount)
-            let batch = await offlineWriteStore.nextBatch(limit: remaining, now: Date())
-            guard !batch.isEmpty else { break }
+        _ = await offlineWriteStore.snapshot(now: Date())
+        let flushStartedAt = Date()
+        if let report = await offlineWriteStore.consumeRecoveryReport(), report.skippedTotal > 0 {
+            await emitOfflineQueueEvent(
+                .recoveryLossDetected(
+                    scannedRecords: report.scannedRecords,
+                    skippedRecords: report.skippedTotal,
+                    reason: "partial_store_corruption_or_incompatible_versions"
+                ),
+                telemetry: telemetryOfflineQueueContext(
+                    type: .recoveryLossDetected,
+                    queueID: "offline-store",
+                    requestKey: "offline-store",
+                    reason: "scanned=\(report.scannedRecords)",
+                    resultType: "recovery_loss_detected",
+                    skippedRecords: report.skippedTotal
+                )
+            )
+        }
 
-            for entry in batch {
+        while replayedCount < limit && Date().timeIntervalSince(flushStartedAt) < 300 {
+            let remaining = max(1, limit - replayedCount)
+            let allEntries = await offlineWriteStore.snapshot(now: Date())
+            let candidates = readyForReplay(entries: allEntries, now: Date())
+            guard !candidates.isEmpty else { break }
+            let policy = effectiveSchedulerPolicy(from: candidates)
+            let scheduled = scheduleReplayBatch(
+                entries: candidates,
+                limit: remaining,
+                policy: policy,
+                now: Date()
+            )
+
+            guard !scheduled.isEmpty else { break }
+            for entry in scheduled {
                 if replayedCount >= limit {
                     break
                 }
                 await replayOfflineEntry(entry, store: offlineWriteStore)
                 replayedCount += 1
+            }
+
+            let elapsed = Date().timeIntervalSince(flushStartedAt)
+            let minimumWindow = max(1, TimeInterval(replayedCount) / policy.replayWindow.maxReplaysPerSecond)
+            if elapsed < minimumWindow {
+                let sleepNs = UInt64((minimumWindow - elapsed) * 1_000_000_000)
+                if sleepNs > 0 {
+                    try? await Task.sleep(nanoseconds: sleepNs)
+                }
+            }
+            if Date().timeIntervalSince(flushStartedAt) >= policy.replayWindow.maxContinuousReplaySeconds {
+                let coolDownNs = UInt64(policy.replayWindow.coolDownSeconds * 1_000_000_000)
+                if coolDownNs > 0 {
+                    try? await Task.sleep(nanoseconds: coolDownNs)
+                }
             }
         }
         return replayedCount
@@ -466,12 +535,92 @@ public final class NetworkClient: @unchecked Sendable {
                     method: entry.request.method,
                     url: entry.request.url,
                     attempt: entry.attempt,
-                    state: entry.state
+                    state: entry.state,
+                    priority: entry.replayMetadata.priority
                 )
             }
             .sorted { lhs, rhs in
                 lhs.receipt.position < rhs.receipt.position
             }
+    }
+
+    public func offlineQueuePipelineMetrics() async -> OfflineQueuePipelineMetrics {
+        guard let offlineWriteStore else {
+            return OfflineQueuePipelineMetrics(
+                queueDepth: 0,
+                ageDistribution: .init(p50Seconds: 0, p90Seconds: 0, maxSeconds: 0),
+                replayThroughput: .init(replayedCount: 0, windowSeconds: 0, replaysPerSecond: 0),
+                terminalOutcomes: [:]
+            )
+        }
+
+        let now = Date()
+        let snapshot = await offlineWriteStore.snapshot(now: now)
+        let ages = snapshot
+            .map { max(0, now.timeIntervalSince($0.receipt.enqueuedAt)) }
+            .sorted()
+        let ageDistribution = OfflineQueueAgeDistribution(
+            p50Seconds: percentile(ages: ages, p: 0.5),
+            p90Seconds: percentile(ages: ages, p: 0.9),
+            maxSeconds: ages.last ?? 0
+        )
+        let replayState = await offlineReplayMetricsStore.snapshot(now: now)
+        let windowSeconds: TimeInterval
+        if let startedAt = replayState.startedAt {
+            windowSeconds = max(0.001, now.timeIntervalSince(startedAt))
+        } else {
+            windowSeconds = 0
+        }
+        let throughput = OfflineQueueReplayThroughput(
+            replayedCount: replayState.replayedCount,
+            windowSeconds: windowSeconds,
+            replaysPerSecond: windowSeconds > 0 ? Double(replayState.replayedCount) / windowSeconds : 0
+        )
+        return OfflineQueuePipelineMetrics(
+            queueDepth: snapshot.count,
+            ageDistribution: ageDistribution,
+            replayThroughput: throughput,
+            terminalOutcomes: replayState.terminalOutcomes
+        )
+    }
+
+    @discardableResult
+    public func replayManualReviewItem(queueID: String, resolutionReason: String? = nil) async -> Bool {
+        guard let offlineWriteStore else { return false }
+        let snapshot = await offlineWriteStore.snapshot(now: Date())
+        guard let item = snapshot.first(where: { $0.receipt.queueID == queueID }) else {
+            return false
+        }
+        let requeued = await offlineWriteStore.requeueManualReview(
+            queueID: queueID,
+            reason: resolutionReason,
+            now: Date()
+        )
+        if requeued {
+            await emitOfflineQueueEvent(
+                .manualReviewRequeued(
+                    queueID: item.receipt.queueID,
+                    requestKey: item.receipt.requestKey,
+                    reason: resolutionReason
+                ),
+                telemetry: telemetryOfflineQueueContext(
+                    type: .replayStarted,
+                    queueID: item.receipt.queueID,
+                    requestKey: item.receipt.requestKey,
+                    attempt: item.attempt,
+                    enqueuedAt: item.receipt.enqueuedAt,
+                    reason: resolutionReason,
+                    resultType: "manual_review_requeued",
+                    priority: item.replayMetadata.priority
+                )
+            )
+        }
+        return requeued
+    }
+
+    public func rotateOfflineQueueEncryption() async -> Int {
+        guard let offlineWriteStore else { return 0 }
+        return await offlineWriteStore.rotateEncryption(now: Date())
     }
 
     @discardableResult
@@ -1503,7 +1652,9 @@ public final class NetworkClient: @unchecked Sendable {
             replayIdentity: replayIdentity(for: request, requestKey: requestKey, authScope: authScope),
             maxReplayAttempts: queuePolicy.maxReplayAttempts,
             dedupeWindowSeconds: queuePolicy.replayDedupeWindowSeconds,
-            conflictPolicy: queuePolicy.replayConflictPolicy
+            conflictPolicy: queuePolicy.replayConflictPolicy,
+            priority: queuePolicy.replayPriority,
+            schedulerPolicy: queuePolicy.replaySchedulerPolicy
         )
         do {
             let receipt = try await offlineWriteStore.enqueue(
@@ -1520,7 +1671,8 @@ public final class NetworkClient: @unchecked Sendable {
                     requestKey: receipt.requestKey,
                     attempt: 0,
                     enqueuedAt: receipt.enqueuedAt,
-                    resultType: nil
+                    resultType: nil,
+                    priority: replayMetadata.priority
                 )
             )
             return .queued(receipt)
@@ -1571,6 +1723,103 @@ public final class NetworkClient: @unchecked Sendable {
         return SHA256Util.hex(Data(raw.utf8))
     }
 
+    private func readyForReplay(entries: [OfflineWriteStoreEntry], now: Date) -> [OfflineWriteStoreEntry] {
+        entries.filter { entry in
+            switch entry.state {
+            case .queued, .replayScheduled:
+                return true
+            case .retryWaiting:
+                guard let nextRetryAt = entry.nextRetryAt else { return true }
+                return nextRetryAt <= now
+            case .replaying, .deadLetter, .manualReview:
+                return false
+            }
+        }
+    }
+
+    private func effectiveSchedulerPolicy(from entries: [OfflineWriteStoreEntry]) -> OfflineReplaySchedulerPolicy {
+        entries.first?.replayMetadata.schedulerPolicy ?? .init()
+    }
+
+    private func scheduleReplayBatch(
+        entries: [OfflineWriteStoreEntry],
+        limit: Int,
+        policy: OfflineReplaySchedulerPolicy,
+        now: Date
+    ) -> [OfflineWriteStoreEntry] {
+        guard limit > 0 else { return [] }
+        guard !entries.isEmpty else { return [] }
+        let sorted = entries.sorted { lhs, rhs in
+            lhs.receipt.position < rhs.receipt.position
+        }
+
+        // Starvation protection: older entries are always considered first.
+        let starvationCutoff = now.addingTimeInterval(-policy.starvationProtectionAgeSeconds)
+        let starved = sorted.filter { $0.receipt.enqueuedAt <= starvationCutoff }
+        var scheduled: [OfflineWriteStoreEntry] = Array(starved.prefix(limit))
+        if scheduled.count >= limit {
+            return scheduled
+        }
+
+        var usedIDs = Set(scheduled.map { $0.receipt.queueID })
+        var remaining = sorted.filter { !usedIDs.contains($0.receipt.queueID) }
+        if remaining.isEmpty {
+            return scheduled
+        }
+
+        var perPriorityBuckets: [OfflineQueuePriority: [OfflineWriteStoreEntry]] = [:]
+        for entry in remaining {
+            perPriorityBuckets[entry.replayMetadata.priority, default: []].append(entry)
+        }
+
+        var cycle: [OfflineQueuePriority] = []
+        for priority in OfflineQueuePriority.allCases {
+            let weight = max(1, policy.fairReplayWeights[priority] ?? 1)
+            cycle.append(contentsOf: Array(repeating: priority, count: weight))
+        }
+        if cycle.isEmpty {
+            cycle = OfflineQueuePriority.allCases
+        }
+
+        var perBandRemaining: [OfflineQueuePriority: Int] = [:]
+        for priority in OfflineQueuePriority.allCases {
+            perBandRemaining[priority] = Int.max
+        }
+        for limitRule in policy.priorityBandLimits {
+            perBandRemaining[limitRule.priority] = min(
+                perBandRemaining[limitRule.priority] ?? Int.max,
+                max(1, limitRule.maxConsecutiveReplays)
+            )
+        }
+
+        var cycleIndex = 0
+        while scheduled.count < limit {
+            if remaining.isEmpty {
+                break
+            }
+            let priority = cycle[cycleIndex % cycle.count]
+            cycleIndex += 1
+            guard (perBandRemaining[priority] ?? 0) > 0 else { continue }
+            guard var bucket = perPriorityBuckets[priority], !bucket.isEmpty else { continue }
+
+            let next = bucket.removeFirst()
+            perPriorityBuckets[priority] = bucket
+            scheduled.append(next)
+            usedIDs.insert(next.receipt.queueID)
+            perBandRemaining[priority] = (perBandRemaining[priority] ?? 1) - 1
+            remaining.removeAll { $0.receipt.queueID == next.receipt.queueID }
+        }
+
+        return scheduled
+    }
+
+    private func percentile(ages: [TimeInterval], p: Double) -> TimeInterval {
+        guard !ages.isEmpty else { return 0 }
+        let clipped = min(1, max(0, p))
+        let index = Int((Double(ages.count - 1) * clipped).rounded())
+        return ages[index]
+    }
+
     private func replayOfflineEntry(_ entry: OfflineWriteStoreEntry, store: any OfflineWriteStore) async {
         if await store.hasReplayTerminalSuccess(
             replayIdentity: entry.replayMetadata.replayIdentity,
@@ -1593,14 +1842,17 @@ public final class NetworkClient: @unchecked Sendable {
                     enqueuedAt: entry.receipt.enqueuedAt,
                     reason: "dedupe_success_window",
                     willRetry: false,
-                    resultType: "dedupe_suppressed"
+                    resultType: "dedupe_suppressed",
+                    priority: entry.replayMetadata.priority
                 )
             )
+            await offlineReplayMetricsStore.markOutcome(.dedupeSuppressed)
             return
         }
 
         let nextAttempt = max(1, entry.attempt + 1)
         await store.markReplaying(queueID: entry.receipt.queueID, attempt: nextAttempt, now: Date())
+        await offlineReplayMetricsStore.markReplay()
         await emitOfflineQueueEvent(
             .replayStarted(queueID: entry.receipt.queueID, requestKey: entry.receipt.requestKey, attempt: nextAttempt),
             telemetry: telemetryOfflineQueueContext(
@@ -1609,7 +1861,8 @@ public final class NetworkClient: @unchecked Sendable {
                 requestKey: entry.receipt.requestKey,
                 attempt: nextAttempt,
                 enqueuedAt: entry.receipt.enqueuedAt,
-                resultType: nil
+                resultType: nil,
+                priority: entry.replayMetadata.priority
             )
         )
 
@@ -1639,20 +1892,48 @@ public final class NetworkClient: @unchecked Sendable {
                     requestKey: entry.receipt.requestKey,
                     attempt: nextAttempt,
                     enqueuedAt: entry.receipt.enqueuedAt,
-                    resultType: "executed"
+                    resultType: "executed",
+                    priority: entry.replayMetadata.priority
                 )
             )
+            await offlineReplayMetricsStore.markOutcome(.succeeded)
         } catch let error as NetworkError {
+            let reason = Self.failureReason(error: error)
+            let conflictMetadata = OfflineQueueConflictMetadata(
+                queueID: entry.receipt.queueID,
+                requestKey: entry.receipt.requestKey,
+                replayIdentity: entry.replayMetadata.replayIdentity,
+                attempt: nextAttempt,
+                maxReplayAttempts: entry.replayMetadata.maxReplayAttempts,
+                failureReason: reason,
+                statusCode: error.statusCode,
+                priority: entry.replayMetadata.priority,
+                enqueuedAt: entry.receipt.enqueuedAt
+            )
             if shouldDeadLetterReplay(error: error, attempt: nextAttempt, maxReplayAttempts: entry.replayMetadata.maxReplayAttempts) {
-                let reason = Self.failureReason(error: error)
-                switch entry.replayMetadata.conflictPolicy {
-                case .drop:
+                let resolution: OfflineConflictResolutionDecision
+                if let offlineConflictResolver {
+                    resolution = offlineConflictResolver(conflictMetadata)
+                } else {
+                    switch entry.replayMetadata.conflictPolicy {
+                    case .drop:
+                        resolution = .drop(reason: nil)
+                    case .manualReview:
+                        resolution = .manualReview(reason: nil)
+                    case .retry:
+                        resolution = .retry(afterSeconds: nil)
+                    }
+                }
+
+                switch resolution {
+                case .drop(let explicitReason):
+                    let finalReason = explicitReason ?? reason
                     await store.markSucceeded(queueID: entry.receipt.queueID)
                     await emitOfflineQueueEvent(
                         .dropped(
                             queueID: entry.receipt.queueID,
                             requestKey: entry.receipt.requestKey,
-                            reason: "conflict_policy_drop:\(reason)"
+                            reason: "conflict_policy_drop:\(finalReason)"
                         ),
                         telemetry: telemetryOfflineQueueContext(
                             type: .replayDroppedConflict,
@@ -1660,16 +1941,19 @@ public final class NetworkClient: @unchecked Sendable {
                             requestKey: entry.receipt.requestKey,
                             attempt: nextAttempt,
                             enqueuedAt: entry.receipt.enqueuedAt,
-                            reason: reason,
+                            reason: finalReason,
                             willRetry: false,
-                            resultType: "dropped_conflict"
+                            resultType: "dropped_conflict",
+                            priority: entry.replayMetadata.priority
                         )
                     )
+                    await offlineReplayMetricsStore.markOutcome(.droppedConflict)
                     return
-                case .manualReview:
+                case .manualReview(let explicitReason):
+                    let finalReason = explicitReason ?? reason
                     await store.markManualReview(
                         queueID: entry.receipt.queueID,
-                        reason: reason,
+                        reason: finalReason,
                         now: Date()
                     )
                     await emitOfflineQueueEvent(
@@ -1677,7 +1961,7 @@ public final class NetworkClient: @unchecked Sendable {
                             queueID: entry.receipt.queueID,
                             requestKey: entry.receipt.requestKey,
                             attempt: nextAttempt,
-                            reason: reason
+                            reason: finalReason
                         ),
                         telemetry: telemetryOfflineQueueContext(
                             type: .manualReviewRequired,
@@ -1685,14 +1969,39 @@ public final class NetworkClient: @unchecked Sendable {
                             requestKey: entry.receipt.requestKey,
                             attempt: nextAttempt,
                             enqueuedAt: entry.receipt.enqueuedAt,
-                            reason: reason,
+                            reason: finalReason,
                             willRetry: false,
-                            resultType: "manual_review_required"
+                            resultType: "manual_review_required",
+                            priority: entry.replayMetadata.priority
                         )
                     )
+                    await offlineReplayMetricsStore.markOutcome(.manualReview)
                     return
-                case .retry:
-                    let delaySeconds = min(pow(2, Double(nextAttempt)), 60)
+                case .retry(let afterSeconds):
+                    if nextAttempt >= entry.replayMetadata.maxReplayAttempts {
+                        await store.markDeadLetter(queueID: entry.receipt.queueID, reason: reason, now: Date())
+                        await emitOfflineQueueEvent(
+                            .deadLettered(
+                                queueID: entry.receipt.queueID,
+                                requestKey: entry.receipt.requestKey,
+                                reason: reason
+                            ),
+                            telemetry: telemetryOfflineQueueContext(
+                                type: .deadLettered,
+                                queueID: entry.receipt.queueID,
+                                requestKey: entry.receipt.requestKey,
+                                attempt: nextAttempt,
+                                enqueuedAt: entry.receipt.enqueuedAt,
+                                reason: reason,
+                                willRetry: false,
+                                resultType: "terminal_failed",
+                                priority: entry.replayMetadata.priority
+                            )
+                        )
+                        await offlineReplayMetricsStore.markOutcome(.failed)
+                        return
+                    }
+                    let delaySeconds = max(0, afterSeconds ?? min(pow(2, Double(nextAttempt)), 60))
                     let nextRetryAt = Date().addingTimeInterval(delaySeconds)
                     await store.markRetryWaiting(
                         queueID: entry.receipt.queueID,
@@ -1717,7 +2026,8 @@ public final class NetworkClient: @unchecked Sendable {
                             enqueuedAt: entry.receipt.enqueuedAt,
                             reason: reason,
                             willRetry: true,
-                            resultType: "failed"
+                            resultType: "failed",
+                            priority: entry.replayMetadata.priority
                         )
                     )
                     return
@@ -1726,7 +2036,6 @@ public final class NetworkClient: @unchecked Sendable {
 
             let delaySeconds = min(pow(2, Double(nextAttempt)), 60)
             let nextRetryAt = Date().addingTimeInterval(delaySeconds)
-            let reason = Self.failureReason(error: error)
             await store.markRetryWaiting(
                 queueID: entry.receipt.queueID,
                 attempt: nextAttempt,
@@ -1750,7 +2059,8 @@ public final class NetworkClient: @unchecked Sendable {
                     enqueuedAt: entry.receipt.enqueuedAt,
                     reason: reason,
                     willRetry: true,
-                    resultType: "failed"
+                    resultType: "failed",
+                    priority: entry.replayMetadata.priority
                 )
             )
         } catch {
@@ -1781,7 +2091,8 @@ public final class NetworkClient: @unchecked Sendable {
                     enqueuedAt: entry.receipt.enqueuedAt,
                     reason: reason,
                     willRetry: true,
-                    resultType: "failed"
+                    resultType: "failed",
+                    priority: entry.replayMetadata.priority
                 )
             )
         }
@@ -1815,7 +2126,9 @@ public final class NetworkClient: @unchecked Sendable {
         enqueuedAt: Date? = nil,
         reason: String? = nil,
         willRetry: Bool? = nil,
-        resultType: String? = nil
+        resultType: String? = nil,
+        priority: OfflineQueuePriority? = nil,
+        skippedRecords: Int? = nil
     ) -> TelemetryOfflineQueueContext {
         let ageMilliseconds: Double?
         if let enqueuedAt {
@@ -1831,7 +2144,9 @@ public final class NetworkClient: @unchecked Sendable {
             ageMilliseconds: ageMilliseconds,
             reason: reason,
             willRetry: willRetry,
-            resultType: resultType
+            resultType: resultType,
+            priority: priority,
+            skippedRecords: skippedRecords
         )
     }
 
