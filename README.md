@@ -8,6 +8,7 @@ When multiple callers ask for the same resource at the same time, only one under
 
 - [Setup & Usage Guide](docs/SETUP_GUIDE.md)
 - [Unit Test Policy](docs/UNIT_TEST_POLICY.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
 - [Examples](Examples/README.md)
 - [v1.15 Traceability Pack](docs/TRACEABILITY_PACK_v1.15.md)
 
