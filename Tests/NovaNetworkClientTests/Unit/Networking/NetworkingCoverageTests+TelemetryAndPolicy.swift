@@ -3,6 +3,19 @@ import Testing
 @testable import NovaNetworkClient
 
 extension NetworkingCoverageTests {
+    private func waitUntil(
+        timeoutNanoseconds: UInt64 = 1_000_000_000,
+        pollNanoseconds: UInt64 = 5_000_000,
+        condition: @escaping @Sendable () async -> Bool
+    ) async {
+        let deadline = DispatchTime.now().uptimeNanoseconds &+ timeoutNanoseconds
+        while DispatchTime.now().uptimeNanoseconds < deadline {
+            if await condition() {
+                return
+            }
+            try? await Task.sleep(nanoseconds: pollNanoseconds)
+        }
+    }
 
     @Test
     func telemetryHooksEmitCoalescerRetryAndCancellationContracts() async {
@@ -32,7 +45,11 @@ extension NetworkingCoverageTests {
         )
         let retryRequest = APIRequest(method: .get, url: URL(string: "https://example.com/telemetry-retry-cancel")!)
         _ = try? await retryClient.load(request: retryRequest, authScope: nil)
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        await waitUntil {
+            let retryCount = await recorder.retryCount()
+            let reasons = await recorder.cancellationReasons()
+            return retryCount >= 1 && reasons.contains("retrySleepCancelled")
+        }
 
         let coalescerTypes = await recorder.coalescerTypes()
         let coalescedJoinCount = coalescerTypes.filter { $0 == .coalesced }.count
@@ -66,7 +83,10 @@ extension NetworkingCoverageTests {
             options: .init(offlineQueuePolicy: .init(mode: .alwaysEnqueue))
         )
         _ = await client.flushOfflineQueue()
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        await waitUntil {
+            let events = await recorder.offlineQueueSnapshot()
+            return events.contains(where: { $0.type == .replaySucceeded })
+        }
 
         let events = await recorder.offlineQueueSnapshot()
         #expect(events.contains(where: { $0.type == .enqueued }))
@@ -107,7 +127,10 @@ extension NetworkingCoverageTests {
             options: .init(offlineQueuePolicy: .init(mode: .alwaysEnqueue))
         )
         _ = await client.flushOfflineQueue()
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        await waitUntil {
+            let events = await recorder.offlineQueueSnapshot()
+            return events.contains(where: { $0.type == .replayFailed })
+        }
 
         let events = await recorder.offlineQueueSnapshot()
         #expect(!events.contains(where: { $0.type == .replaySucceeded }))
@@ -276,7 +299,11 @@ extension NetworkingCoverageTests {
 
         let request = APIRequest(method: .get, url: URL(string: "https://example.com/telemetry-runtime-retry")!)
         _ = try await client.load(request: request, authScope: nil)
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        await waitUntil {
+            let retries = await recorder.retrySnapshot().count
+            let updates = await recorder.policyUpdatedSnapshot().count
+            return retries == 1 && updates == 1
+        }
 
         let retryEvents = await recorder.retrySnapshot()
         #expect(retryEvents.count == 1)
@@ -389,7 +416,9 @@ extension NetworkingCoverageTests {
         )
 
         _ = try await (one, two)
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        await waitUntil {
+            !(await recorder.queueSnapshot()).isEmpty
+        }
 
         let queueEvents = await recorder.queueSnapshot()
         #expect(!queueEvents.isEmpty)
@@ -413,7 +442,18 @@ extension NetworkingCoverageTests {
         let request = APIRequest(method: .get, url: URL(string: "https://example.com/retry-lifecycle")!)
 
         _ = try await client.load(request: request, authScope: nil)
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        await waitUntil {
+            let events = await recorder.snapshot()
+            let retryCount = events.reduce(0) { count, event in
+                if case .retryScheduled = event { return count + 1 }
+                return count
+            }
+            let successCount = events.reduce(0) { count, event in
+                if case .requestSucceeded = event { return count + 1 }
+                return count
+            }
+            return retryCount >= 1 && successCount >= 1
+        }
 
         let events = await recorder.snapshot()
         let attemptCount = events.reduce(0) { count, event in
@@ -458,7 +498,13 @@ extension NetworkingCoverageTests {
         } catch {
             // expected
         }
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        await waitUntil {
+            let events = await recorder.snapshot()
+            return events.contains { event in
+                if case .requestFailed = event { return true }
+                return false
+            }
+        }
 
         let events = await recorder.snapshot()
         let successCount = events.reduce(0) { count, event in
@@ -602,7 +648,9 @@ extension NetworkingCoverageTests {
             scope: .host("example.com")
         )
         await client.updateCoalescerSchedulerPolicy(.init(highWeight: 3, mediumWeight: 2, lowWeight: 1))
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        await waitUntil {
+            await recorder.policyUpdatedSnapshot().count >= 2
+        }
 
         let events = await recorder.policyUpdatedSnapshot()
         #expect(events.count == 2)
