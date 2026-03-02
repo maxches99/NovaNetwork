@@ -208,6 +208,7 @@ public enum TelemetryWebSocketEventType: String, Sendable {
     case reconnectSuppressedOffline = "reconnect_suppressed_offline"
     case reconnectResumedOnline = "reconnect_resumed_online"
     case reconnectExhausted = "reconnect_exhausted"
+    case messageDeferred = "message_deferred"
     case messageQueued = "message_queued"
     case messageDropped = "message_dropped"
     case persistedQueueSaved = "persisted_queue_saved"
@@ -217,8 +218,12 @@ public enum TelemetryWebSocketEventType: String, Sendable {
     case persistedReplaySucceeded = "persisted_replay_succeeded"
     case persistedReplayFailed = "persisted_replay_failed"
     case subscriptionRestoreStarted = "subscription_restore_started"
+    case subscriptionRestoreRetry = "subscription_restore_retry"
     case subscriptionRestoreSucceeded = "subscription_restore_succeeded"
     case subscriptionRestoreFailed = "subscription_restore_failed"
+    case subscriptionRestoreCompleted = "subscription_restore_completed"
+    case ackResendAttempt = "ack_resend_attempt"
+    case ackDuplicate = "ack_duplicate"
     case ackTimeout = "ack_timeout"
 }
 
@@ -234,6 +239,12 @@ public struct TelemetryWebSocketContext: Sendable {
     public let messageID: String?
     public let subscriptionRestoreTotalCount: Int?
     public let subscriptionRestoreFailedCount: Int?
+    public let correlationID: String?
+    public let ackTimeoutClass: String?
+    public let ackAttempt: Int?
+    public let recoverability: String?
+    public let reconnectPhase: String?
+    public let lastTransitionReason: String?
 
     public init(
         type: TelemetryWebSocketEventType,
@@ -246,7 +257,13 @@ public struct TelemetryWebSocketContext: Sendable {
         queuePolicy: String? = nil,
         messageID: String? = nil,
         subscriptionRestoreTotalCount: Int? = nil,
-        subscriptionRestoreFailedCount: Int? = nil
+        subscriptionRestoreFailedCount: Int? = nil,
+        correlationID: String? = nil,
+        ackTimeoutClass: String? = nil,
+        ackAttempt: Int? = nil,
+        recoverability: String? = nil,
+        reconnectPhase: String? = nil,
+        lastTransitionReason: String? = nil
     ) {
         self.type = type
         self.connectionID = connectionID
@@ -259,6 +276,12 @@ public struct TelemetryWebSocketContext: Sendable {
         self.messageID = messageID
         self.subscriptionRestoreTotalCount = subscriptionRestoreTotalCount
         self.subscriptionRestoreFailedCount = subscriptionRestoreFailedCount
+        self.correlationID = correlationID
+        self.ackTimeoutClass = ackTimeoutClass
+        self.ackAttempt = ackAttempt
+        self.recoverability = recoverability
+        self.reconnectPhase = reconnectPhase
+        self.lastTransitionReason = lastTransitionReason
     }
 }
 

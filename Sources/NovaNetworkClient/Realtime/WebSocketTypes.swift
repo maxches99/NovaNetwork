@@ -16,6 +16,35 @@ public enum WebSocketConnectionHealth: Sendable, Equatable {
     case unhealthy(reason: String)
 }
 
+public enum WebSocketRecoverability: String, Sendable, Equatable, Codable {
+    case recoverable
+    case nonRecoverable
+    case manualInterventionRequired
+}
+
+public enum WebSocketReconnectPhase: String, Sendable, Equatable, Codable {
+    case disconnected
+    case connecting
+    case connected
+    case waitingForConnectivity
+    case backoff
+    case recovering
+    case failed
+}
+
+public enum WebSocketQueuePressureLevel: String, Sendable, Equatable, Codable {
+    case nominal
+    case elevated
+    case high
+    case critical
+}
+
+public enum WebSocketAckTimeoutClass: String, Sendable, Equatable, Codable {
+    case fast
+    case slow
+    case stalled
+}
+
 public enum WebSocketMessage: Sendable, Equatable, Codable {
     case text(String)
     case binary(Data)
@@ -81,14 +110,36 @@ public enum WebSocketError: Error, Sendable, Equatable {
     case reconnectExhausted
 }
 
+public struct WebSocketAckPendingAgeBuckets: Sendable, Equatable, Codable {
+    public let underOneSecond: Int
+    public let oneToFiveSeconds: Int
+    public let overFiveSeconds: Int
+
+    public init(
+        underOneSecond: Int = 0,
+        oneToFiveSeconds: Int = 0,
+        overFiveSeconds: Int = 0
+    ) {
+        self.underOneSecond = max(0, underOneSecond)
+        self.oneToFiveSeconds = max(0, oneToFiveSeconds)
+        self.overFiveSeconds = max(0, overFiveSeconds)
+    }
+}
+
 public struct WebSocketDiagnostics: Sendable, Equatable {
     public let connectionID: String
     public let state: WebSocketConnectionState
     public let health: WebSocketConnectionHealth
     public let reconnectAttempt: Int
     public let queuedOutboundMessages: Int
+    public let queueCapacity: Int
+    public let queuePressureLevel: WebSocketQueuePressureLevel
     public let pendingAckCount: Int
+    public let ackPendingAgeBuckets: WebSocketAckPendingAgeBuckets
     public let trackedAckMessageIDs: Int
+    public let reconnectPhase: WebSocketReconnectPhase
+    public let lastTransitionReason: String?
+    public let recoverability: WebSocketRecoverability?
     public let lastError: WebSocketError?
 
     public init(
@@ -97,8 +148,14 @@ public struct WebSocketDiagnostics: Sendable, Equatable {
         health: WebSocketConnectionHealth,
         reconnectAttempt: Int,
         queuedOutboundMessages: Int,
+        queueCapacity: Int = 0,
+        queuePressureLevel: WebSocketQueuePressureLevel = .nominal,
         pendingAckCount: Int,
+        ackPendingAgeBuckets: WebSocketAckPendingAgeBuckets = .init(),
         trackedAckMessageIDs: Int,
+        reconnectPhase: WebSocketReconnectPhase = .disconnected,
+        lastTransitionReason: String? = nil,
+        recoverability: WebSocketRecoverability? = nil,
         lastError: WebSocketError?
     ) {
         self.connectionID = connectionID
@@ -106,8 +163,14 @@ public struct WebSocketDiagnostics: Sendable, Equatable {
         self.health = health
         self.reconnectAttempt = reconnectAttempt
         self.queuedOutboundMessages = queuedOutboundMessages
+        self.queueCapacity = max(0, queueCapacity)
+        self.queuePressureLevel = queuePressureLevel
         self.pendingAckCount = pendingAckCount
+        self.ackPendingAgeBuckets = ackPendingAgeBuckets
         self.trackedAckMessageIDs = trackedAckMessageIDs
+        self.reconnectPhase = reconnectPhase
+        self.lastTransitionReason = lastTransitionReason
+        self.recoverability = recoverability
         self.lastError = lastError
     }
 }

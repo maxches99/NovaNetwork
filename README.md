@@ -363,8 +363,13 @@ let socket = WebSocketClient(
         url: URL(string: "wss://ws.postman-echo.com/raw")!,
         headers: ["Authorization": "Bearer token"],
         outboundQueuePolicy: .init(maxQueuedMessages: 100, overflowPolicy: .dropOldest),
-        ackPolicy: .init(dedupeWindowNanoseconds: 120_000_000_000, maxTrackedMessageIDs: 2_048),
-        authRefreshPolicy: .init(maxAttempts: 1)
+        ackPolicy: .init(
+            dedupeWindowNanoseconds: 120_000_000_000,
+            maxTrackedMessageIDs: 2_048,
+            maxResendAttempts: 1
+        ),
+        authRefreshPolicy: .init(maxAttempts: 1),
+        subscriptionReplayPolicy: .init(maxAttemptsPerSubscription: 2, retryDelayNanoseconds: 100_000_000)
     ),
     authRefreshProvider: .init(
         refreshHeaders: {
@@ -400,6 +405,9 @@ let health = await socket.connectionHealth()
 print("ws health:", health)
 let diagnostics = await socket.webSocketDiagnostics()
 print("ws queue depth:", diagnostics.queuedOutboundMessages)
+print("ws queue pressure:", diagnostics.queuePressureLevel)
+print("ws ack age buckets:", diagnostics.ackPendingAgeBuckets)
+print("ws reconnect phase:", diagnostics.reconnectPhase, diagnostics.lastTransitionReason ?? "n/a")
 await socket.forceReconnect(reason: "manual_recovery")
 await socket.disconnect(reason: "done")
 ```
@@ -421,6 +429,8 @@ For connectivity-aware reconnect suppression/resume, pass `connectivityMonitor` 
 For durable outbound buffering across app restarts, pass `outboundQueueStore` (for example `DiskWebSocketOutboundQueueStore`).
 
 For optional subscription restore after reconnect, register subscriptions via `registerSubscription(id:message:options:)`.
+
+`WebSocketDiagnostics` also includes queue pressure, ACK pending age buckets, and reconnect phase/reason snapshots for incident triage.
 
 ## In-Flight Diagnostics
 
