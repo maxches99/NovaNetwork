@@ -12,6 +12,7 @@ When multiple callers ask for the same resource at the same time, only one under
 - [Security Policy](SECURITY.md)
 - [Examples](Examples/README.md)
 - [v1.15 Traceability Pack](docs/TRACEABILITY_PACK_v1.15.md)
+- [v1.16 Traceability Pack](docs/TRACEABILITY_PACK_v1.16.md)
 
 ## Product Delivery Templates
 
