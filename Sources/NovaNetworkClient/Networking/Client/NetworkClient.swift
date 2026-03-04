@@ -476,7 +476,7 @@ public final class NetworkClient: @unchecked Sendable {
         guard let offlineWriteStore else {
             return OfflineQueuePipelineMetrics(
                 queueDepth: 0,
-                ageDistribution: .init(p50Seconds: 0, p90Seconds: 0, maxSeconds: 0),
+                ageDistribution: .init(p50Seconds: 0, p90Seconds: 0, p95Seconds: 0, maxSeconds: 0),
                 replayThroughput: .init(replayedCount: 0, windowSeconds: 0, replaysPerSecond: 0),
                 terminalOutcomes: [:]
             )
@@ -490,6 +490,7 @@ public final class NetworkClient: @unchecked Sendable {
         let ageDistribution = OfflineQueueAgeDistribution(
             p50Seconds: percentile(ages: ages, p: 0.5),
             p90Seconds: percentile(ages: ages, p: 0.9),
+            p95Seconds: percentile(ages: ages, p: 0.95),
             maxSeconds: ages.last ?? 0
         )
         let replayState = await offlineReplayCoordinator.snapshotMetrics(now: now)
