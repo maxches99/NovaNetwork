@@ -14,6 +14,7 @@ When multiple callers ask for the same resource at the same time, only one under
 - [Telemetry Contract v2](docs/TELEMETRY_CONTRACT_V2.md)
 - [v1.15 Traceability Pack](docs/TRACEABILITY_PACK_v1.15.md)
 - [v1.16 Traceability Pack](docs/TRACEABILITY_PACK_v1.16.md)
+- [v1.19 Traceability Pack](docs/TRACEABILITY_PACK_v1.19.md)
 
 ## Product Delivery Templates
 
@@ -71,7 +72,14 @@ targets: [
   - `NetworkClientPreset.restHeavy`
   - `NetworkClientPreset.realtimeHeavy`
   - `NetworkClientPreset.offlineFirst`
+- Presets v2 composition model (`base preset + overlays`) via:
+  - `NetworkClientPreset.compose(base:overlays:)`
+  - `NetworkClientPresetOverlayKind`
 - Safe preset override points via `NetworkClientPreset.RequestOverrides` (merge-only overrides).
+- Production onboarding helpers:
+  - `NetworkClientProductionProfileGenerator`
+  - `NetworkClientPresetValidator` / `validateProductionReadiness`
+  - anti-pattern validation report with blocking vs warning findings.
 - Testable retry behavior via injectable clock and random generator.
 - Data and typed `Decodable` loading APIs.
 - Typed error mapping overloads (`errorMapper`).
@@ -140,6 +148,35 @@ let payload = try await client.load(
     authScope: "user:42",
     options: safeOptions
 )
+```
+
+## DX 2.0 Production Profile Quick Start (v1.19)
+
+```swift
+import Foundation
+import NovaNetworkClient
+
+let profile = NetworkClientProductionProfileGenerator().generate(
+    goal: .offlineFirst,
+    overlays: [.offlineDurability, .strictReliability],
+    offlineStoreConfigured: true
+)
+
+guard profile.validation.isProductionReady else {
+    for issue in profile.validation.issues {
+        print("[\(issue.severity.rawValue)] \(issue.code): \(issue.message)")
+    }
+    fatalError("Fix production validation issues before rollout.")
+}
+
+let preset = profile.composedPreset
+let client = NetworkClient(
+    transport: Transport(),
+    retryPolicy: preset.retryPolicy,
+    defaultCachePolicy: preset.defaultCachePolicy,
+    offlineWriteStore: DiskOfflineWriteStore(directoryURL: queueURL)
+)
+await client.applyRuntimePolicy(from: preset)
 ```
 
 ## Examples

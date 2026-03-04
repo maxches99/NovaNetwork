@@ -23,6 +23,9 @@ Use ``NetworkClient`` for a batteries-included integration with `URLSession`.
 ### Networking
 
 - ``NetworkClient``
+- ``NetworkClientPreset``
+- ``NetworkClientPresetOverlayKind``
+- ``NetworkClientProductionProfileGenerator``
 - ``CachePolicy``
 - ``NetworkClientEvent``
 - ``APIRequest``

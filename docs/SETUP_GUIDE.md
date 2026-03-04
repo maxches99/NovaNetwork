@@ -7,20 +7,21 @@ This guide covers full setup and practical usage of `NovaNetworkClient`.
 1. [Requirements](#requirements)
 2. [Installation (SwiftPM)](#installation-swiftpm)
 3. [Minimal Setup](#minimal-setup)
-4. [Building Requests](#building-requests)
-5. [Loading Raw Data](#loading-raw-data)
-6. [Loading Decodable Models](#loading-decodable-models)
-7. [How Coalescing Works](#how-coalescing-works)
-8. [Cancellation Policies](#cancellation-policies)
-9. [Fingerprint Policy](#fingerprint-policy)
-10. [Retry Policy](#retry-policy)
-11. [Cache Policies](#cache-policies)
-12. [Offline Queue (Write Requests)](#offline-queue-write-requests)
-13. [Observability (Events + Metrics)](#observability-events--metrics)
-14. [Error Handling](#error-handling)
-15. [Using Custom Transport](#using-custom-transport)
-16. [Using `RequestCoalescer` Directly](#using-requestcoalescer-directly)
-17. [Testing](#testing)
+4. [Production Profile Generator (DX 2.0)](#production-profile-generator-dx-20)
+5. [Building Requests](#building-requests)
+6. [Loading Raw Data](#loading-raw-data)
+7. [Loading Decodable Models](#loading-decodable-models)
+8. [How Coalescing Works](#how-coalescing-works)
+9. [Cancellation Policies](#cancellation-policies)
+10. [Fingerprint Policy](#fingerprint-policy)
+11. [Retry Policy](#retry-policy)
+12. [Cache Policies](#cache-policies)
+13. [Offline Queue (Write Requests)](#offline-queue-write-requests)
+14. [Observability (Events + Metrics)](#observability-events--metrics)
+15. [Error Handling](#error-handling)
+16. [Using Custom Transport](#using-custom-transport)
+17. [Using `RequestCoalescer` Directly](#using-requestcoalescer-directly)
+18. [Testing](#testing)
 
 ## Requirements
 
@@ -57,6 +58,42 @@ import Foundation
 import NovaNetworkClient
 
 let client = NetworkClient()
+```
+
+## Production Profile Generator (DX 2.0)
+
+Use presets v2 (`base + overlays`) plus anti-pattern checks for faster production onboarding.
+
+```swift
+let profile = NetworkClientProductionProfileGenerator().generate(
+    goal: .restAPI,
+    overlays: [.strictReliability],
+    offlineStoreConfigured: false
+)
+
+guard profile.validation.isProductionReady else {
+    for issue in profile.validation.issues {
+        print("[\(issue.severity.rawValue)] \(issue.code): \(issue.message)")
+    }
+    fatalError("Invalid production profile. Resolve validator findings first.")
+}
+
+let preset = profile.composedPreset
+let client = NetworkClient(
+    retryPolicy: preset.retryPolicy,
+    defaultCachePolicy: preset.defaultCachePolicy
+)
+await client.applyRuntimePolicy(from: preset)
+```
+
+You can also compose manually:
+
+```swift
+let preset = NetworkClientPreset.compose(
+    base: .realtimeHeavy,
+    overlays: [.lowLatency, .highThroughput]
+)
+let report = preset.validateProductionReadiness(overlays: [.lowLatency, .highThroughput])
 ```
 
 `NetworkClient` default configuration:

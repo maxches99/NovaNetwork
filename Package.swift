@@ -19,6 +19,7 @@ let package = Package(
         .executable(name: "NovaNetworkClientReconnectRecoveryReferenceExample", targets: ["NovaNetworkClientReconnectRecoveryReferenceExample"]),
         .executable(name: "NovaNetworkClientOfflineReplayReferenceExample", targets: ["NovaNetworkClientOfflineReplayReferenceExample"]),
         .executable(name: "NovaNetworkClientDiagnosticsReferenceExample", targets: ["NovaNetworkClientDiagnosticsReferenceExample"]),
+        .executable(name: "NovaNetworkClientProductionProfileExample", targets: ["NovaNetworkClientProductionProfileExample"]),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
@@ -86,6 +87,11 @@ let package = Package(
             name: "NovaNetworkClientDiagnosticsReferenceExample",
             dependencies: ["NovaNetworkClient"],
             path: "Examples/DiagnosticsReference"
+        ),
+        .executableTarget(
+            name: "NovaNetworkClientProductionProfileExample",
+            dependencies: ["NovaNetworkClient"],
+            path: "Examples/ProductionProfile"
         ),
     ]
 )
