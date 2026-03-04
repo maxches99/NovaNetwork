@@ -191,18 +191,27 @@ actor MiddlewareProbe {
 final class TestConnectivityMonitor: OfflineConnectivityMonitor, @unchecked Sendable {
     private let queue = DispatchQueue(label: "TestConnectivityMonitor.state")
     private var continuation: AsyncStream<Bool>.Continuation?
+    private var buffered: [Bool] = []
 
     func statusStream() -> AsyncStream<Bool> {
         AsyncStream { continuation in
             queue.sync {
                 self.continuation = continuation
+                for value in buffered {
+                    continuation.yield(value)
+                }
+                buffered.removeAll()
             }
         }
     }
 
     func emit(_ isOnline: Bool) {
         queue.async {
-            self.continuation?.yield(isOnline)
+            if let continuation = self.continuation {
+                continuation.yield(isOnline)
+            } else {
+                self.buffered.append(isOnline)
+            }
         }
     }
 }

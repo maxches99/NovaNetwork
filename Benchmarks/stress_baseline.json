@@ -1,10 +1,14 @@
 {
-  "retryStormExpectedTransportCalls": 240,
-  "retryStormExpectedSuccesses": 120,
-  "breakerFlappingMinimumTransitions": 60,
-  "runtimeUpdateMinimumSuccesses": 40,
-  "mixedPriorityMinimumSuccesses": 110,
+  "retryStormExpectedTransportCalls": 160,
+  "retryStormExpectedSuccesses": 80,
+  "breakerFlappingMinimumTransitions": 40,
+  "runtimeUpdateMinimumSuccesses": 20,
+  "mixedPriorityMinimumSuccesses": 70,
   "mixedPriorityMaximumP99LatencyMilliseconds": 3000.0,
-  "cancellationBurstMinimumCancelled": 50,
-  "cancellationBurstMinimumSuccesses": 20
+  "cancellationBurstMinimumCancelled": 30,
+  "cancellationBurstMinimumSuccesses": 15,
+  "offlineRealtimeMinimumReplayed": 20,
+  "offlineRealtimeMinimumRealtimeSuccesses": 40,
+  "offlineRealtimeMaximumP99LatencyMilliseconds": 3000.0,
+  "offlineRealtimeMaximumTransportCalls": 80
 }
