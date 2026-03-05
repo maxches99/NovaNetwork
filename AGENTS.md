@@ -25,6 +25,7 @@ Use this file as the default operating guide for coding agents.
 - Keep changes minimal and focused on the requested task.
 - Prefer fixing root causes over adding workarounds.
 - Do not break public API without updating tests and docs.
+- Document all `public`/`open` entities and methods with DocC comments (`///`), and keep them in sync with behavior changes.
 - Add or update tests for behavior changes.
 - Follow `docs/UNIT_TEST_POLICY.md` when creating and maintaining tests.
 - Keep code style consistent with surrounding files.
