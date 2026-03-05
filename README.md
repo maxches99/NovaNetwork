@@ -11,6 +11,7 @@ When multiple callers ask for the same resource at the same time, only one under
 - [Code of Conduct](CODE_OF_CONDUCT.md)
 - [Security Policy](SECURITY.md)
 - [Examples](Examples/README.md)
+- [Telemetry Contract v2](docs/TELEMETRY_CONTRACT_V2.md)
 - [v1.15 Traceability Pack](docs/TRACEABILITY_PACK_v1.15.md)
 - [v1.16 Traceability Pack](docs/TRACEABILITY_PACK_v1.16.md)
 
@@ -255,6 +256,7 @@ if let manualItem = snapshot.first(where: { $0.state == .manualReview }) {
 let metrics = await client.offlineQueuePipelineMetrics()
 print(metrics.queueDepth)
 print(metrics.ageDistribution.p90Seconds)
+print(metrics.ageDistribution.p95Seconds)
 print(metrics.replayThroughput.replaysPerSecond)
 print(metrics.terminalOutcomes)
 ```
@@ -621,19 +623,26 @@ let client = NetworkClient(
 
 ## Observability
 
-Use observer events or metrics snapshot:
+Use observer events, telemetry hooks, or the OpenTelemetry adapter layer:
 
 ```swift
+let exporter = MyOpenTelemetryExporter() // implements OpenTelemetryExporting
+let adapter = OpenTelemetryAdapter()
 let client = NetworkClient(
     transport: Transport(),
-    observer: { event in
-        print(event)
-    }
+    telemetryHooks: adapter.makeHooks(exporter: exporter)
 )
 
-let metrics = await client.coalescerMetrics()
-print(metrics.coalescedHits)
+let pipeline = await client.offlineQueuePipelineMetrics()
+adapter.emitPipelineMetrics(
+    pipeline,
+    exporter: exporter,
+    attributes: ["scope": .string("global")]
+)
 ```
+
+Observability Contract v2 payloads include top-level `event_version` and `contract_version`.
+Default values are `2` and `"2.0"`.
 
 ## Batch Loading
 

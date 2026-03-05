@@ -44,3 +44,7 @@ Use ``NetworkClient`` for a batteries-included integration with `URLSession`.
 
 - ``RequestCoalescer/Metrics``
 - ``RequestCoalescer/Event``
+- ``NetworkTelemetryHooks``
+- ``TelemetryContractVersion``
+- ``OpenTelemetryAdapter``
+- ``OpenTelemetryExporting``

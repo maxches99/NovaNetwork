@@ -373,6 +373,22 @@ Event types:
 - runtime policy updates
 - offline queue lifecycle (`enqueued`, `replayStarted`, `replaySucceeded`, `replayFailed`, `deadLettered`, `dropped`)
 
+OpenTelemetry adapter without core dependency:
+
+```swift
+let exporter = MyOpenTelemetryExporter() // implements OpenTelemetryExporting in app target
+let adapter = OpenTelemetryAdapter()
+let client = NetworkClient(
+    transport: Transport(),
+    telemetryHooks: adapter.makeHooks(exporter: exporter)
+)
+
+let pipeline = await client.offlineQueuePipelineMetrics()
+adapter.emitPipelineMetrics(pipeline, exporter: exporter)
+```
+
+Contract v2 payloads include top-level `event_version` and `contract_version`.
+
 Read counters with `coalescerMetrics()`:
 
 ```swift

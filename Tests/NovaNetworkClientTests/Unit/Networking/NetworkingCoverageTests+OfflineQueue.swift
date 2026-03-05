@@ -516,6 +516,7 @@ extension NetworkingCoverageTests {
         #expect(metrics.replayThroughput.replayedCount >= 1)
         #expect(metrics.replayThroughput.replaysPerSecond >= 0)
         #expect(metrics.ageDistribution.maxSeconds >= metrics.ageDistribution.p50Seconds)
+        #expect(metrics.ageDistribution.p95Seconds >= metrics.ageDistribution.p90Seconds)
         #expect((metrics.terminalOutcomes[.succeeded] ?? 0) >= 1)
         #expect(metrics.terminalOutcomes.values.reduce(0, +) >= 1)
     }

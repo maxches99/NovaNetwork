@@ -3,11 +3,18 @@ import Foundation
 public struct OfflineQueueAgeDistribution: Sendable, Equatable {
     public let p50Seconds: TimeInterval
     public let p90Seconds: TimeInterval
+    public let p95Seconds: TimeInterval
     public let maxSeconds: TimeInterval
 
-    public init(p50Seconds: TimeInterval, p90Seconds: TimeInterval, maxSeconds: TimeInterval) {
+    public init(
+        p50Seconds: TimeInterval,
+        p90Seconds: TimeInterval,
+        p95Seconds: TimeInterval? = nil,
+        maxSeconds: TimeInterval
+    ) {
         self.p50Seconds = max(0, p50Seconds)
         self.p90Seconds = max(0, p90Seconds)
+        self.p95Seconds = max(0, p95Seconds ?? p90Seconds)
         self.maxSeconds = max(0, maxSeconds)
     }
 }
