@@ -65,6 +65,218 @@ private struct WebSocketOutboundEnvelope: Sendable {
     let resolvedMessageID: String?
 }
 
+private enum WebSocketOutboundEnqueueResult {
+    case enqueued
+    case droppedNewest
+    case droppedOldest
+}
+
+private protocol WebSocketConnectionManaging {
+    func mapError(_ error: any Error) -> WebSocketError
+    func recoverability(for error: WebSocketError) -> WebSocketRecoverability
+    func shouldReconnect(after error: WebSocketError, maxAttempts: Int) -> Bool
+    func reconnectDelayNanoseconds(
+        forAttempt attempt: Int,
+        policy: WebSocketReconnectPolicy,
+        randomGenerator: any RetryRandomGenerator
+    ) -> UInt64
+    func burstGuardDelayNanoseconds(
+        maxJitterNanoseconds: UInt64,
+        randomGenerator: any RetryRandomGenerator
+    ) -> UInt64
+}
+
+private protocol WebSocketAckManaging {
+    func isAckRecentlyProcessed(
+        _ messageID: String,
+        acknowledgedMessageIDs: inout [String: UInt64],
+        policy: WebSocketAckPolicy
+    ) -> Bool
+    func trackAcknowledgement(
+        for messageID: String,
+        acknowledgedMessageIDs: inout [String: UInt64],
+        policy: WebSocketAckPolicy
+    )
+    func ackPendingAgeBuckets(_ pendingAckStartedAt: [String: UInt64]) -> WebSocketAckPendingAgeBuckets
+}
+
+private protocol WebSocketOutboundQueueManaging {
+    func enqueue(
+        _ envelope: WebSocketOutboundEnvelope,
+        outboundQueue: inout [WebSocketOutboundEnvelope],
+        policy: WebSocketOutboundQueuePolicy
+    ) throws -> WebSocketOutboundEnqueueResult
+    func queuePressureLevel(depth: Int, capacity: Int) -> WebSocketQueuePressureLevel
+}
+
+private struct DefaultWebSocketConnectionManager: WebSocketConnectionManaging {
+    func mapError(_ error: any Error) -> WebSocketError {
+        if let websocketError = error as? WebSocketError {
+            return websocketError
+        }
+        if error is CancellationError {
+            return .cancelled
+        }
+        if let urlError = error as? URLError {
+            if urlError.code == .userAuthenticationRequired {
+                return .auth(description: urlError.localizedDescription)
+            }
+            if urlError.code == .timedOut {
+                return .timeout
+            }
+        }
+        return .transport(description: String(describing: error))
+    }
+
+    func recoverability(for error: WebSocketError) -> WebSocketRecoverability {
+        switch error {
+        case .timeout, .transport:
+            return .recoverable
+        case .auth, .protocolViolation:
+            return .manualInterventionRequired
+        case .cancelled, .disconnected, .reconnectExhausted, .ackTimeout:
+            return .nonRecoverable
+        }
+    }
+
+    func shouldReconnect(after error: WebSocketError, maxAttempts: Int) -> Bool {
+        guard maxAttempts > 0 else { return false }
+        return recoverability(for: error) == .recoverable
+    }
+
+    func reconnectDelayNanoseconds(
+        forAttempt attempt: Int,
+        policy: WebSocketReconnectPolicy,
+        randomGenerator: any RetryRandomGenerator
+    ) -> UInt64 {
+        let exponent = min(max(0, attempt - 1), 16)
+        let (scaledValue, overflow) = policy.baseDelayNanoseconds.multipliedReportingOverflow(by: UInt64(1 << exponent))
+        let scaled = overflow ? UInt64.max : scaledValue
+        let capped = min(scaled, policy.maxDelayNanoseconds)
+        guard let jitter = policy.jitterRange else {
+            return capped
+        }
+        return UInt64(Double(capped) * randomGenerator.nextDouble(in: jitter))
+    }
+
+    func burstGuardDelayNanoseconds(
+        maxJitterNanoseconds: UInt64,
+        randomGenerator: any RetryRandomGenerator
+    ) -> UInt64 {
+        guard maxJitterNanoseconds > 0 else { return 0 }
+        let factor = randomGenerator.nextDouble(in: 0...1)
+        return UInt64(Double(maxJitterNanoseconds) * factor)
+    }
+}
+
+private struct DefaultWebSocketAckManager: WebSocketAckManaging {
+    func isAckRecentlyProcessed(
+        _ messageID: String,
+        acknowledgedMessageIDs: inout [String: UInt64],
+        policy: WebSocketAckPolicy
+    ) -> Bool {
+        pruneAcknowledgedMessageIDs(&acknowledgedMessageIDs, policy: policy)
+        return acknowledgedMessageIDs[messageID] != nil
+    }
+
+    func trackAcknowledgement(
+        for messageID: String,
+        acknowledgedMessageIDs: inout [String: UInt64],
+        policy: WebSocketAckPolicy
+    ) {
+        pruneAcknowledgedMessageIDs(&acknowledgedMessageIDs, policy: policy)
+        let now = DispatchTime.now().uptimeNanoseconds
+        acknowledgedMessageIDs[messageID] = now
+        let maxTracked = policy.maxTrackedMessageIDs
+        guard acknowledgedMessageIDs.count > maxTracked,
+              let evictID = acknowledgedMessageIDs.min(by: { $0.value < $1.value })?.key else {
+            return
+        }
+        acknowledgedMessageIDs.removeValue(forKey: evictID)
+    }
+
+    func ackPendingAgeBuckets(_ pendingAckStartedAt: [String: UInt64]) -> WebSocketAckPendingAgeBuckets {
+        guard !pendingAckStartedAt.isEmpty else {
+            return .init()
+        }
+        let now = DispatchTime.now().uptimeNanoseconds
+        var underOneSecond = 0
+        var oneToFiveSeconds = 0
+        var overFiveSeconds = 0
+
+        for startedAt in pendingAckStartedAt.values {
+            let age = now &- startedAt
+            if age < 1_000_000_000 {
+                underOneSecond += 1
+            } else if age < 5_000_000_000 {
+                oneToFiveSeconds += 1
+            } else {
+                overFiveSeconds += 1
+            }
+        }
+
+        return .init(
+            underOneSecond: underOneSecond,
+            oneToFiveSeconds: oneToFiveSeconds,
+            overFiveSeconds: overFiveSeconds
+        )
+    }
+
+    private func pruneAcknowledgedMessageIDs(
+        _ acknowledgedMessageIDs: inout [String: UInt64],
+        policy: WebSocketAckPolicy
+    ) {
+        guard !acknowledgedMessageIDs.isEmpty else {
+            return
+        }
+        let now = DispatchTime.now().uptimeNanoseconds
+        acknowledgedMessageIDs = acknowledgedMessageIDs.filter { now &- $0.value < policy.dedupeWindowNanoseconds }
+    }
+}
+
+private struct DefaultWebSocketOutboundQueueManager: WebSocketOutboundQueueManaging {
+    func enqueue(
+        _ envelope: WebSocketOutboundEnvelope,
+        outboundQueue: inout [WebSocketOutboundEnvelope],
+        policy: WebSocketOutboundQueuePolicy
+    ) throws -> WebSocketOutboundEnqueueResult {
+        guard policy.maxQueuedMessages > 0 else {
+            throw WebSocketError.disconnected
+        }
+
+        if outboundQueue.count >= policy.maxQueuedMessages {
+            switch policy.overflowPolicy {
+            case .dropOldest:
+                _ = outboundQueue.removeFirst()
+                outboundQueue.append(envelope)
+                return .droppedOldest
+            case .dropNewest:
+                return .droppedNewest
+            case .failFast:
+                throw WebSocketError.disconnected
+            }
+        }
+
+        outboundQueue.append(envelope)
+        return .enqueued
+    }
+
+    func queuePressureLevel(depth: Int, capacity: Int) -> WebSocketQueuePressureLevel {
+        guard capacity > 0 else { return .nominal }
+        let ratio = Double(depth) / Double(capacity)
+        if ratio >= 1.0 {
+            return .critical
+        }
+        if ratio >= 0.8 {
+            return .high
+        }
+        if ratio >= 0.5 {
+            return .elevated
+        }
+        return .nominal
+    }
+}
+
 public actor WebSocketClient: WebSocketClientProtocol {
     private let configuration: WebSocketConfiguration
     private let ackMatcher: WebSocketAckMatcher
@@ -75,6 +287,9 @@ public actor WebSocketClient: WebSocketClientProtocol {
     private let telemetryHooks: NetworkTelemetryHooks?
     private let retryClock: any RetryClock
     private let retryRandomGenerator: any RetryRandomGenerator
+    private let connectionManager: any WebSocketConnectionManaging
+    private let ackManager: any WebSocketAckManaging
+    private let outboundQueueManager: any WebSocketOutboundQueueManaging
     private let stateHub = WebSocketStateHub()
     private let messageHub = WebSocketMessageHub()
 
@@ -120,6 +335,9 @@ public actor WebSocketClient: WebSocketClientProtocol {
         self.telemetryHooks = telemetryHooks
         self.retryClock = SystemRetryClock()
         self.retryRandomGenerator = SystemRetryRandomGenerator()
+        self.connectionManager = DefaultWebSocketConnectionManager()
+        self.ackManager = DefaultWebSocketAckManager()
+        self.outboundQueueManager = DefaultWebSocketOutboundQueueManager()
     }
 
     init(
@@ -141,6 +359,9 @@ public actor WebSocketClient: WebSocketClientProtocol {
         self.transport = transport
         self.retryClock = retryClock
         self.retryRandomGenerator = retryRandomGenerator
+        self.connectionManager = DefaultWebSocketConnectionManager()
+        self.ackManager = DefaultWebSocketAckManager()
+        self.outboundQueueManager = DefaultWebSocketOutboundQueueManager()
         self.telemetryHooks = telemetryHooks
     }
 
@@ -187,9 +408,12 @@ public actor WebSocketClient: WebSocketClientProtocol {
             reconnectAttempt: connectAttempt,
             queuedOutboundMessages: outboundQueue.count,
             queueCapacity: queueCapacity,
-            queuePressureLevel: queuePressureLevel(depth: outboundQueue.count, capacity: queueCapacity),
+            queuePressureLevel: outboundQueueManager.queuePressureLevel(
+                depth: outboundQueue.count,
+                capacity: queueCapacity
+            ),
             pendingAckCount: ackWaiters.count,
-            ackPendingAgeBuckets: ackPendingAgeBuckets(),
+            ackPendingAgeBuckets: ackManager.ackPendingAgeBuckets(pendingAckStartedAt),
             trackedAckMessageIDs: acknowledgedMessageIDs.count,
             reconnectPhase: reconnectPhase,
             lastTransitionReason: lastTransitionReason,
@@ -354,31 +578,15 @@ public actor WebSocketClient: WebSocketClientProtocol {
 
     private func queueOutboundEnvelope(_ envelope: WebSocketOutboundEnvelope) async throws {
         let policy = configuration.outboundQueuePolicy
-        guard policy.maxQueuedMessages > 0 else {
-            throw WebSocketError.disconnected
-        }
-
-        if outboundQueue.count >= policy.maxQueuedMessages {
-            switch policy.overflowPolicy {
-            case .dropOldest:
-                _ = outboundQueue.removeFirst()
-                emitTelemetry(
-                    type: .messageDropped,
-                    reason: "overflow_drop_oldest",
-                    messageKind: envelope.message.telemetryKind,
-                    queueSize: outboundQueue.count,
-                    queuePolicy: "dropOldest"
-                )
-            case .dropNewest:
-                emitTelemetry(
-                    type: .messageDropped,
-                    reason: "overflow_drop_newest",
-                    messageKind: envelope.message.telemetryKind,
-                    queueSize: outboundQueue.count,
-                    queuePolicy: "dropNewest"
-                )
-                return
-            case .failFast:
+        let enqueueResult: WebSocketOutboundEnqueueResult
+        do {
+            enqueueResult = try outboundQueueManager.enqueue(
+                envelope,
+                outboundQueue: &outboundQueue,
+                policy: policy
+            )
+        } catch {
+            if policy.overflowPolicy == .failFast || policy.maxQueuedMessages <= 0 {
                 emitTelemetry(
                     type: .messageDropped,
                     reason: "overflow_fail_fast",
@@ -386,13 +594,32 @@ public actor WebSocketClient: WebSocketClientProtocol {
                     queueSize: outboundQueue.count,
                     queuePolicy: "failFast"
                 )
-                throw WebSocketError.disconnected
             }
+            throw error
         }
-
-        outboundQueue.append(envelope)
+        switch enqueueResult {
+        case .droppedOldest:
+            emitTelemetry(
+                type: .messageDropped,
+                reason: "overflow_drop_oldest",
+                messageKind: envelope.message.telemetryKind,
+                queueSize: outboundQueue.count,
+                queuePolicy: "dropOldest"
+            )
+        case .droppedNewest:
+            emitTelemetry(
+                type: .messageDropped,
+                reason: "overflow_drop_newest",
+                messageKind: envelope.message.telemetryKind,
+                queueSize: outboundQueue.count,
+                queuePolicy: "dropNewest"
+            )
+            return
+        case .enqueued:
+            break
+        }
         let queuePolicy = String(describing: policy.overflowPolicy)
-        let pressure = queuePressureLevel(
+        let pressure = outboundQueueManager.queuePressureLevel(
             depth: outboundQueue.count,
             capacity: policy.maxQueuedMessages
         )
@@ -673,8 +900,10 @@ public actor WebSocketClient: WebSocketClientProtocol {
     }
 
     private func shouldReconnect(after error: WebSocketError) -> Bool {
-        guard configuration.reconnectPolicy.maxAttempts > 0 else { return false }
-        return recoverability(for: error) == .recoverable
+        connectionManager.shouldReconnect(
+            after: error,
+            maxAttempts: configuration.reconnectPolicy.maxAttempts
+        )
     }
 
     private func startReconnectLoop(
@@ -764,17 +993,11 @@ public actor WebSocketClient: WebSocketClientProtocol {
     }
 
     private func reconnectDelayNanoseconds(forAttempt attempt: Int) -> UInt64 {
-        let base = configuration.reconnectPolicy.baseDelayNanoseconds
-        let maxDelay = configuration.reconnectPolicy.maxDelayNanoseconds
-        let exponent = min(max(0, attempt - 1), 16)
-        let (scaledValue, overflow) = base.multipliedReportingOverflow(by: UInt64(1 << exponent))
-        let scaled = overflow ? UInt64.max : scaledValue
-        let capped = min(scaled, maxDelay)
-
-        guard let jitter = configuration.reconnectPolicy.jitterRange else {
-            return capped
-        }
-        return UInt64(Double(capped) * retryRandomGenerator.nextDouble(in: jitter))
+        connectionManager.reconnectDelayNanoseconds(
+            forAttempt: attempt,
+            policy: configuration.reconnectPolicy,
+            randomGenerator: retryRandomGenerator
+        )
     }
 
     private func failTerminal(_ error: WebSocketError, telemetryAttempt: Int? = nil) async {
@@ -1087,108 +1310,42 @@ public actor WebSocketClient: WebSocketClientProtocol {
     }
 
     private func isAckRecentlyProcessed(_ messageID: String) -> Bool {
-        pruneAcknowledgedMessageIDs()
-        return acknowledgedMessageIDs[messageID] != nil
+        ackManager.isAckRecentlyProcessed(
+            messageID,
+            acknowledgedMessageIDs: &acknowledgedMessageIDs,
+            policy: configuration.ackPolicy
+        )
     }
 
     private func trackAcknowledgement(for messageID: String) {
-        pruneAcknowledgedMessageIDs()
-        let now = DispatchTime.now().uptimeNanoseconds
-        acknowledgedMessageIDs[messageID] = now
-        let maxTracked = configuration.ackPolicy.maxTrackedMessageIDs
-        guard acknowledgedMessageIDs.count > maxTracked,
-              let evictID = acknowledgedMessageIDs.min(by: { $0.value < $1.value })?.key else {
-            return
-        }
-        acknowledgedMessageIDs.removeValue(forKey: evictID)
-    }
-
-    private func pruneAcknowledgedMessageIDs() {
-        guard !acknowledgedMessageIDs.isEmpty else {
-            return
-        }
-        let now = DispatchTime.now().uptimeNanoseconds
-        let window = configuration.ackPolicy.dedupeWindowNanoseconds
-        let retained = acknowledgedMessageIDs.filter { now &- $0.value < window }
-        acknowledgedMessageIDs = retained
+        ackManager.trackAcknowledgement(
+            for: messageID,
+            acknowledgedMessageIDs: &acknowledgedMessageIDs,
+            policy: configuration.ackPolicy
+        )
     }
 
     private func mapError(_ error: any Error) -> WebSocketError {
-        if let websocketError = error as? WebSocketError {
-            return websocketError
-        }
-        if error is CancellationError {
-            return .cancelled
-        }
-        if let urlError = error as? URLError {
-            if urlError.code == .userAuthenticationRequired {
-                return .auth(description: urlError.localizedDescription)
-            }
-            if urlError.code == .timedOut {
-                return .timeout
-            }
-        }
-        return .transport(description: String(describing: error))
+        connectionManager.mapError(error)
     }
 
     private func recoverability(for error: WebSocketError) -> WebSocketRecoverability {
-        switch error {
-        case .timeout, .transport:
-            return .recoverable
-        case .auth, .protocolViolation:
-            return .manualInterventionRequired
-        case .cancelled, .disconnected, .reconnectExhausted, .ackTimeout:
-            return .nonRecoverable
-        }
+        connectionManager.recoverability(for: error)
     }
 
     private func burstGuardDelayNanoseconds() -> UInt64 {
-        let jitter = configuration.reconnectPolicy.burstGuardMaxJitterNanoseconds
-        guard jitter > 0 else { return 0 }
-        let factor = retryRandomGenerator.nextDouble(in: 0...1)
-        return UInt64(Double(jitter) * factor)
+        connectionManager.burstGuardDelayNanoseconds(
+            maxJitterNanoseconds: configuration.reconnectPolicy.burstGuardMaxJitterNanoseconds,
+            randomGenerator: retryRandomGenerator
+        )
     }
 
     private func queuePressureLevel(depth: Int, capacity: Int) -> WebSocketQueuePressureLevel {
-        guard capacity > 0 else { return .nominal }
-        let ratio = Double(depth) / Double(capacity)
-        if ratio >= 1.0 {
-            return .critical
-        }
-        if ratio >= 0.8 {
-            return .high
-        }
-        if ratio >= 0.5 {
-            return .elevated
-        }
-        return .nominal
+        outboundQueueManager.queuePressureLevel(depth: depth, capacity: capacity)
     }
 
     private func ackPendingAgeBuckets() -> WebSocketAckPendingAgeBuckets {
-        guard !pendingAckStartedAt.isEmpty else {
-            return .init()
-        }
-        let now = DispatchTime.now().uptimeNanoseconds
-        var underOneSecond = 0
-        var oneToFiveSeconds = 0
-        var overFiveSeconds = 0
-
-        for startedAt in pendingAckStartedAt.values {
-            let age = now &- startedAt
-            if age < 1_000_000_000 {
-                underOneSecond += 1
-            } else if age < 5_000_000_000 {
-                oneToFiveSeconds += 1
-            } else {
-                overFiveSeconds += 1
-            }
-        }
-
-        return .init(
-            underOneSecond: underOneSecond,
-            oneToFiveSeconds: oneToFiveSeconds,
-            overFiveSeconds: overFiveSeconds
-        )
+        ackManager.ackPendingAgeBuckets(pendingAckStartedAt)
     }
 
     private func emitTelemetry(
