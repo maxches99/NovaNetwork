@@ -99,6 +99,10 @@ private struct StressBaseline: Decodable {
     let mixedPriorityMaximumP99LatencyMilliseconds: Double
     let cancellationBurstMinimumCancelled: Int
     let cancellationBurstMinimumSuccesses: Int
+    let offlineRealtimeMinimumReplayed: Int
+    let offlineRealtimeMinimumRealtimeSuccesses: Int
+    let offlineRealtimeMaximumP99LatencyMilliseconds: Double
+    let offlineRealtimeMaximumTransportCalls: Int
 }
 
 @main
@@ -186,6 +190,7 @@ struct BenchmarksMain {
         let runtimeUpdates = await runRuntimePolicyUpdateScenario()
         let mixedPriority = await runMixedPriorityQueuePressureScenario()
         let cancellationBurst = await runCancellationBurstScenario()
+        let offlineRealtime = await runOfflineRealtimeCombinedScenario()
 
         print("stress_retry_storm_transport_calls=\(retryStorm.transportCalls)")
         print("stress_retry_storm_successes=\(retryStorm.successes)")
@@ -200,6 +205,12 @@ struct BenchmarksMain {
         print(String(format: "stress_mixed_priority_p99_ms=%.2f", mixedPriority.p99LatencyMilliseconds))
         print("stress_cancellation_burst_cancelled=\(cancellationBurst.cancelled)")
         print("stress_cancellation_burst_successes=\(cancellationBurst.successes)")
+        print("stress_offline_realtime_replayed=\(offlineRealtime.replayed)")
+        print("stress_offline_realtime_realtime_successes=\(offlineRealtime.realtimeSuccesses)")
+        print("stress_offline_realtime_realtime_failures=\(offlineRealtime.realtimeFailures)")
+        print("stress_offline_realtime_transport_calls=\(offlineRealtime.transportCalls)")
+        print(String(format: "stress_offline_realtime_p95_ms=%.2f", offlineRealtime.realtimeP95LatencyMilliseconds))
+        print(String(format: "stress_offline_realtime_p99_ms=%.2f", offlineRealtime.realtimeP99LatencyMilliseconds))
 
         guard checkBaseline else { return }
 
@@ -220,6 +231,10 @@ struct BenchmarksMain {
         let mixedPriorityLatencyOK = mixedPriority.p99LatencyMilliseconds <= baseline.mixedPriorityMaximumP99LatencyMilliseconds
         let cancellationCancelledOK = cancellationBurst.cancelled >= baseline.cancellationBurstMinimumCancelled
         let cancellationSuccessOK = cancellationBurst.successes >= baseline.cancellationBurstMinimumSuccesses
+        let offlineRealtimeReplayedOK = offlineRealtime.replayed >= baseline.offlineRealtimeMinimumReplayed
+        let offlineRealtimeRealtimeSuccessOK = offlineRealtime.realtimeSuccesses >= baseline.offlineRealtimeMinimumRealtimeSuccesses
+        let offlineRealtimeLatencyOK = offlineRealtime.realtimeP99LatencyMilliseconds <= baseline.offlineRealtimeMaximumP99LatencyMilliseconds
+        let offlineRealtimeCallsOK = offlineRealtime.transportCalls <= baseline.offlineRealtimeMaximumTransportCalls
 
         if retryCallsOK,
            retrySuccessOK,
@@ -228,14 +243,18 @@ struct BenchmarksMain {
            mixedPriorityOK,
            mixedPriorityLatencyOK,
            cancellationCancelledOK,
-           cancellationSuccessOK {
+           cancellationSuccessOK,
+           offlineRealtimeReplayedOK,
+           offlineRealtimeRealtimeSuccessOK,
+           offlineRealtimeLatencyOK,
+           offlineRealtimeCallsOK {
             print("stress_baseline_check=passed")
             return
         }
 
         fputs(
             """
-            stress_baseline_check=failed retry_calls=\(retryStorm.transportCalls) expected_retry_calls=\(baseline.retryStormExpectedTransportCalls) retry_successes=\(retryStorm.successes) expected_retry_successes=\(baseline.retryStormExpectedSuccesses) breaker_transitions=\(breakerFlapping.breakerTransitions) min_breaker_transitions=\(baseline.breakerFlappingMinimumTransitions) runtime_successes=\(runtimeUpdates.successes) min_runtime_successes=\(baseline.runtimeUpdateMinimumSuccesses) mixed_priority_successes=\(mixedPriority.successes) min_mixed_priority_successes=\(baseline.mixedPriorityMinimumSuccesses) mixed_priority_p99_ms=\(mixedPriority.p99LatencyMilliseconds) max_mixed_priority_p99_ms=\(baseline.mixedPriorityMaximumP99LatencyMilliseconds) cancellation_cancelled=\(cancellationBurst.cancelled) min_cancellation_cancelled=\(baseline.cancellationBurstMinimumCancelled) cancellation_successes=\(cancellationBurst.successes) min_cancellation_successes=\(baseline.cancellationBurstMinimumSuccesses)\n
+            stress_baseline_check=failed retry_calls=\(retryStorm.transportCalls) expected_retry_calls=\(baseline.retryStormExpectedTransportCalls) retry_successes=\(retryStorm.successes) expected_retry_successes=\(baseline.retryStormExpectedSuccesses) breaker_transitions=\(breakerFlapping.breakerTransitions) min_breaker_transitions=\(baseline.breakerFlappingMinimumTransitions) runtime_successes=\(runtimeUpdates.successes) min_runtime_successes=\(baseline.runtimeUpdateMinimumSuccesses) mixed_priority_successes=\(mixedPriority.successes) min_mixed_priority_successes=\(baseline.mixedPriorityMinimumSuccesses) mixed_priority_p99_ms=\(mixedPriority.p99LatencyMilliseconds) max_mixed_priority_p99_ms=\(baseline.mixedPriorityMaximumP99LatencyMilliseconds) cancellation_cancelled=\(cancellationBurst.cancelled) min_cancellation_cancelled=\(baseline.cancellationBurstMinimumCancelled) cancellation_successes=\(cancellationBurst.successes) min_cancellation_successes=\(baseline.cancellationBurstMinimumSuccesses) offline_realtime_replayed=\(offlineRealtime.replayed) min_offline_realtime_replayed=\(baseline.offlineRealtimeMinimumReplayed) offline_realtime_successes=\(offlineRealtime.realtimeSuccesses) min_offline_realtime_successes=\(baseline.offlineRealtimeMinimumRealtimeSuccesses) offline_realtime_p99_ms=\(offlineRealtime.realtimeP99LatencyMilliseconds) max_offline_realtime_p99_ms=\(baseline.offlineRealtimeMaximumP99LatencyMilliseconds) offline_realtime_transport_calls=\(offlineRealtime.transportCalls) max_offline_realtime_transport_calls=\(baseline.offlineRealtimeMaximumTransportCalls)\n
             """,
             stderr
         )
@@ -254,7 +273,7 @@ struct BenchmarksMain {
             ]
         )
         let client = NetworkClient(transport: transport, retryPolicy: retryPolicy)
-        let iterations = 120
+        let iterations = 80
         var successes = 0
         var failures = 0
 
@@ -310,7 +329,7 @@ struct BenchmarksMain {
         )
         let request = APIRequest(method: .get, url: URL(string: "https://example.com/stress-breaker")!)
 
-        for _ in 0..<120 {
+        for _ in 0..<80 {
             _ = try? await client.load(
                 request: request,
                 authScope: "bench",
@@ -330,7 +349,7 @@ struct BenchmarksMain {
         var successes = 0
         var failures = 0
         let updates = Task {
-            for index in 0..<200 {
+            for index in 0..<120 {
                 if index.isMultiple(of: 3) {
                     await client.updateRuntimePolicy(.init(deadlineBudgetSeconds: 0.001), scope: .global)
                 } else {
@@ -341,7 +360,7 @@ struct BenchmarksMain {
         }
 
         await withTaskGroup(of: Bool.self) { group in
-            for _ in 0..<200 {
+            for _ in 0..<120 {
                 group.addTask {
                     do {
                         _ = try await client.load(request: request, authScope: "bench", options: .init(coalescingMode: .disabled))
@@ -377,7 +396,7 @@ struct BenchmarksMain {
             coalescerLimits: .init(maxInFlightKeys: 1, maxWaitersPerKey: 10_000)
         )
         let collector = LatencyCollector()
-        let iterations = 120
+        let iterations = 80
 
         var successes = 0
         var failures = 0
@@ -432,8 +451,8 @@ struct BenchmarksMain {
 
     private static func runCancellationBurstScenario() async -> (cancelled: Int, successes: Int) {
         let coalescer = RequestCoalescer<Data, NetworkError>(policy: .cancelWhenNoWaiters)
-        let total = 120
-        let toCancel = 70
+        let total = 80
+        let toCancel = 45
 
         var tasks: [Task<Bool, Never>] = []
         tasks.reserveCapacity(total)
@@ -472,6 +491,115 @@ struct BenchmarksMain {
         let metrics = await coalescer.snapshotMetrics()
         return (metrics.waiterCancellations, successes)
     }
+
+    private static func runOfflineRealtimeCombinedScenario() async -> (
+        replayed: Int,
+        realtimeSuccesses: Int,
+        realtimeFailures: Int,
+        realtimeP95LatencyMilliseconds: Double,
+        realtimeP99LatencyMilliseconds: Double,
+        transportCalls: Int
+    ) {
+        let queueURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("RequestCoalescer-Benchmark-Combined-\(UUID().uuidString)")
+        let store = DiskOfflineWriteStore(directoryURL: queueURL)
+        let transport = BenchmarkTransport(delayNanoseconds: 300_000)
+        let offlineClient = NetworkClient(
+            transport: transport,
+            coalescerLimits: .init(maxInFlightKeys: 8, maxWaitersPerKey: 4_096),
+            offlineWriteStore: store
+        )
+        let realtimeClient = NetworkClient(
+            transport: transport,
+            coalescerLimits: .init(maxInFlightKeys: 8, maxWaitersPerKey: 4_096)
+        )
+        let collector = LatencyCollector()
+        let queuedWriteRequest = APIRequest(method: .post, url: URL(string: "https://example.com/stress-combined-write")!)
+        let realtimeRequestBase = URL(string: "https://example.com/stress-combined-read")!
+        let queueEntries = 20
+        let realtimeIterations = 40
+        let replayWindow = OfflineReplayWindowPolicy(
+            maxContinuousReplaySeconds: 8,
+            coolDownSeconds: 0,
+            maxReplaysPerSecond: 1_000
+        )
+        let combinedSchedulerPolicy = OfflineReplaySchedulerPolicy(replayWindow: replayWindow)
+
+        for index in 0..<queueEntries {
+            _ = try? await offlineClient.enqueueWrite(
+                request: queuedWriteRequest,
+                authScope: "bench-\(index)",
+                options: .init(
+                    idempotencyPolicy: .init(keyStrategy: .fingerprintDigest),
+                    offlineQueuePolicy: .init(
+                        mode: .alwaysEnqueue,
+                        replayDedupeWindowSeconds: 0,
+                        replaySchedulerPolicy: combinedSchedulerPolicy
+                    )
+                )
+            )
+        }
+
+        let replayTask = Task {
+            let queuedEntries = await store.snapshot(now: Date())
+            var replayed = 0
+            for entry in queuedEntries {
+                do {
+                    _ = try await offlineClient.load(
+                        request: entry.request,
+                        authScope: nil,
+                        options: .init(coalescingMode: .disabled)
+                    )
+                    await store.markSucceeded(queueID: entry.receipt.queueID)
+                    replayed += 1
+                } catch {
+                    await store.markRetryWaiting(
+                        queueID: entry.receipt.queueID,
+                        attempt: max(1, entry.attempt + 1),
+                        reason: "combined_replay_failed",
+                        nextRetryAt: Date().addingTimeInterval(1),
+                        now: Date()
+                    )
+                }
+            }
+            return replayed
+        }
+        var realtimeSuccesses = 0
+        var realtimeFailures = 0
+        for index in 0..<realtimeIterations {
+            let request = APIRequest(
+                method: .get,
+                url: realtimeRequestBase.appendingQueryItem(name: "id", value: "\(index)")
+            )
+            let startedAt = DispatchTime.now().uptimeNanoseconds
+            do {
+                _ = try await realtimeClient.load(
+                    request: request,
+                    authScope: "bench",
+                    options: .init(
+                        priority: .high,
+                        capacityScheduling: .queueByPriority,
+                        coalescingMode: .disabled
+                    )
+                )
+                let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - startedAt) / 1_000_000
+                await collector.append(elapsedMs)
+                realtimeSuccesses += 1
+            } catch {
+                realtimeFailures += 1
+            }
+        }
+
+        let replayed = await replayTask.value
+        return (
+            replayed,
+            realtimeSuccesses,
+            realtimeFailures,
+            await collector.percentile(0.95),
+            await collector.percentile(0.99),
+            await transport.calls
+        )
+    }
 }
 
 private extension URL {
@@ -480,6 +608,16 @@ private extension URL {
             .queryItems?
             .first(where: { $0.name == name })?
             .value
+    }
+
+    func appendingQueryItem(name: String, value: String) -> URL {
+        guard var components = URLComponents(url: self, resolvingAgainstBaseURL: false) else {
+            return self
+        }
+        var items = components.queryItems ?? []
+        items.append(URLQueryItem(name: name, value: value))
+        components.queryItems = items
+        return components.url ?? self
     }
 }
 

@@ -5,21 +5,32 @@ public struct OfflineStoreRecoveryReport: Sendable, Equatable {
     public let recoveredRecords: Int
     public let skippedCorruptedRecords: Int
     public let skippedIncompatibleRecords: Int
+    public let orphanedTemporaryRecords: Int
+    public let corruptionBudgetExceeded: Bool
 
     public init(
         scannedRecords: Int,
         recoveredRecords: Int,
         skippedCorruptedRecords: Int,
-        skippedIncompatibleRecords: Int
+        skippedIncompatibleRecords: Int,
+        orphanedTemporaryRecords: Int = 0,
+        corruptionBudgetExceeded: Bool = false
     ) {
         self.scannedRecords = max(0, scannedRecords)
         self.recoveredRecords = max(0, recoveredRecords)
         self.skippedCorruptedRecords = max(0, skippedCorruptedRecords)
         self.skippedIncompatibleRecords = max(0, skippedIncompatibleRecords)
+        self.orphanedTemporaryRecords = max(0, orphanedTemporaryRecords)
+        self.corruptionBudgetExceeded = corruptionBudgetExceeded
     }
 
     public var skippedTotal: Int {
-        skippedCorruptedRecords + skippedIncompatibleRecords
+        skippedCorruptedRecords + skippedIncompatibleRecords + orphanedTemporaryRecords
+    }
+
+    public var recoveryLossRate: Double {
+        guard scannedRecords > 0 else { return 0 }
+        return Double(skippedTotal) / Double(scannedRecords)
     }
 }
 

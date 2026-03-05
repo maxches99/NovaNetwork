@@ -1,5 +1,24 @@
 import Foundation
 
+enum DiskOfflineWriteStoreFaultPoint: Hashable, Sendable {
+    case createDirectory
+    case listEntries
+    case readEntry
+    case beforeWriteEntry
+    case afterWriteTemporaryEntry
+    case beforeCommitEntry
+    case readReplaySuccessIndex
+    case writeReplaySuccessIndex
+}
+
+enum DiskOfflineWriteStoreFaultAction: Sendable, Equatable {
+    case proceed
+    case failIO
+    case partialWriteAndFail
+}
+
+typealias DiskOfflineWriteStoreFaultInjector = @Sendable (DiskOfflineWriteStoreFaultPoint) -> DiskOfflineWriteStoreFaultAction
+
 public actor DiskOfflineWriteStore: OfflineWriteStore {
     private let directoryURL: URL
     private let fileManager: FileManager
@@ -8,6 +27,9 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
     private let overflowPolicy: OfflineWriteStoreOverflowPolicy
     private let schemaVersion: Int
     private let cipher: (any OfflineWriteStoreCipher)?
+    private let corruptionBudgetMaxCorruptedRecords: Int
+    private let corruptionBudgetMaxCorruptedRatio: Double
+    private let faultInjector: DiskOfflineWriteStoreFaultInjector?
 
     private var replaySuccessIndex: [String: Date] = [:]
     private var didLoadReplaySuccessIndex = false
@@ -29,6 +51,34 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
         self.overflowPolicy = overflowPolicy
         self.schemaVersion = max(1, schemaVersion)
         self.cipher = cipher
+        // Corruption budget intentionally conservative to preserve partial recovery while preventing unsafe replay.
+        self.corruptionBudgetMaxCorruptedRecords = 32
+        self.corruptionBudgetMaxCorruptedRatio = 0.5
+        self.faultInjector = nil
+    }
+
+    init(
+        directoryURL: URL,
+        fileManager: FileManager = .default,
+        maxEntries: Int? = nil,
+        ttlSeconds: TimeInterval? = nil,
+        overflowPolicy: OfflineWriteStoreOverflowPolicy = .evictOldest,
+        schemaVersion: Int = 1,
+        cipher: (any OfflineWriteStoreCipher)? = nil,
+        corruptionBudgetMaxCorruptedRecords: Int = 32,
+        corruptionBudgetMaxCorruptedRatio: Double = 0.5,
+        faultInjector: DiskOfflineWriteStoreFaultInjector? = nil
+    ) {
+        self.directoryURL = directoryURL
+        self.fileManager = fileManager
+        self.maxEntries = maxEntries.map { max(1, $0) }
+        self.ttlSeconds = ttlSeconds.map { max(0, $0) }
+        self.overflowPolicy = overflowPolicy
+        self.schemaVersion = max(1, schemaVersion)
+        self.cipher = cipher
+        self.corruptionBudgetMaxCorruptedRecords = max(0, corruptionBudgetMaxCorruptedRecords)
+        self.corruptionBudgetMaxCorruptedRatio = min(1, max(0, corruptionBudgetMaxCorruptedRatio))
+        self.faultInjector = faultInjector
     }
 
     @discardableResult
@@ -274,6 +324,7 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
     }
 
     private func ensureDirectory() {
+        guard injectedAction(for: .createDirectory) != .failIO else { return }
         try? fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
     }
 
@@ -281,11 +332,16 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
         directoryURL.appendingPathComponent("\(queueID).json")
     }
 
+    private func partialFileURL(forQueueID queueID: String) -> URL {
+        directoryURL.appendingPathComponent("\(queueID).json.partial")
+    }
+
     private func replaySuccessIndexURL() -> URL {
         directoryURL.appendingPathComponent("replay_success_index.json")
     }
 
     private func entryFileURLs() -> [URL] {
+        guard injectedAction(for: .listEntries) != .failIO else { return [] }
         guard let files = try? fileManager.contentsOfDirectory(
             at: directoryURL,
             includingPropertiesForKeys: nil
@@ -299,6 +355,20 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
         }
     }
 
+    private func cleanupOrphanedTemporaryFiles() -> Int {
+        guard let files = try? fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: nil
+        ) else {
+            return 0
+        }
+        let temporaryFiles = files.filter { $0.pathExtension == "partial" }
+        for temporary in temporaryFiles {
+            try? fileManager.removeItem(at: temporary)
+        }
+        return temporaryFiles.count
+    }
+
     private enum DecodeOutcome {
         case entry(OfflineWriteStoreEntry)
         case skipAndKeepIncompatible
@@ -308,6 +378,7 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
     private func loadEntries() async -> [OfflineWriteStoreEntry] {
         ensureDirectory()
         var entries: [OfflineWriteStoreEntry] = []
+        let orphanedTemporary = cleanupOrphanedTemporaryFiles()
         var scanned = 0
         var skippedCorrupted = 0
         var skippedIncompatible = 0
@@ -324,16 +395,31 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
                 try? fileManager.removeItem(at: file)
             }
         }
+
+        let scannedRecords = scanned + orphanedTemporary
+        let corruptedTotal = skippedCorrupted + orphanedTemporary
+        let corruptedRatio = scannedRecords == 0 ? 0 : Double(corruptedTotal) / Double(scannedRecords)
+        let budgetExceeded = corruptedTotal > corruptionBudgetMaxCorruptedRecords ||
+            corruptedRatio > corruptionBudgetMaxCorruptedRatio
+        if budgetExceeded {
+            entries = []
+        }
+
         pendingRecoveryReport = OfflineStoreRecoveryReport(
-            scannedRecords: scanned,
+            scannedRecords: scannedRecords,
             recoveredRecords: entries.count,
             skippedCorruptedRecords: skippedCorrupted,
-            skippedIncompatibleRecords: skippedIncompatible
+            skippedIncompatibleRecords: skippedIncompatible,
+            orphanedTemporaryRecords: orphanedTemporary,
+            corruptionBudgetExceeded: budgetExceeded
         )
         return entries
     }
 
     private func decodeEntry(file: URL) -> DecodeOutcome {
+        if injectedAction(for: .readEntry) == .failIO {
+            return .skipAndRemoveCorrupted
+        }
         guard
             let data = try? Data(contentsOf: file),
             let envelope = try? JSONDecoder().decode(PersistedOfflineWriteEnvelope.self, from: data)
@@ -425,7 +511,36 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
         }
 
         let data = try JSONEncoder().encode(envelope)
-        try data.write(to: fileURL(forQueueID: entry.receipt.queueID), options: .atomic)
+        let queueID = entry.receipt.queueID
+        if injectedAction(for: .beforeWriteEntry) == .failIO {
+            throw injectedIOError()
+        }
+
+        let temporaryURL = partialFileURL(forQueueID: queueID)
+        try data.write(to: temporaryURL, options: .atomic)
+
+        if injectedAction(for: .afterWriteTemporaryEntry) == .failIO {
+            throw injectedIOError()
+        }
+
+        switch injectedAction(for: .beforeCommitEntry) {
+        case .proceed:
+            break
+        case .failIO:
+            throw injectedIOError()
+        case .partialWriteAndFail:
+            let partialCount = max(1, data.count / 2)
+            try Data(data.prefix(partialCount)).write(to: fileURL(forQueueID: queueID), options: [])
+            throw injectedIOError()
+        }
+
+        let destinationURL = fileURL(forQueueID: queueID)
+        if fileManager.fileExists(atPath: destinationURL.path) {
+            _ = try fileManager.replaceItemAt(destinationURL, withItemAt: temporaryURL)
+        } else {
+            try fileManager.moveItem(at: temporaryURL, to: destinationURL)
+        }
+        try? fileManager.removeItem(at: temporaryURL)
     }
 
     private func mutate(queueID: String, transform: (OfflineWriteStoreEntry) -> OfflineWriteStoreEntry) async {
@@ -476,6 +591,10 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
         guard !didLoadReplaySuccessIndex else { return }
         didLoadReplaySuccessIndex = true
         ensureDirectory()
+        guard injectedAction(for: .readReplaySuccessIndex) != .failIO else {
+            replaySuccessIndex = [:]
+            return
+        }
         guard
             let data = try? Data(contentsOf: replaySuccessIndexURL()),
             let persisted = try? JSONDecoder().decode([String: Date].self, from: data)
@@ -488,7 +607,18 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
 
     private func writeReplaySuccessIndex() {
         ensureDirectory()
+        guard injectedAction(for: .writeReplaySuccessIndex) != .failIO else { return }
         guard let data = try? JSONEncoder().encode(replaySuccessIndex) else { return }
         try? data.write(to: replaySuccessIndexURL(), options: .atomic)
+    }
+
+    private func injectedAction(for point: DiskOfflineWriteStoreFaultPoint) -> DiskOfflineWriteStoreFaultAction {
+        faultInjector?(point) ?? .proceed
+    }
+
+    private func injectedIOError() -> Error {
+        NSError(domain: NSCocoaErrorDomain, code: NSFileWriteUnknownError, userInfo: [
+            NSLocalizedDescriptionKey: "fault_injected_io_error"
+        ])
     }
 }

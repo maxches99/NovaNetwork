@@ -2,8 +2,62 @@ import Foundation
 import Testing
 @testable import NovaNetworkClient
 
+final class DeterministicDiskStoreFaultInjector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var planned: [DiskOfflineWriteStoreFaultPoint: [DiskOfflineWriteStoreFaultAction]]
+
+    init(planned: [DiskOfflineWriteStoreFaultPoint: [DiskOfflineWriteStoreFaultAction]]) {
+        self.planned = planned
+    }
+
+    func action(for point: DiskOfflineWriteStoreFaultPoint) -> DiskOfflineWriteStoreFaultAction {
+        lock.lock()
+        defer { lock.unlock() }
+        guard var actions = planned[point], !actions.isEmpty else {
+            return .proceed
+        }
+        let next = actions.removeFirst()
+        planned[point] = actions
+        return next
+    }
+}
+
 @Suite
 struct OfflineQueueCoverageTests {
+    private actor MinimalOfflineWriteStore: OfflineWriteStore {
+        private(set) var entries: [OfflineWriteStoreEntry] = []
+
+        func enqueue(request: APIRequest, requestKey: String, now: Date) async throws -> QueuedWriteReceipt {
+            let receipt = QueuedWriteReceipt(queueID: UUID().uuidString, requestKey: requestKey, position: entries.count + 1, enqueuedAt: now)
+            entries.append(
+                OfflineWriteStoreEntry(
+                    receipt: receipt,
+                    request: request,
+                    attempt: 0,
+                    nextRetryAt: nil,
+                    lastFailureReason: nil,
+                    state: .queued,
+                    updatedAt: now,
+                    replayMetadata: .init(replayIdentity: requestKey)
+                )
+            )
+            return receipt
+        }
+
+        func nextBatch(limit: Int, now: Date) async -> [OfflineWriteStoreEntry] {
+            Array(entries.prefix(max(0, limit)))
+        }
+
+        func markReplaying(queueID: String, attempt: Int, now: Date) async {}
+        func markRetryWaiting(queueID: String, attempt: Int, reason: String, nextRetryAt: Date, now: Date) async {}
+        func markSucceeded(queueID: String) async {}
+        func markDeadLetter(queueID: String, reason: String, now: Date) async {}
+        func depth(now: Date) async -> Int { entries.count }
+        func snapshot(now: Date) async -> [OfflineWriteStoreEntry] { entries }
+        func drop(queueID: String) async -> Bool { false }
+        func dropAll() async -> Int { 0 }
+    }
+
     private static func fixedKey() -> Data {
         Data(repeating: 7, count: 32)
     }
@@ -320,5 +374,123 @@ struct OfflineQueueCoverageTests {
         #expect(report?.recoveredRecords == 1)
         #expect(report?.skippedCorruptedRecords == 1)
         #expect(report?.skippedIncompatibleRecords == 1)
+    }
+
+    @Test
+    func diskOfflineWriteStoreFaultInjectionCanForceDeterministicIOErrorOnWrite() async {
+        let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("RequestCoalescer-OfflineFaultIO-\(UUID().uuidString)")
+        let injector = DeterministicDiskStoreFaultInjector(
+            planned: [.beforeWriteEntry: [.failIO]]
+        )
+        let store = DiskOfflineWriteStore(
+            directoryURL: baseURL,
+            faultInjector: { injector.action(for: $0) }
+        )
+        let request = APIRequest(method: .post, url: URL(string: "https://example.com/fault-io")!)
+
+        do {
+            _ = try await store.enqueue(request: request, requestKey: "io-fault", now: Date(timeIntervalSince1970: 1_000))
+            Issue.record("Expected injected I/O write error")
+        } catch {
+            #expect(await store.depth(now: Date(timeIntervalSince1970: 1_000)) == 0)
+        }
+    }
+
+    @Test
+    func diskOfflineWriteStoreFaultInjectionPartialWriteRecoversWithLossMetrics() async throws {
+        let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("RequestCoalescer-OfflineFaultPartial-\(UUID().uuidString)")
+        let injector = DeterministicDiskStoreFaultInjector(
+            planned: [.beforeCommitEntry: [.partialWriteAndFail]]
+        )
+        let store = DiskOfflineWriteStore(
+            directoryURL: baseURL,
+            faultInjector: { injector.action(for: $0) }
+        )
+        let request = APIRequest(method: .post, url: URL(string: "https://example.com/fault-partial")!)
+        let now = Date(timeIntervalSince1970: 1_100)
+
+        _ = try? await store.enqueue(request: request, requestKey: "partial-corrupted", now: now)
+        let degradedSnapshot = await store.snapshot(now: now)
+        #expect(degradedSnapshot.isEmpty)
+        let degradedReport = await store.consumeRecoveryReport()
+        #expect((degradedReport?.skippedCorruptedRecords ?? 0) >= 1)
+        #expect((degradedReport?.recoveryLossRate ?? 0) > 0)
+
+        _ = try await store.enqueue(request: request, requestKey: "good", now: now.addingTimeInterval(1))
+
+        let snapshot = await store.snapshot(now: now.addingTimeInterval(2))
+        #expect(snapshot.count == 1)
+        #expect(snapshot[0].receipt.requestKey == "good")
+    }
+
+    @Test
+    func diskOfflineWriteStoreCorruptionBudgetFailClosedWhenCorruptionDominates() async throws {
+        let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("RequestCoalescer-OfflineCorruptionBudget-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: baseURL, withIntermediateDirectories: true)
+
+        let request = APIRequest(method: .post, url: URL(string: "https://example.com/budget")!)
+        let store = DiskOfflineWriteStore(directoryURL: baseURL)
+        _ = try await store.enqueue(request: request, requestKey: "survivor", now: Date(timeIntervalSince1970: 1_200))
+
+        try Data("bad-1".utf8).write(to: baseURL.appendingPathComponent("bad-1.json"), options: .atomic)
+        try Data("bad-2".utf8).write(to: baseURL.appendingPathComponent("bad-2.json"), options: .atomic)
+        try Data("bad-3".utf8).write(to: baseURL.appendingPathComponent("bad-3.json"), options: .atomic)
+
+        let snapshot = await store.snapshot(now: Date(timeIntervalSince1970: 1_200))
+        #expect(snapshot.isEmpty)
+
+        let report = await store.consumeRecoveryReport()
+        #expect(report?.corruptionBudgetExceeded == true)
+        #expect((report?.skippedCorruptedRecords ?? 0) >= 3)
+    }
+
+    @Test
+    func diskOfflineWriteStoreTTLHandlesBackwardClockSkewWithoutPrematurePrune() async throws {
+        let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("RequestCoalescer-OfflineClockSkew-\(UUID().uuidString)")
+        let store = DiskOfflineWriteStore(directoryURL: baseURL, ttlSeconds: 30)
+        let request = APIRequest(method: .post, url: URL(string: "https://example.com/clock-skew")!)
+
+        _ = try await store.enqueue(request: request, requestKey: "clock-entry", now: Date(timeIntervalSince1970: 100))
+        #expect(await store.depth(now: Date(timeIntervalSince1970: 50)) == 1)
+        #expect(await store.depth(now: Date(timeIntervalSince1970: 200)) == 0)
+    }
+
+    @Test
+    func offlineStoreRecoveryReportComputesLossRateAndTotalsIncludingOrphans() {
+        let report = OfflineStoreRecoveryReport(
+            scannedRecords: 10,
+            recoveredRecords: 6,
+            skippedCorruptedRecords: 2,
+            skippedIncompatibleRecords: 1,
+            orphanedTemporaryRecords: 1,
+            corruptionBudgetExceeded: true
+        )
+        #expect(report.skippedTotal == 4)
+        #expect(report.recoveryLossRate == 0.4)
+        #expect(report.corruptionBudgetExceeded)
+    }
+
+    @Test
+    func offlineWriteStoreProtocolDefaultsRemainSafeNoops() async throws {
+        let store = MinimalOfflineWriteStore()
+        let request = APIRequest(method: .post, url: URL(string: "https://example.com/defaults")!)
+        _ = try await store.enqueue(
+            request: request,
+            requestKey: "defaults",
+            replayMetadata: .init(replayIdentity: "defaults"),
+            now: Date(timeIntervalSince1970: 1_300)
+        )
+
+        await store.markManualReview(queueID: "missing", reason: "noop", now: Date())
+        let requeued = await store.requeueManualReview(queueID: "missing", reason: nil, now: Date())
+        #expect(requeued == false)
+        #expect(await store.hasReplayTerminalSuccess(replayIdentity: "defaults", within: 60, now: Date()) == false)
+        await store.recordReplayTerminalSuccess(replayIdentity: "defaults", now: Date())
+        #expect(await store.rotateEncryption(now: Date()) == 0)
+        #expect(await store.consumeRecoveryReport() == nil)
     }
 }

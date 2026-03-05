@@ -565,6 +565,17 @@ swift run NovaNetworkClientBenchmarks --stress-suite
 swift run NovaNetworkClientBenchmarks --check-stress-baseline
 ```
 
+Stress baseline now includes a combined offline-replay + realtime request pressure scenario.
+
+## Deterministic Chaos Suite
+
+```bash
+swift test --filter OfflineQueueCoverageTests
+swift test --filter connectivityFlapSequenceQueuesOfflineWritesAndRecoversOnFlush
+```
+
+`OfflineStoreRecoveryReport` includes `orphanedTemporaryRecords`, `corruptionBudgetExceeded`, and `recoveryLossRate` for provable recovery-loss accounting.
+
 ## Request Builder
 
 ```swift

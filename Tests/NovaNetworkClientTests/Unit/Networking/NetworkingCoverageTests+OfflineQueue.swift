@@ -275,6 +275,50 @@ extension NetworkingCoverageTests {
     }
 
     @Test
+    func connectivityFlapSequenceQueuesOfflineWritesAndRecoversOnFlush() async throws {
+        let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("RequestCoalescer-ConnectivityFlapSequence-\(UUID().uuidString)")
+        let store = DiskOfflineWriteStore(directoryURL: baseURL)
+        let transport = ScriptedNetworkTransport(
+            responses: [
+                .failure(.transport(underlying: URLError(.notConnectedToInternet))),
+                .success(.init(statusCode: 200, headers: [:], body: Data("ok".utf8))),
+                .failure(.transport(underlying: URLError(.networkConnectionLost))),
+                .success(.init(statusCode: 200, headers: [:], body: Data("ok".utf8))),
+                .success(.init(statusCode: 200, headers: [:], body: Data("ok".utf8))),
+                .success(.init(statusCode: 200, headers: [:], body: Data("ok".utf8)))
+            ]
+        )
+        let client = NetworkClient(transport: transport, offlineWriteStore: store)
+        var queuedCount = 0
+
+        for index in 0..<4 {
+            let request = APIRequest(
+                method: .post,
+                url: URL(string: "https://example.com/connectivity-flap?id=\(index)")!
+            )
+            let result = try await client.enqueueWrite(
+                request: request,
+                authScope: "flap-\(index)",
+                options: .init(
+                    idempotencyPolicy: .init(keyStrategy: .fingerprintDigest),
+                    offlineQueuePolicy: .init(mode: .enqueueWhenOffline)
+                )
+            )
+            if case .queued = result {
+                queuedCount += 1
+            }
+        }
+
+        #expect(queuedCount == 2)
+        #expect(await store.depth(now: Date()) == 2)
+        let replayed = await client.flushOfflineQueue(limit: 8)
+        #expect(replayed == 2)
+        #expect(await store.depth(now: Date()) == 0)
+        #expect(await transport.calls() == 6)
+    }
+
+    @Test
     func offlineQueueManagementAPIsSupportDepthSnapshotDropAndDropAll() async throws {
         let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("RequestCoalescer-QueueMgmt-\(UUID().uuidString)")
