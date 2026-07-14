@@ -283,19 +283,26 @@ private final class URLRequestCapture: @unchecked Sendable {
     }
 }
 
-private actor WebSocketTelemetryRecorder {
-    private(set) var events: [TelemetryWebSocketContext] = []
+private final class WebSocketTelemetryRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [TelemetryWebSocketContext] = []
 
     func append(_ event: TelemetryWebSocketContext) {
+        lock.lock()
         events.append(event)
+        lock.unlock()
     }
 
     func types() -> [TelemetryWebSocketEventType] {
-        events.map(\.type)
+        lock.lock()
+        defer { lock.unlock() }
+        return events.map(\.type)
     }
 
     func snapshot() -> [TelemetryWebSocketContext] {
-        events
+        lock.lock()
+        defer { lock.unlock() }
+        return events
     }
 }
 
@@ -626,7 +633,7 @@ struct WebSocketClientTests {
         let recorder = WebSocketTelemetryRecorder()
         let hooks = NetworkTelemetryHooks(
             onWebSocketEvent: { context in
-                Task { await recorder.append(context) }
+                recorder.append(context)
             }
         )
 
@@ -661,7 +668,7 @@ struct WebSocketClientTests {
         try await client.send(.text("client-message"))
 
         try? await Task.sleep(nanoseconds: 20_000_000)
-        let events = await recorder.snapshot()
+        let events = recorder.snapshot()
         let types = events.map(\.type)
         #expect(types.contains(.connectStarted))
         #expect(types.contains(.connectSuccess))
@@ -692,7 +699,7 @@ struct WebSocketClientTests {
         let recorder = WebSocketTelemetryRecorder()
         let hooks = NetworkTelemetryHooks(
             onWebSocketEvent: { context in
-                Task { await recorder.append(context) }
+                recorder.append(context)
             }
         )
         let client = WebSocketClient(
@@ -736,7 +743,7 @@ struct WebSocketClientTests {
         }
 
         try? await Task.sleep(nanoseconds: 20_000_000)
-        let events = await recorder.snapshot()
+        let events = recorder.snapshot()
         let types = events.map(\.type)
         #expect(types.contains(.reconnectAttempt))
         #expect(types.contains(.reconnectExhausted))
@@ -829,7 +836,7 @@ struct WebSocketClientTests {
         let recorder = WebSocketTelemetryRecorder()
         let hooks = NetworkTelemetryHooks(
             onWebSocketEvent: { context in
-                Task { await recorder.append(context) }
+                recorder.append(context)
             }
         )
         let client = WebSocketClient(
@@ -867,7 +874,7 @@ struct WebSocketClientTests {
         }
 
         try? await Task.sleep(nanoseconds: 20_000_000)
-        let events = await recorder.snapshot()
+        let events = recorder.snapshot()
         let types = events.map(\.type)
         #expect(types.contains(.authRefreshStarted))
         #expect(types.contains(.authRefreshFailed))
@@ -939,7 +946,7 @@ struct WebSocketClientTests {
         let recorder = WebSocketTelemetryRecorder()
         let hooks = NetworkTelemetryHooks(
             onWebSocketEvent: { context in
-                Task { await recorder.append(context) }
+                recorder.append(context)
             }
         )
         let client = WebSocketClient(
@@ -985,7 +992,7 @@ struct WebSocketClientTests {
         #expect(await transport.connectCount() == 2)
 
         try? await Task.sleep(nanoseconds: 20_000_000)
-        let telemetryEvents = await recorder.snapshot()
+        let telemetryEvents = recorder.snapshot()
         let types = telemetryEvents.map(\.type)
         #expect(types.contains(.reconnectSuppressedOffline))
         #expect(types.contains(.reconnectResumedOnline))
@@ -1006,7 +1013,7 @@ struct WebSocketClientTests {
         let recorder = WebSocketTelemetryRecorder()
         let hooks = NetworkTelemetryHooks(
             onWebSocketEvent: { context in
-                Task { await recorder.append(context) }
+                recorder.append(context)
             }
         )
         let client = WebSocketClient(
@@ -1055,7 +1062,7 @@ struct WebSocketClientTests {
         #expect(await transport.connectCount() == 2)
 
         try? await Task.sleep(nanoseconds: 20_000_000)
-        let events = await recorder.snapshot()
+        let events = recorder.snapshot()
         let types = events.map(\.type)
         let suppressedIndex = types.firstIndex(of: .reconnectSuppressedOffline) ?? -1
         let resumedIndex = types.firstIndex(of: .reconnectResumedOnline) ?? -1
@@ -1072,7 +1079,7 @@ struct WebSocketClientTests {
         let recorder = WebSocketTelemetryRecorder()
         let hooks = NetworkTelemetryHooks(
             onWebSocketEvent: { context in
-                Task { await recorder.append(context) }
+                recorder.append(context)
             }
         )
         let client = WebSocketClient(
@@ -1114,7 +1121,7 @@ struct WebSocketClientTests {
         ])
 
         try? await Task.sleep(nanoseconds: 20_000_000)
-        let events = await recorder.snapshot()
+        let events = recorder.snapshot()
         let types = events.map(\.type)
         #expect(types.contains(.subscriptionRestoreStarted))
         #expect(types.contains(.subscriptionRestoreSucceeded))
@@ -1134,7 +1141,7 @@ struct WebSocketClientTests {
         let recorder = WebSocketTelemetryRecorder()
         let hooks = NetworkTelemetryHooks(
             onWebSocketEvent: { context in
-                Task { await recorder.append(context) }
+                recorder.append(context)
             }
         )
         let client = WebSocketClient(
@@ -1167,7 +1174,7 @@ struct WebSocketClientTests {
         #expect(await transport.connectCount() == 2)
 
         try? await Task.sleep(nanoseconds: 20_000_000)
-        let events = await recorder.snapshot()
+        let events = recorder.snapshot()
         let types = events.map(\.type)
         #expect(types.contains(.subscriptionRestoreStarted))
         #expect(types.contains(.subscriptionRestoreFailed))
@@ -1185,7 +1192,7 @@ struct WebSocketClientTests {
         let recorder = WebSocketTelemetryRecorder()
         let hooks = NetworkTelemetryHooks(
             onWebSocketEvent: { context in
-                Task { await recorder.append(context) }
+                recorder.append(context)
             }
         )
         let client = WebSocketClient(
@@ -1224,7 +1231,7 @@ struct WebSocketClientTests {
         #expect(await transport.connectCount() == 2)
 
         try? await Task.sleep(nanoseconds: 20_000_000)
-        let events = await recorder.snapshot()
+        let events = recorder.snapshot()
         let started = events.first { $0.type == .subscriptionRestoreStarted }
         let retry = events.first { $0.type == .subscriptionRestoreRetry }
         let completed = events.first { $0.type == .subscriptionRestoreCompleted }
@@ -1287,7 +1294,7 @@ struct WebSocketClientTests {
         let recorder = WebSocketTelemetryRecorder()
         let hooks = NetworkTelemetryHooks(
             onWebSocketEvent: { context in
-                Task { await recorder.append(context) }
+                recorder.append(context)
             }
         )
         let client = WebSocketClient(
@@ -1303,7 +1310,7 @@ struct WebSocketClientTests {
 
         try await client.connect()
         try? await Task.sleep(nanoseconds: 20_000_000)
-        let types = await recorder.snapshot().map(\.type)
+        let types = recorder.snapshot().map(\.type)
         #expect(types.contains(.persistedQueueRestored))
         #expect(types.contains(.persistedQueueSaved))
         #expect(types.contains(.persistedReplaySucceeded))
@@ -1317,7 +1324,7 @@ struct WebSocketClientTests {
         let recorder = WebSocketTelemetryRecorder()
         let hooks = NetworkTelemetryHooks(
             onWebSocketEvent: { context in
-                Task { await recorder.append(context) }
+                recorder.append(context)
             }
         )
         let client = WebSocketClient(
@@ -1332,7 +1339,7 @@ struct WebSocketClientTests {
 
         try await client.connect()
         try? await Task.sleep(nanoseconds: 20_000_000)
-        let types = await recorder.snapshot().map(\.type)
+        let types = recorder.snapshot().map(\.type)
         #expect(types.contains(.persistedQueueLoadFailed))
     }
 
@@ -1364,7 +1371,7 @@ struct WebSocketClientTests {
         let recorder = WebSocketTelemetryRecorder()
         let hooks = NetworkTelemetryHooks(
             onWebSocketEvent: { context in
-                Task { await recorder.append(context) }
+                recorder.append(context)
             }
         )
         let client = WebSocketClient(
@@ -1384,7 +1391,7 @@ struct WebSocketClientTests {
         #expect(sent == [.text("valid-replayed")])
 
         try? await Task.sleep(nanoseconds: 20_000_000)
-        let events = await recorder.snapshot()
+        let events = recorder.snapshot()
         let loadFailed = events.first { $0.type == .persistedQueueLoadFailed }
         #expect(loadFailed != nil)
         #expect((loadFailed?.reason ?? "").range(of: "partially_corrupted") != nil)
@@ -1397,7 +1404,7 @@ struct WebSocketClientTests {
         let recorder = WebSocketTelemetryRecorder()
         let hooks = NetworkTelemetryHooks(
             onWebSocketEvent: { context in
-                Task { await recorder.append(context) }
+                recorder.append(context)
             }
         )
         let transport = MockWebSocketTransport()
@@ -1422,7 +1429,7 @@ struct WebSocketClientTests {
 
         try await client.send(.binary(Data([4, 5, 6])))
         try? await Task.sleep(nanoseconds: 20_000_000)
-        let sentBinary = await recorder.snapshot().first {
+        let sentBinary = recorder.snapshot().first {
             $0.type == .messageSent && $0.messageKind == "binary"
         }
         #expect(sentBinary != nil)
@@ -1890,7 +1897,7 @@ struct WebSocketClientTests {
         let recorder = WebSocketTelemetryRecorder()
         let hooks = NetworkTelemetryHooks(
             onWebSocketEvent: { context in
-                Task { await recorder.append(context) }
+                recorder.append(context)
             }
         )
         let client = WebSocketClient(
@@ -1917,7 +1924,7 @@ struct WebSocketClientTests {
         }
 
         try? await Task.sleep(nanoseconds: 20_000_000)
-        let ackTimeout = await recorder.snapshot().first { $0.type == .ackTimeout }
+        let ackTimeout = recorder.snapshot().first { $0.type == .ackTimeout }
         #expect(ackTimeout?.messageID == "msg-timeout")
     }
 
@@ -1927,7 +1934,7 @@ struct WebSocketClientTests {
         let recorder = WebSocketTelemetryRecorder()
         let hooks = NetworkTelemetryHooks(
             onWebSocketEvent: { context in
-                Task { await recorder.append(context) }
+                recorder.append(context)
             }
         )
         let client = WebSocketClient(
@@ -1958,7 +1965,7 @@ struct WebSocketClientTests {
         #expect(sent.count == 2)
 
         try? await Task.sleep(nanoseconds: 20_000_000)
-        let events = await recorder.snapshot()
+        let events = recorder.snapshot()
         #expect(events.contains { $0.type == .ackResendAttempt && $0.messageID == "msg-resend-timeout" })
         #expect(events.contains {
             $0.type == .ackTimeout &&
@@ -1994,7 +2001,7 @@ struct WebSocketClientTests {
         let recorder = WebSocketTelemetryRecorder()
         let hooks = NetworkTelemetryHooks(
             onWebSocketEvent: { context in
-                Task { await recorder.append(context) }
+                recorder.append(context)
             }
         )
         let client = WebSocketClient(
@@ -2015,7 +2022,7 @@ struct WebSocketClientTests {
         #expect(sent == [.text("first")])
 
         try? await Task.sleep(nanoseconds: 20_000_000)
-        let dropped = await recorder.snapshot().first { $0.type == .messageDropped }
+        let dropped = recorder.snapshot().first { $0.type == .messageDropped }
         #expect(dropped?.queuePolicy == "dropNewest")
     }
 
