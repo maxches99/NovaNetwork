@@ -20,8 +20,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Select Xcode 26.3 (Swift 6.3)
+      - name: Select Xcode 26.3 SDK
         run: sudo xcode-select --switch /Applications/Xcode_26.3.app/Contents/Developer
+
+      - name: Install Latest Swift 6.3 Toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSLo "${RUNNER_TEMP}/swiftly.pkg" https://download.swift.org/swiftly/darwin/swiftly.pkg
+          installer -pkg "${RUNNER_TEMP}/swiftly.pkg" -target CurrentUserHomeDirectory
+          "${HOME}/.swiftly/bin/swiftly" init \
+            --skip-install \
+            --no-modify-profile \
+            --quiet-shell-followup \
+            --assume-yes
+          "${HOME}/.swiftly/bin/swiftly" install --use 6.3 --assume-yes
+          echo "${HOME}/.swiftly/bin" >> "${GITHUB_PATH}"
 
       - name: Verify Swift 6.3
         shell: bash
