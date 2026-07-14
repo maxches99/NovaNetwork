@@ -170,7 +170,7 @@ The 2.0 scope reduces application boilerplate, improves transfer scalability, ma
 | NFR-1 | Coverage | Unit line coverage remains >= 90%. | T-GATE-1 |
 | NFR-2 | Compatibility | Existing public signatures remain source-compatible; all current tests and examples compile. | T-MOD-2 |
 | NFR-3 | Memory | Streaming APIs use bounded buffering; downloads do not retain the entire payload in memory. | T-XFER-1, T-XFER-3 |
-| NFR-4 | Determinism | Unit tests use injected transports/clocks and no external network. | test policy audit |
+| NFR-4 | Determinism | Unit tests use injected transports/clocks and no external network; telemetry recorders preserve synchronous emission order without unstructured per-event tasks. | T-GATE-3, test policy audit |
 | NFR-5 | E2E integrity | E2E tests use real public APIs only and run only with `RUN_E2E_TESTS=1`. | T-GATE-2 |
 | NFR-7 | v2 E2E breadth | Every v2 feature with network-observable behavior has at least one real-public-API E2E scenario; compiler/module-only behavior remains covered by integration gates. | T-E2E-END, T-E2E-BATCH, T-E2E-XFER, T-E2E-AUTH, T-E2E-CACHE |
 | NFR-6 | No dependencies | No third-party package dependency is added. | package audit |
@@ -315,6 +315,7 @@ This is a library and does not render UI. “UI” below means observable API ou
 | AR-4 | T-AR-4 cache outcome telemetry | unit | Engineering | passed |
 | UR-4 | T-DOC-1 new public API DocC audit | integration | Engineering | passed |
 | NFR-1 | T-GATE-1 unit coverage >= 90% | integration | QA | passed |
+| NFR-4 | T-GATE-3 `connectivityFlapStabilityDoesNotSpawnDuplicateReconnectLoops` preserves suppressed -> resumed -> success telemetry order under repeated Swift 6.3 runs | unit/integration | Engineering | passed (50/50 local Swift 6.3 repetitions) |
 | NFR-5 | T-GATE-2 real-public-API E2E | e2e | QA | passed |
 | FR-END-2, NFR-7 | T-E2E-END typed endpoint against JSONPlaceholder | e2e | QA | passed |
 | FR-BATCH-1...3, NFR-7 | T-E2E-BATCH bounded collecting batch against public APIs | e2e | QA | passed |
