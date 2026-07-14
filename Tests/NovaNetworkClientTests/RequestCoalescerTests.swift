@@ -637,6 +637,17 @@ struct RequestCoalescerTests {
             }
         }
 
+        let setupDeadline = DispatchTime.now().uptimeNanoseconds + 1_000_000_000
+        while await coalescer.inFlightEntries().isEmpty {
+            guard DispatchTime.now().uptimeNanoseconds < setupDeadline else {
+                running.cancel()
+                _ = await running.result
+                Issue.record("Timed out waiting for the slow operation to become observable")
+                return
+            }
+            await Task.yield()
+        }
+
         try? await Task.sleep(nanoseconds: 100_000_000)
         let metrics = await coalescer.snapshotMetrics()
         _ = await running.result

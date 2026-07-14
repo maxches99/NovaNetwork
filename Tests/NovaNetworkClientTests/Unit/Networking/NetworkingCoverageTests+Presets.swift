@@ -55,7 +55,7 @@ extension NetworkingCoverageTests {
             transport: StubNetworkTransport(delayNanos: 0, response: .success(Data("ok".utf8))),
             telemetryHooks: .init(
                 onPolicyUpdated: { context in
-                    Task { await recorder.appendPolicyUpdated(context) }
+                    recorder.appendPolicyUpdated(context)
                 }
             )
         )
@@ -64,13 +64,13 @@ extension NetworkingCoverageTests {
 
         let deadline = DispatchTime.now().uptimeNanoseconds + 1_000_000_000
         while DispatchTime.now().uptimeNanoseconds < deadline {
-            if !(await recorder.policyUpdatedSnapshot().isEmpty) {
+            if !recorder.policyUpdatedSnapshot().isEmpty {
                 break
             }
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
 
-        let events = await recorder.policyUpdatedSnapshot()
+        let events = recorder.policyUpdatedSnapshot()
         guard let update = events.last else {
             Issue.record("Expected policy update telemetry")
             return
