@@ -1,3 +1,4 @@
+import NovaNetworkCore
 import Foundation
 
 struct NetworkClientHTTPExecutionContext: Sendable {
@@ -10,11 +11,11 @@ struct NetworkClientHTTPExecutionContext: Sendable {
     let policyScope: String
 }
 
-protocol NetworkClientHTTPExecutionPipeline {
+protocol NetworkClientHTTPExecutionPipeline: Sendable {
     func execute(_ context: NetworkClientHTTPExecutionContext) async -> Result<NetworkResponse, NetworkError>
 }
 
-struct DefaultNetworkClientHTTPExecutionPipeline: NetworkClientHTTPExecutionPipeline {
+struct DefaultNetworkClientHTTPExecutionPipeline: NetworkClientHTTPExecutionPipeline, Sendable {
     typealias Executor = @Sendable (
         _ key: String,
         _ request: APIRequest,

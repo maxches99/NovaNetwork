@@ -1,13 +1,24 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
+/// An immutable, transport-neutral HTTP request description.
 public struct APIRequest: Sendable {
+    /// HTTP method.
     public let method: URLMethod
+    /// Base request URL without ``queryItems`` applied.
     public let url: URL
+    /// Query items appended when creating a `URLRequest`.
     public let queryItems: [URLQueryItem]
+    /// HTTP request headers.
     public let headers: [String: String]
+    /// Optional request body.
     public let body: Data?
+    /// Request timeout in seconds.
     public let timeout: TimeInterval
 
+    /// Creates an HTTP request description.
     public init(
         method: URLMethod,
         url: URL,
@@ -24,6 +35,9 @@ public struct APIRequest: Sendable {
         self.timeout = timeout
     }
 
+    /// Creates a request by JSON-encoding a body value.
+    ///
+    /// The initializer adds `Content-Type: application/json` unless supplied by the caller.
     public init<Body: Encodable & Sendable>(
         method: URLMethod,
         url: URL,
@@ -49,10 +63,12 @@ public struct APIRequest: Sendable {
         )
     }
 
+    /// Creates a value-semantic request builder.
     public static func builder(method: URLMethod, url: URL) -> APIRequestBuilder {
         APIRequestBuilder(method: method, url: url)
     }
 
+    /// Returns a copy whose headers include or replace the supplied values.
     public func withMergedHeaders(_ additionalHeaders: [String: String]) -> APIRequest {
         guard !additionalHeaders.isEmpty else { return self }
         var merged = headers
@@ -69,6 +85,7 @@ public struct APIRequest: Sendable {
         )
     }
 
+    /// Converts the description into a Foundation `URLRequest`.
     public func urlRequest() -> URLRequest {
         let resolvedURL: URL
 

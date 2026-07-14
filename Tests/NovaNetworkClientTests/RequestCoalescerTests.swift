@@ -772,7 +772,11 @@ struct RequestCoalescerTests {
         let first = APIRequest(method: .get, url: URL(string: "https://example.com/b1")!)
         let second = APIRequest(method: .get, url: URL(string: "https://example.com/b2")!)
 
-        let results = try await client.loadBatch(requests: [first, second], authScope: nil)
+        let results = try await client.loadBatch(
+            requests: [first, second],
+            authScope: nil,
+            batchOptions: .init(maxConcurrentRequests: 1)
+        )
 
         #expect(results.count == 2)
         #expect(results[0] == Data("first".utf8))

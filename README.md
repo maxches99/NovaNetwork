@@ -12,6 +12,8 @@ When multiple callers ask for the same resource at the same time, only one under
 - [Security Policy](SECURITY.md)
 - [Examples](Examples/README.md)
 - [Telemetry Contract v2](docs/TELEMETRY_CONTRACT_V2.md)
+- [NovaNetwork v2.0 DFR](docs/dfr/NOVA_NETWORK_V2_DFR.md)
+- [v2.0 Traceability Pack](docs/TRACEABILITY_PACK_v2.0.md)
 - [v1.15 Traceability Pack](docs/TRACEABILITY_PACK_v1.15.md)
 - [v1.16 Traceability Pack](docs/TRACEABILITY_PACK_v1.16.md)
 - [v1.19 Traceability Pack](docs/TRACEABILITY_PACK_v1.19.md)
@@ -44,11 +46,18 @@ targets: [
 
 ## Features
 
+- Typed `Endpoint<Response>` execution with endpoint-specific decoding.
+- Swift 6.2 strict-concurrency compliance and a Swift 6.3 compatibility CI lane.
+- Bounded concurrent batches with stable ordering, fail-fast, and collecting modes.
+- Incremental response streaming plus native URLSession upload/download progress APIs.
+- Single-flight HTTP authentication refresh, isolated by authentication scope.
+- Standalone cross-platform `NovaNetworkCore` product for request/response/error/endpoint models.
+- HTTP Cache 2.0 with ETag and Last-Modified revalidation, corrected age, request directives,
+  `stale-if-error`, and safe `Vary: *` handling.
 - Coalesces concurrent requests by stable fingerprint key.
 - Optional short-lived in-memory response cache (`cacheFirst`, `staleWhileRevalidate`).
 - Optional pluggable response cache (`MemoryResponseCache`, `DiskResponseCache`, custom `ResponseCache`).
-- HTTP cache revalidation with `ETag` / `If-None-Match` (returns cached body on `304 Not Modified`).
-- Basic HTTP cache directive support (`Cache-Control`, `Expires`, `Vary`) for freshness and variant checks.
+- HTTP cache revalidation returns cached content after `304 Not Modified`.
 - Configurable fingerprint policy (`query`, `headers`, `body`).
 - Coalescer limits (`maxInFlightKeys`, `maxWaitersPerKey`, `inFlightTimeout`).
 - Configurable waiter overflow behavior for coalescing limits (`bypass` or explicit failure).
@@ -83,8 +92,8 @@ targets: [
 - Testable retry behavior via injectable clock and random generator.
 - Data and typed `Decodable` loading APIs.
 - Typed error mapping overloads (`errorMapper`).
-- Batch loading helper (`loadBatch`) with stable input order.
-- Streaming helper (`loadStream`) with fallback to single-chunk mode.
+- Batch loading helpers (`loadBatch`, `loadBatchResults`) with stable input order.
+- Streaming helper (`loadStream`) with true incremental URLSession delivery on supported platforms.
 - Request helpers (`APIRequestBuilder`, `Encodable` JSON body initializer).
 - Idempotency helpers (`APIRequest.withIdempotencyKey`, `IdempotencyPolicy`).
 - Cache management (`preload`, `invalidate`).
@@ -118,6 +127,43 @@ async let second = client.load(request: request, authScope: "user:42")
 let (a, b) = try await (first, second)
 print(a == b) // true
 ```
+
+## v2.0 API Quick Start
+
+```swift
+import Foundation
+import NovaNetworkClient
+
+struct User: Decodable, Sendable {
+    let id: Int
+    let name: String
+}
+
+let endpoint = AnyEndpoint<User>(
+    request: APIRequest(
+        method: .get,
+        url: URL(string: "https://api.example.com/users/42")!
+    )
+)
+
+let client = NetworkClient(
+    httpAuthRefreshProvider: HTTPAuthRefreshProvider { scope in
+        let token = try await credentials.refreshToken(for: scope)
+        return ["Authorization": "Bearer \(token)"]
+    }
+)
+
+let user = try await client.execute(endpoint: endpoint, authScope: "user:42")
+
+let bodies = try await client.loadBatch(
+    requests: requests,
+    authScope: "user:42",
+    batchOptions: .init(maxConcurrentRequests: 4)
+)
+```
+
+For model-only targets, depend on and `import NovaNetworkCore`. Existing targets may continue
+to import `NovaNetworkClient`, which re-exports the core public API.
 
 ## Preset Quick Start (v1.15)
 

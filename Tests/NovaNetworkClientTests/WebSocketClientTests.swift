@@ -176,6 +176,7 @@ private final class MockURLSessionWebSocketTask: URLSessionWebSocketTasking, @un
     private var receiveResults: [Result<URLSessionWebSocketTask.Message, Error>] = []
     private var sendResults: [Result<Void, Error>] = []
     private var pingResults: [Error?] = []
+    private var repeatNextPingCallback = false
     private(set) var sentMessages: [URLSessionWebSocketTask.Message] = []
     private(set) var cancelledReason: Data?
 
@@ -203,8 +204,13 @@ private final class MockURLSessionWebSocketTask: URLSessionWebSocketTasking, @un
     func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
         lock.lock()
         let next = pingResults.isEmpty ? nil : pingResults.removeFirst()
+        let shouldRepeat = repeatNextPingCallback
+        repeatNextPingCallback = false
         lock.unlock()
         pongReceiveHandler(next)
+        if shouldRepeat {
+            pongReceiveHandler(URLError(.networkConnectionLost))
+        }
     }
 
     func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
@@ -222,6 +228,12 @@ private final class MockURLSessionWebSocketTask: URLSessionWebSocketTasking, @un
     func enqueueSend(_ result: Result<Void, Error>) {
         lock.lock()
         sendResults.append(result)
+        lock.unlock()
+    }
+
+    func enqueueRepeatedPingCallback() {
+        lock.lock()
+        repeatNextPingCallback = true
         lock.unlock()
     }
 
@@ -2158,6 +2170,9 @@ struct WebSocketClientTests {
         #expect(task.snapshotSentMessages().count == 2)
 
         try await transport.ping()
+        task.enqueueRepeatedPingCallback()
+        try await transport.ping()
+        for _ in 0..<10 { await Task.yield() }
         task.enqueuePing(URLError(.cannotConnectToHost))
         do {
             try await transport.ping()

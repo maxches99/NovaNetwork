@@ -1,3 +1,4 @@
+import NovaNetworkCore
 import Foundation
 
 /// Version constants for the NovaNetworkClient observability contract.

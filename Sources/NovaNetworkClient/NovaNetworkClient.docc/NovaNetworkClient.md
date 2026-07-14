@@ -6,7 +6,8 @@ Deduplicate concurrent network requests with configurable fingerprinting, cancel
 
 `NovaNetworkClient` ensures that simultaneous calls for the same logical request share a single underlying operation.
 
-Use ``NetworkClient`` for a batteries-included integration with `URLSession`.
+Use ``NetworkClient`` for a batteries-included integration with `URLSession`, or import
+`NovaNetworkCore` for transport-neutral request, response, endpoint, and error contracts.
 
 ## Topics
 
@@ -32,6 +33,16 @@ Use ``NetworkClient`` for a batteries-included integration with `URLSession`.
 - ``APIRequestBuilder``
 - ``NetworkTransport``
 - ``Transport``
+- ``Endpoint``
+- ``AnyEndpoint``
+- ``BatchExecutionOptions``
+- ``BatchItemResult``
+- ``StreamingNetworkTransport``
+- ``TransferNetworkTransport``
+- ``TransferProgress``
+- ``UploadEvent``
+- ``DownloadEvent``
+- ``DownloadDestinationPolicy``
 - ``NetworkError``
 - ``WebSocketClient``
 - ``WebSocketConfiguration``
@@ -42,6 +53,16 @@ Use ``NetworkClient`` for a batteries-included integration with `URLSession`.
 ### Resilience
 
 - ``RetryPolicy``
+- ``HTTPAuthRefreshProvider``
+- ``HTTPAuthRefreshPolicy``
+
+### Caching
+
+- ``CachePolicy``
+- ``ResponseCache``
+- ``CachedResponse``
+- ``MemoryResponseCache``
+- ``DiskResponseCache``
 
 ### Observability
 
@@ -51,3 +72,6 @@ Use ``NetworkClient`` for a batteries-included integration with `URLSession`.
 - ``TelemetryContractVersion``
 - ``OpenTelemetryAdapter``
 - ``OpenTelemetryExporting``
+- ``TelemetryBatchContext``
+- ``TelemetryTransferContext``
+- ``TelemetryHTTPAuthRefreshContext``

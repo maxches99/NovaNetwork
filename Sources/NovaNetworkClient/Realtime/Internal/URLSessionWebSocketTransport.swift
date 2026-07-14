@@ -1,3 +1,4 @@
+import NovaNetworkCore
 import Foundation
 
 protocol WebSocketTransport: Sendable {
@@ -17,6 +18,24 @@ protocol URLSessionWebSocketTasking: Sendable {
 }
 
 extension URLSessionWebSocketTask: URLSessionWebSocketTasking {}
+
+private actor WebSocketPingContinuationGate {
+    private var continuation: CheckedContinuation<Void, any Error>?
+
+    init(continuation: CheckedContinuation<Void, any Error>) {
+        self.continuation = continuation
+    }
+
+    func resume(with error: (any Error)?) {
+        guard let continuation else { return }
+        self.continuation = nil
+        if let error {
+            continuation.resume(throwing: error)
+        } else {
+            continuation.resume()
+        }
+    }
+}
 
 actor URLSessionWebSocketTransport: WebSocketTransport {
     private let taskFactory: @Sendable (URLRequest) -> any URLSessionWebSocketTasking
@@ -78,13 +97,10 @@ actor URLSessionWebSocketTransport: WebSocketTransport {
             throw WebSocketError.disconnected
         }
 
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            let gate = WebSocketPingContinuationGate(continuation: continuation)
             task.sendPing(pongReceiveHandler: { error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume()
-                }
+                Task { await gate.resume(with: error) }
             })
         }
     }

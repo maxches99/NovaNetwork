@@ -1,4 +1,39 @@
+import NovaNetworkCore
 import Foundation
+
+actor NetworkClientLifetime {
+    private var connectivityListener: Task<Void, Never>?
+
+    func startConnectivityListener(
+        monitor: any OfflineConnectivityMonitor,
+        onOnline: @escaping @Sendable () async -> Void
+    ) {
+        connectivityListener?.cancel()
+        connectivityListener = Task { [weak self] in
+            let stream = monitor.statusStream()
+            for await isOnline in stream {
+                guard !Task.isCancelled else { return }
+                if isOnline {
+                    await onOnline()
+                }
+            }
+            await self?.clearConnectivityListener()
+        }
+    }
+
+    func cancelAll() {
+        connectivityListener?.cancel()
+        connectivityListener = nil
+    }
+
+    private func clearConnectivityListener() {
+        connectivityListener = nil
+    }
+
+    deinit {
+        connectivityListener?.cancel()
+    }
+}
 
 actor NetworkClientEventHub {
     private var continuations: [UUID: AsyncStream<NetworkClientEvent>.Continuation] = [:]

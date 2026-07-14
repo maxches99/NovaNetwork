@@ -1,3 +1,4 @@
+import NovaNetworkCore
 import Foundation
 
 public enum TelemetryCoalescingMode: String, Sendable {
@@ -377,6 +378,7 @@ public struct TelemetryCircuitBreakerTransitionContext: Sendable {
     }
 }
 
+/// Optional synchronous hooks for exporting network lifecycle telemetry.
 public struct NetworkTelemetryHooks: Sendable {
     public typealias OnRequestStart = @Sendable (TelemetryRequestContext) -> Void
     public typealias OnRequestEnd = @Sendable (TelemetryResponseContext) -> Void
@@ -390,6 +392,12 @@ public struct NetworkTelemetryHooks: Sendable {
     public typealias OnWebSocketEvent = @Sendable (TelemetryWebSocketContext) -> Void
     public typealias OnCircuitBreakerTransition = @Sendable (TelemetryCircuitBreakerTransitionContext) -> Void
     public typealias OnPolicyUpdated = @Sendable (TelemetryPolicyUpdateContext) -> Void
+    /// Receives one aggregate context when a batch terminates.
+    public typealias OnBatchCompleted = @Sendable (TelemetryBatchContext) -> Void
+    /// Receives upload, download, and streaming lifecycle events.
+    public typealias OnTransferEvent = @Sendable (TelemetryTransferContext) -> Void
+    /// Receives one lifecycle event per actual single-flight HTTP auth refresh.
+    public typealias OnHTTPAuthRefresh = @Sendable (TelemetryHTTPAuthRefreshContext) -> Void
 
     public let onRequestStart: OnRequestStart?
     public let onRequestEnd: OnRequestEnd?
@@ -403,7 +411,14 @@ public struct NetworkTelemetryHooks: Sendable {
     public let onWebSocketEvent: OnWebSocketEvent?
     public let onCircuitBreakerTransition: OnCircuitBreakerTransition?
     public let onPolicyUpdated: OnPolicyUpdated?
+    /// Aggregate batch completion hook.
+    public let onBatchCompleted: OnBatchCompleted?
+    /// Transfer lifecycle hook.
+    public let onTransferEvent: OnTransferEvent?
+    /// HTTP authentication refresh lifecycle hook.
+    public let onHTTPAuthRefresh: OnHTTPAuthRefresh?
 
+    /// Creates a set of optional telemetry hooks.
     public init(
         onRequestStart: OnRequestStart? = nil,
         onRequestEnd: OnRequestEnd? = nil,
@@ -416,7 +431,10 @@ public struct NetworkTelemetryHooks: Sendable {
         onOfflineQueueEvent: OnOfflineQueueEvent? = nil,
         onWebSocketEvent: OnWebSocketEvent? = nil,
         onCircuitBreakerTransition: OnCircuitBreakerTransition? = nil,
-        onPolicyUpdated: OnPolicyUpdated? = nil
+        onPolicyUpdated: OnPolicyUpdated? = nil,
+        onBatchCompleted: OnBatchCompleted? = nil,
+        onTransferEvent: OnTransferEvent? = nil,
+        onHTTPAuthRefresh: OnHTTPAuthRefresh? = nil
     ) {
         self.onRequestStart = onRequestStart
         self.onRequestEnd = onRequestEnd
@@ -430,5 +448,8 @@ public struct NetworkTelemetryHooks: Sendable {
         self.onWebSocketEvent = onWebSocketEvent
         self.onCircuitBreakerTransition = onCircuitBreakerTransition
         self.onPolicyUpdated = onPolicyUpdated
+        self.onBatchCompleted = onBatchCompleted
+        self.onTransferEvent = onTransferEvent
+        self.onHTTPAuthRefresh = onHTTPAuthRefresh
     }
 }

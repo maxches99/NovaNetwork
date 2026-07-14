@@ -1,3 +1,4 @@
+import NovaNetworkCore
 import Foundation
 
 /// Export surface for bridging NovaNetworkClient telemetry to OpenTelemetry SDKs.

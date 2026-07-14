@@ -1,3 +1,4 @@
+import NovaNetworkCore
 import Foundation
 
 extension NetworkClient {
@@ -13,9 +14,42 @@ extension NetworkClient {
         return Double(elapsed) / 1_000_000
     }
 
+    func correctedAgeSeconds(cached: CachedResponse) -> TimeInterval {
+        let residentTime = ageSeconds(since: cached.storedAtNanoseconds)
+        let ageHeader = headerValue("Age", in: cached.headers)
+            .flatMap(TimeInterval.init) ?? 0
+        let apparentAge: TimeInterval
+        if let rawDate = headerValue("Date", in: cached.headers),
+           let responseDate = DateFormatter.rfc1123.date(from: rawDate) {
+            apparentAge = max(0, Date().timeIntervalSince(responseDate))
+        } else {
+            apparentAge = 0
+        }
+        return max(apparentAge, max(0, ageHeader) + residentTime)
+    }
+
     func shouldStoreInCache(_ headers: [String: String]) -> Bool {
         let directives = cacheDirectives(from: headers)
-        return !directives.contains("no-store")
+        return !directives.contains("no-store") && !hasWildcardVary(headers: headers)
+    }
+
+    func requestAllowsCacheLookup(_ request: APIRequest) -> Bool {
+        !cacheDirectives(from: request.headers).contains("no-store")
+    }
+
+    func requestAllowsCacheStorage(_ request: APIRequest) -> Bool {
+        !cacheDirectives(from: request.headers).contains("no-store")
+    }
+
+    func requestRequiresRevalidation(_ request: APIRequest) -> Bool {
+        cacheDirectives(from: request.headers).contains("no-cache")
+    }
+
+    func hasWildcardVary(headers: [String: String]) -> Bool {
+        guard let rawVary = headerValue("Vary", in: headers) else { return false }
+        return rawVary
+            .split(separator: ",")
+            .contains { $0.trimmingCharacters(in: .whitespacesAndNewlines) == "*" }
     }
 
     func varyHeaders(from responseHeaders: [String: String], requestHeaders: [String: String]) -> [String: String] {
@@ -93,6 +127,44 @@ extension NetworkClient {
             }
         }
         return nil
+    }
+
+    func cacheControlStaleIfError(headers: [String: String]) -> TimeInterval? {
+        for directive in cacheDirectives(from: headers) {
+            if directive.hasPrefix("stale-if-error=") {
+                let raw = directive.replacingOccurrences(of: "stale-if-error=", with: "")
+                if let value = TimeInterval(raw) {
+                    return max(0, value)
+                }
+            }
+        }
+        return nil
+    }
+
+    func canServeStaleIfError(
+        cached: CachedResponse,
+        clientMaxAge: TimeInterval,
+        error: NetworkError
+    ) -> Bool {
+        guard isEligibleStaleIfError(error),
+              let staleExtension = cacheControlStaleIfError(headers: cached.headers) else {
+            return false
+        }
+        let freshLifetime = effectiveMaxAge(clientMaxAge: clientMaxAge, cached: cached)
+        return correctedAgeSeconds(cached: cached) <= freshLifetime + staleExtension
+    }
+
+    private func isEligibleStaleIfError(_ error: NetworkError) -> Bool {
+        switch error.failureReason {
+        case .transport, .timedOut:
+            return true
+        case .httpStatus(let code):
+            return code >= 500
+        case .invalidResponse:
+            return true
+        default:
+            return false
+        }
     }
 
     func cacheControlExpires(headers: [String: String]) -> Date? {

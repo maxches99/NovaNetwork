@@ -1,3 +1,4 @@
+import NovaNetworkCore
 import Foundation
 
 public actor DiskResponseCache: ResponseCache {
@@ -10,6 +11,7 @@ public actor DiskResponseCache: ResponseCache {
         let statusCode: Int
         let headers: [String: String]
         let etag: String?
+        let lastModified: String?
         let storedAtNanoseconds: UInt64
         let lastAccessedAtNanoseconds: UInt64
         let bodyBytes: Int
@@ -49,6 +51,7 @@ public actor DiskResponseCache: ResponseCache {
             statusCode: metadata.statusCode,
             headers: metadata.headers,
             etag: metadata.etag,
+            lastModified: metadata.lastModified,
             storedAtNanoseconds: metadata.storedAtNanoseconds,
             lastAccessedAtNanoseconds: DispatchTime.now().uptimeNanoseconds,
             bodyBytes: metadata.bodyBytes,
@@ -63,6 +66,7 @@ public actor DiskResponseCache: ResponseCache {
             statusCode: metadata.statusCode,
             headers: metadata.headers,
             etag: metadata.etag,
+            lastModified: metadata.lastModified,
             storedAtNanoseconds: metadata.storedAtNanoseconds,
             lastAccessedAtNanoseconds: touched.lastAccessedAtNanoseconds,
             varyRequestHeaders: metadata.varyRequestHeaders
@@ -77,6 +81,7 @@ public actor DiskResponseCache: ResponseCache {
             statusCode: response.statusCode,
             headers: response.headers,
             etag: response.etag,
+            lastModified: response.lastModified,
             storedAtNanoseconds: response.storedAtNanoseconds,
             lastAccessedAtNanoseconds: response.lastAccessedAtNanoseconds,
             bodyBytes: response.body.count,

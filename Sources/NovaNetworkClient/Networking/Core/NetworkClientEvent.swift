@@ -1,9 +1,13 @@
+import NovaNetworkCore
 import Foundation
 
+/// Observable cache, retry, policy, and request lifecycle events.
 public enum NetworkClientEvent: Sendable {
     case cacheHit(key: String, isStale: Bool, ageMilliseconds: Double)
     case cacheMiss(key: String)
     case cacheRevalidated(key: String, ageMilliseconds: Double)
+    /// Stale cached content was served after an eligible revalidation failure.
+    case cacheStaleIfError(key: String, ageMilliseconds: Double, reason: String)
     case requestAttempt(key: String, attempt: Int)
     case retryScheduled(key: String, nextAttempt: Int, delayMilliseconds: Double, reason: String)
     case retrySkipped(key: String, attempt: Int, reason: String)

@@ -7,6 +7,7 @@ let package = Package(
     name: "NovaNetworkClient",
     platforms: [.iOS(.v13), .macOS(.v10_15), .watchOS(.v6), .tvOS(.v13)],
     products: [
+        .library(name: "NovaNetworkCore", targets: ["NovaNetworkCore"]),
         .library(name: "NovaNetworkClient", targets: ["NovaNetworkClient"]),
         .library(name: "NovaNetworkClientTestSupport", targets: ["NovaNetworkClientTestSupport"]),
         .executable(name: "NovaNetworkClientBenchmarks", targets: ["NovaNetworkClientBenchmarks"]),
@@ -25,7 +26,12 @@ let package = Package(
         // Targets are the basic building blocks of a package, defining a module or a test suite.
         // Targets can depend on other targets in this package and products from dependencies.
         .target(
+            name: "NovaNetworkCore",
+            path: "Sources/NovaNetworkCore"
+        ),
+        .target(
             name: "NovaNetworkClient",
+            dependencies: ["NovaNetworkCore"],
             path: "Sources/NovaNetworkClient"
         ),
         .target(
@@ -37,6 +43,11 @@ let package = Package(
             name: "NovaNetworkClientTests",
             dependencies: ["NovaNetworkClient"],
             path: "Tests/NovaNetworkClientTests"
+        ),
+        .testTarget(
+            name: "NovaNetworkCoreTests",
+            dependencies: ["NovaNetworkCore"],
+            path: "Tests/NovaNetworkCoreTests"
         ),
         .executableTarget(
             name: "NovaNetworkClientBenchmarks",

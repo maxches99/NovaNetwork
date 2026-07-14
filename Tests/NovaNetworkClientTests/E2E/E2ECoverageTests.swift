@@ -177,7 +177,7 @@ struct E2ECoverageTests {
 
         let request = APIRequest(
             method: .get,
-            url: URL(string: "https://jsonplaceholder.typicode.com/todos/1")!
+            url: URL(string: "https://httpbin.org/cache/120")!
         )
 
         _ = try await client.load(request: request, authScope: "public")

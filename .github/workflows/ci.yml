@@ -11,6 +11,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  swift-6-3-compatibility:
+    name: Swift 6.3 Compatibility
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Swift 6.3
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.3"
+
+      - name: Show Swift Version
+        run: swift --version
+
+      - name: Build with Complete Concurrency Checking
+        run: swift build -Xswiftc -strict-concurrency=complete -Xswiftc -warn-concurrency
+
+      - name: Test
+        run: swift test
+
   build-test-coverage:
     name: Build, Test, Coverage Gates
     runs-on: macos-15
@@ -47,9 +70,10 @@ jobs:
             exit 1
           fi
 
+          SOURCE_FILES=$(find Sources/NovaNetworkClient Sources/NovaNetworkCore -name "*.swift" -print)
           REPORT=$(xcrun llvm-cov report "${TEST_BIN}" \
             -instr-profile="${PROF_DATA}" \
-            Sources/NovaNetworkClient/**/*.swift)
+            ${SOURCE_FILES})
 
           echo "${REPORT}"
 
