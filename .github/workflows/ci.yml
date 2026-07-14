@@ -18,15 +18,18 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
-      - name: Setup Swift 6.3
-        uses: swift-actions/setup-swift@v2
-        with:
-          swift-version: "6.3"
+      - name: Select Xcode 26.3 (Swift 6.3)
+        run: sudo xcode-select --switch /Applications/Xcode_26.3.app/Contents/Developer
 
-      - name: Show Swift Version
-        run: swift --version
+      - name: Verify Swift 6.3
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(swift --version)
+          echo "${VERSION}"
+          grep -Eq 'Swift version 6\.3([.[:space:]]|$)' <<< "${VERSION}"
 
       - name: Build with Complete Concurrency Checking
         run: swift build -Xswiftc -strict-concurrency=complete -Xswiftc -warn-concurrency
@@ -41,15 +44,18 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
-      - name: Setup Swift 6.2
-        uses: swift-actions/setup-swift@v2
-        with:
-          swift-version: "6.2"
+      - name: Select Xcode 26.2 (Swift 6.2)
+        run: sudo xcode-select --switch /Applications/Xcode_26.2.app/Contents/Developer
 
-      - name: Show Swift Version
-        run: swift --version
+      - name: Verify Swift 6.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(swift --version)
+          echo "${VERSION}"
+          grep -Eq 'Swift version 6\.2([.[:space:]]|$)' <<< "${VERSION}"
 
       - name: Build
         run: swift build
