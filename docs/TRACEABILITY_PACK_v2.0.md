@@ -33,7 +33,7 @@
 | FR-CACHE-1...5, DR-4, EC-8...10, AR-4 | T-CACHE-1...6 and T-AR-4 `HTTPCacheV2Tests` plus cache regression suites |
 | UR-4 | T-DOC-1 DocC audit of new/changed public API |
 | NFR-1 | T-GATE-1 combined `NovaNetworkClient` + `NovaNetworkCore` line coverage >= 90% |
-| NFR-4 | T-GATE-3 ordered lock-based telemetry recorder and 50 repeated Swift 6.3 runs of `connectivityFlapStabilityDoesNotSpawnDuplicateReconnectLoops` |
+| NFR-4 | T-GATE-3 ordered lock-based WebSocket telemetry recorder and 50 repeated Swift 6.3 runs of `connectivityFlapStabilityDoesNotSpawnDuplicateReconnectLoops`; T-GATE-4 scheduler-independent setup for `inFlightTimeoutEvictsHungEntries` plus synchronous lock-backed shared telemetry recording |
 | NFR-5 | T-GATE-2 `RUN_E2E_TESTS=1` against public endpoints only |
 | NFR-7 | T-E2E-END/BATCH/XFER/AUTH/CACHE in `E2ECoverageTests+V2.swift` |
 
@@ -49,6 +49,7 @@
 - Strict concurrency build: passed.
 - `NovaNetworkCore` target build: passed.
 - Unit/integration tests: 271 passed.
-- Combined line coverage: 92.60%.
+- Combined line coverage: 92.45%.
 - Swift 6.3 telemetry-order stability repetition: 50/50 passed.
+- Swift 6.3 timeout setup stability repetition: 100/100 passed; shared policy telemetry ordering: 50/50 passed; full suite stability: 3/3 passed.
 - Real-public-API E2E: 31 passed, including all seven v2 network-observable scenarios.

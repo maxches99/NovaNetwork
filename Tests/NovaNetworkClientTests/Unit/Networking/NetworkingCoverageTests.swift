@@ -152,30 +152,37 @@ actor EventRecorder {
     func snapshot() -> [NetworkClientEvent] { events }
 }
 
-actor TelemetryRecorder {
-    private(set) var coalescerEvents: [TelemetryCoalescerContext] = []
-    private(set) var retryEvents: [TelemetryRetryContext] = []
-    private(set) var retrySkippedEvents: [TelemetryRetrySkippedContext] = []
-    private(set) var cancellationEvents: [TelemetryCancellationContext] = []
-    private(set) var queueEvents: [TelemetryQueueContext] = []
-    private(set) var offlineQueueEvents: [TelemetryOfflineQueueContext] = []
-    private(set) var policyUpdatedEvents: [TelemetryPolicyUpdateContext] = []
+final class TelemetryRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var coalescerEvents: [TelemetryCoalescerContext] = []
+    private var retryEvents: [TelemetryRetryContext] = []
+    private var retrySkippedEvents: [TelemetryRetrySkippedContext] = []
+    private var cancellationEvents: [TelemetryCancellationContext] = []
+    private var queueEvents: [TelemetryQueueContext] = []
+    private var offlineQueueEvents: [TelemetryOfflineQueueContext] = []
+    private var policyUpdatedEvents: [TelemetryPolicyUpdateContext] = []
 
-    func appendCoalescer(_ event: TelemetryCoalescerContext) { coalescerEvents.append(event) }
-    func appendRetry(_ event: TelemetryRetryContext) { retryEvents.append(event) }
-    func appendRetrySkipped(_ event: TelemetryRetrySkippedContext) { retrySkippedEvents.append(event) }
-    func appendCancellation(_ event: TelemetryCancellationContext) { cancellationEvents.append(event) }
-    func appendQueue(_ event: TelemetryQueueContext) { queueEvents.append(event) }
-    func appendOfflineQueue(_ event: TelemetryOfflineQueueContext) { offlineQueueEvents.append(event) }
-    func appendPolicyUpdated(_ event: TelemetryPolicyUpdateContext) { policyUpdatedEvents.append(event) }
+    func appendCoalescer(_ event: TelemetryCoalescerContext) { withLock { coalescerEvents.append(event) } }
+    func appendRetry(_ event: TelemetryRetryContext) { withLock { retryEvents.append(event) } }
+    func appendRetrySkipped(_ event: TelemetryRetrySkippedContext) { withLock { retrySkippedEvents.append(event) } }
+    func appendCancellation(_ event: TelemetryCancellationContext) { withLock { cancellationEvents.append(event) } }
+    func appendQueue(_ event: TelemetryQueueContext) { withLock { queueEvents.append(event) } }
+    func appendOfflineQueue(_ event: TelemetryOfflineQueueContext) { withLock { offlineQueueEvents.append(event) } }
+    func appendPolicyUpdated(_ event: TelemetryPolicyUpdateContext) { withLock { policyUpdatedEvents.append(event) } }
 
-    func coalescerTypes() -> [TelemetryCoalescerEventType] { coalescerEvents.map(\.type) }
-    func retryCount() -> Int { retryEvents.count }
-    func cancellationReasons() -> [String] { cancellationEvents.map(\.reason) }
-    func queueSnapshot() -> [TelemetryQueueContext] { queueEvents }
-    func offlineQueueSnapshot() -> [TelemetryOfflineQueueContext] { offlineQueueEvents }
-    func retrySnapshot() -> [TelemetryRetryContext] { retryEvents }
-    func policyUpdatedSnapshot() -> [TelemetryPolicyUpdateContext] { policyUpdatedEvents }
+    func coalescerTypes() -> [TelemetryCoalescerEventType] { withLock { coalescerEvents.map(\.type) } }
+    func retryCount() -> Int { withLock { retryEvents.count } }
+    func cancellationReasons() -> [String] { withLock { cancellationEvents.map(\.reason) } }
+    func queueSnapshot() -> [TelemetryQueueContext] { withLock { queueEvents } }
+    func offlineQueueSnapshot() -> [TelemetryOfflineQueueContext] { withLock { offlineQueueEvents } }
+    func retrySnapshot() -> [TelemetryRetryContext] { withLock { retryEvents } }
+    func policyUpdatedSnapshot() -> [TelemetryPolicyUpdateContext] { withLock { policyUpdatedEvents } }
+
+    private func withLock<T>(_ body: () -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return body()
+    }
 }
 
 actor MiddlewareProbe {

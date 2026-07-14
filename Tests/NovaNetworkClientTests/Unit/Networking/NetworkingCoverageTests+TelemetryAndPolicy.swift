@@ -25,7 +25,7 @@ extension NetworkingCoverageTests {
         let coalescingClient = NetworkClient(
             transport: coalescingTransport,
             telemetryHooks: .init(
-                onCoalescerEvent: { context in Task { await recorder.appendCoalescer(context) } }
+                onCoalescerEvent: { context in recorder.appendCoalescer(context) }
             )
         )
         let coalescingRequest = APIRequest(method: .get, url: URL(string: "https://example.com/telemetry-coalesced")!)
@@ -39,26 +39,26 @@ extension NetworkingCoverageTests {
             retryPolicy: .init(maxAttempts: 2, jitterRange: nil),
             retryClock: ThrowingClock(),
             telemetryHooks: .init(
-                onRetryScheduled: { context in Task { await recorder.appendRetry(context) } },
-                onRequestCancelled: { context in Task { await recorder.appendCancellation(context) } }
+                onRetryScheduled: { context in recorder.appendRetry(context) },
+                onRequestCancelled: { context in recorder.appendCancellation(context) }
             )
         )
         let retryRequest = APIRequest(method: .get, url: URL(string: "https://example.com/telemetry-retry-cancel")!)
         _ = try? await retryClient.load(request: retryRequest, authScope: nil)
         await waitUntil {
-            let retryCount = await recorder.retryCount()
-            let reasons = await recorder.cancellationReasons()
+            let retryCount = recorder.retryCount()
+            let reasons = recorder.cancellationReasons()
             return retryCount >= 1 && reasons.contains("retrySleepCancelled")
         }
 
-        let coalescerTypes = await recorder.coalescerTypes()
+        let coalescerTypes = recorder.coalescerTypes()
         let coalescedJoinCount = coalescerTypes.filter { $0 == .coalesced }.count
         #expect(coalescerTypes.contains(.started))
         #expect(coalescerTypes.contains(.coalesced))
         #expect(coalescerTypes.contains(.finished))
         #expect(coalescedJoinCount == 1)
-        #expect(await recorder.retryCount() == 1)
-        #expect(await recorder.cancellationReasons().contains("retrySleepCancelled"))
+        #expect(recorder.retryCount() == 1)
+        #expect(recorder.cancellationReasons().contains("retrySleepCancelled"))
     }
 
     @Test
@@ -72,7 +72,7 @@ extension NetworkingCoverageTests {
             transport: transport,
             offlineWriteStore: store,
             telemetryHooks: .init(
-                onOfflineQueueEvent: { context in Task { await recorder.appendOfflineQueue(context) } }
+                onOfflineQueueEvent: { context in recorder.appendOfflineQueue(context) }
             )
         )
         let request = APIRequest(method: .post, url: URL(string: "https://example.com/offline-telemetry")!)
@@ -84,11 +84,11 @@ extension NetworkingCoverageTests {
         )
         _ = await client.flushOfflineQueue()
         await waitUntil {
-            let events = await recorder.offlineQueueSnapshot()
+            let events = recorder.offlineQueueSnapshot()
             return events.contains(where: { $0.type == .replaySucceeded })
         }
 
-        let events = await recorder.offlineQueueSnapshot()
+        let events = recorder.offlineQueueSnapshot()
         #expect(events.contains(where: { $0.type == .enqueued }))
         #expect(events.contains(where: { $0.type == .replayStarted }))
         #expect(events.contains(where: { $0.type == .replaySucceeded }))
@@ -116,7 +116,7 @@ extension NetworkingCoverageTests {
             transport: transport,
             offlineWriteStore: store,
             telemetryHooks: .init(
-                onOfflineQueueEvent: { context in Task { await recorder.appendOfflineQueue(context) } }
+                onOfflineQueueEvent: { context in recorder.appendOfflineQueue(context) }
             )
         )
         let request = APIRequest(method: .post, url: URL(string: "https://example.com/offline-telemetry-fail")!)
@@ -128,11 +128,11 @@ extension NetworkingCoverageTests {
         )
         _ = await client.flushOfflineQueue()
         await waitUntil {
-            let events = await recorder.offlineQueueSnapshot()
+            let events = recorder.offlineQueueSnapshot()
             return events.contains(where: { $0.type == .replayFailed })
         }
 
-        let events = await recorder.offlineQueueSnapshot()
+        let events = recorder.offlineQueueSnapshot()
         #expect(!events.contains(where: { $0.type == .replaySucceeded }))
         let hasRetryFailure422 = events.contains { event in
             event.type == .replayFailed &&
@@ -156,7 +156,7 @@ extension NetworkingCoverageTests {
             transport: transport,
             offlineWriteStore: store,
             telemetryHooks: .init(
-                onOfflineQueueEvent: { context in Task { await recorder.appendOfflineQueue(context) } }
+                onOfflineQueueEvent: { context in recorder.appendOfflineQueue(context) }
             )
         )
         let request = APIRequest(method: .post, url: URL(string: "https://example.com/recovery-telemetry")!)
@@ -169,10 +169,10 @@ extension NetworkingCoverageTests {
 
         _ = await client.flushOfflineQueue(limit: 4)
         await waitUntil {
-            let events = await recorder.offlineQueueSnapshot()
+            let events = recorder.offlineQueueSnapshot()
             return events.contains(where: { $0.type == .recoveryLossDetected })
         }
-        let events = await recorder.offlineQueueSnapshot()
+        let events = recorder.offlineQueueSnapshot()
         #expect(events.contains(where: { $0.type == .recoveryLossDetected && ($0.skippedRecords ?? 0) > 0 }))
     }
 
@@ -313,8 +313,8 @@ extension NetworkingCoverageTests {
             transport: transport,
             retryPolicy: .init(maxAttempts: 1, jitterRange: nil),
             telemetryHooks: .init(
-                onRetryScheduled: { context in Task { await recorder.appendRetry(context) } },
-                onPolicyUpdated: { context in Task { await recorder.appendPolicyUpdated(context) } }
+                onRetryScheduled: { context in recorder.appendRetry(context) },
+                onPolicyUpdated: { context in recorder.appendPolicyUpdated(context) }
             )
         )
         await client.updateRuntimePolicy(
@@ -333,12 +333,12 @@ extension NetworkingCoverageTests {
         let request = APIRequest(method: .get, url: URL(string: "https://example.com/telemetry-runtime-retry")!)
         _ = try await client.load(request: request, authScope: nil)
         await waitUntil {
-            let retries = await recorder.retrySnapshot().count
-            let updates = await recorder.policyUpdatedSnapshot().count
+            let retries = recorder.retrySnapshot().count
+            let updates = recorder.policyUpdatedSnapshot().count
             return retries == 1 && updates == 1
         }
 
-        let retryEvents = await recorder.retrySnapshot()
+        let retryEvents = recorder.retrySnapshot()
         #expect(retryEvents.count == 1)
         guard let retry = retryEvents.first else {
             Issue.record("Expected one retry event")
@@ -348,7 +348,7 @@ extension NetworkingCoverageTests {
         #expect(retry.retryProfile == RetryFailureCategory.timeout.rawValue)
         #expect(retry.policyScope == RuntimePolicySource.host.rawValue)
 
-        let updateEvents = await recorder.policyUpdatedSnapshot()
+        let updateEvents = recorder.policyUpdatedSnapshot()
         #expect(updateEvents.count == 1)
         #expect(updateEvents.first?.scope == RuntimePolicySource.host.rawValue)
     }
@@ -429,7 +429,7 @@ extension NetworkingCoverageTests {
             transport: transport,
             coalescerLimits: .init(maxInFlightKeys: 1),
             telemetryHooks: .init(
-                onQueueMetrics: { context in Task { await recorder.appendQueue(context) } }
+                onQueueMetrics: { context in recorder.appendQueue(context) }
             )
         )
 
@@ -450,10 +450,10 @@ extension NetworkingCoverageTests {
 
         _ = try await (one, two)
         await waitUntil {
-            !(await recorder.queueSnapshot()).isEmpty
+            !recorder.queueSnapshot().isEmpty
         }
 
-        let queueEvents = await recorder.queueSnapshot()
+        let queueEvents = recorder.queueSnapshot()
         #expect(!queueEvents.isEmpty)
         guard let firstQueueEvent = queueEvents.first else {
             Issue.record("Expected queue metrics event")
@@ -663,7 +663,7 @@ extension NetworkingCoverageTests {
         let client = NetworkClient(
             transport: StubNetworkTransport(response: .success(Data("ok".utf8))),
             telemetryHooks: .init(
-                onPolicyUpdated: { context in Task { await recorder.appendPolicyUpdated(context) } }
+                onPolicyUpdated: { context in recorder.appendPolicyUpdated(context) }
             )
         )
 
@@ -682,10 +682,10 @@ extension NetworkingCoverageTests {
         )
         await client.updateCoalescerSchedulerPolicy(.init(highWeight: 3, mediumWeight: 2, lowWeight: 1))
         await waitUntil {
-            await recorder.policyUpdatedSnapshot().count >= 2
+            recorder.policyUpdatedSnapshot().count >= 2
         }
 
-        let events = await recorder.policyUpdatedSnapshot()
+        let events = recorder.policyUpdatedSnapshot()
         #expect(events.count == 2)
         guard events.count == 2 else { return }
 

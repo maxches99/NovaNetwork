@@ -129,7 +129,7 @@ extension NetworkingCoverageTests {
             transport: transport,
             offlineWriteStore: store,
             telemetryHooks: .init(
-                onOfflineQueueEvent: { context in Task { await recorder.appendOfflineQueue(context) } }
+                onOfflineQueueEvent: { context in recorder.appendOfflineQueue(context) }
             )
         )
         let request = APIRequest(method: .post, url: URL(string: "https://example.com/dedupe")!)
@@ -148,7 +148,7 @@ extension NetworkingCoverageTests {
         #expect(await store.depth(now: Date()) == 0)
 
         try? await Task.sleep(nanoseconds: 20_000_000)
-        let events = await recorder.offlineQueueSnapshot()
+        let events = recorder.offlineQueueSnapshot()
         let hasSuppressed = events.contains {
             $0.type == .replaySuppressed && $0.resultType == "dedupe_suppressed"
         }
@@ -476,7 +476,7 @@ extension NetworkingCoverageTests {
                 return .manualReview(reason: nil)
             },
             telemetryHooks: .init(
-                onOfflineQueueEvent: { context in Task { await recorder.appendOfflineQueue(context) } }
+                onOfflineQueueEvent: { context in recorder.appendOfflineQueue(context) }
             )
         )
         let request = APIRequest(method: .post, url: URL(string: "https://example.com/conflict-resolver")!)
@@ -492,7 +492,7 @@ extension NetworkingCoverageTests {
         _ = await client.flushOfflineQueue(limit: 4)
         #expect(await store.depth(now: Date()) == 0)
 
-        let events = await recorder.offlineQueueSnapshot()
+        let events = recorder.offlineQueueSnapshot()
         let hasDroppedConflict = events.contains {
             $0.type == .replayDroppedConflict && $0.reason == "resolver_drop_422"
         }
