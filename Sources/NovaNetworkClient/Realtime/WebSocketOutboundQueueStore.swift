@@ -1,3 +1,4 @@
+import NovaNetworkCore
 import Foundation
 
 public struct WebSocketQueuedMessage: Sendable, Codable, Equatable {

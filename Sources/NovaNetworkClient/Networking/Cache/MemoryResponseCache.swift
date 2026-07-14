@@ -1,3 +1,4 @@
+import NovaNetworkCore
 import Foundation
 
 public actor MemoryResponseCache: ResponseCache {
@@ -18,6 +19,7 @@ public actor MemoryResponseCache: ResponseCache {
             statusCode: existing.statusCode,
             headers: existing.headers,
             etag: existing.etag,
+            lastModified: existing.lastModified,
             storedAtNanoseconds: existing.storedAtNanoseconds,
             lastAccessedAtNanoseconds: DispatchTime.now().uptimeNanoseconds,
             varyRequestHeaders: existing.varyRequestHeaders

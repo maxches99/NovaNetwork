@@ -1,4 +1,46 @@
+import NovaNetworkCore
 import Foundation
+
+private actor CoalescerWaiterGate<Output: Sendable, Failure: Error> {
+    private var continuation: CheckedContinuation<Output, any Error>?
+    private var terminalResult: Result<Output, any Error>?
+
+    func wait() async throws -> Output {
+        try await withCheckedThrowingContinuation { continuation in
+            if let terminalResult {
+                continuation.resume(with: terminalResult)
+            } else {
+                self.continuation = continuation
+            }
+        }
+    }
+
+    @discardableResult
+    func resolve(_ result: Result<Output, Failure>) -> Bool {
+        guard terminalResult == nil else { return false }
+        let erased: Result<Output, any Error>
+        switch result {
+        case .success(let output):
+            erased = .success(output)
+        case .failure(let failure):
+            erased = .failure(failure)
+        }
+        terminalResult = erased
+        continuation?.resume(with: erased)
+        continuation = nil
+        return true
+    }
+
+    @discardableResult
+    func cancel() -> Bool {
+        guard terminalResult == nil else { return false }
+        let result: Result<Output, any Error> = .failure(CancellationError())
+        terminalResult = result
+        continuation?.resume(with: result)
+        continuation = nil
+        return true
+    }
+}
 
 public actor RequestCoalescer<Output: Sendable, Failure: Error> {
     public enum RequestPriority: Int, Sendable {
@@ -216,19 +258,32 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
 
         switch acquisition {
         case .shared(let task, let waiterID):
-            return try await withTaskCancellationHandler {
+            let gate = CoalescerWaiterGate<Output, Failure>()
+            Task {
                 let result = await task.value
-                waiterFinished(key: key, waiterID: waiterID)
-                return try unwrap(result)
+                if await gate.resolve(result) {
+                    self.waiterFinished(key: key, waiterID: waiterID)
+                }
+            }
+            return try await withTaskCancellationHandler {
+                try await gate.wait()
             } onCancel: {
-                Task { await self.waiterCancelled(key: key, waiterID: waiterID) }
+                Task {
+                    if await gate.cancel() {
+                        await self.waiterCancelled(key: key, waiterID: waiterID)
+                    }
+                }
             }
         case .standalone(let task):
+            let gate = CoalescerWaiterGate<Output, Failure>()
+            Task {
+                _ = await gate.resolve(task.value)
+            }
             return try await withTaskCancellationHandler {
-                let result = await task.value
-                return try unwrap(result)
+                try await gate.wait()
             } onCancel: {
                 task.cancel()
+                Task { await gate.cancel() }
             }
         }
     }

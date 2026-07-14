@@ -16,8 +16,8 @@ struct E2ETodo: Decodable, Sendable {
     let completed: Bool
 }
 
-struct E2EHTTPBinAnything: Decodable, Sendable {
-    let headers: [String: String]
+struct E2EHTTPBingoAnything: Decodable, Sendable {
+    let headers: [String: [String]]
 }
 
 enum E2ETestError: Error {
@@ -100,8 +100,8 @@ func e2eFixedKey() -> Data {
     Data(repeating: 11, count: 32)
 }
 
-func headerValue(_ headers: [String: String], key: String) -> String? {
-    headers.first { lhs, _ in lhs.lowercased() == key.lowercased() }?.value
+func headerValue(_ headers: [String: [String]], key: String) -> String? {
+    headers.first { lhs, _ in lhs.lowercased() == key.lowercased() }?.value.first
 }
 
 @Suite(.serialized)
@@ -177,7 +177,7 @@ struct E2ECoverageTests {
 
         let request = APIRequest(
             method: .get,
-            url: URL(string: "https://jsonplaceholder.typicode.com/todos/1")!
+            url: URL(string: "https://httpbingo.org/cache/120")!
         )
 
         _ = try await client.load(request: request, authScope: "public")
@@ -192,7 +192,7 @@ struct E2ECoverageTests {
     }
 
     @Test
-    func e2eMiddlewareInjectsHeadersViaHTTPBin() async throws {
+    func e2eMiddlewareInjectsHeadersViaHTTPBingo() async throws {
         guard e2eEnabled() else { return }
 
         let middleware = NetworkMiddleware(
@@ -203,10 +203,10 @@ struct E2ECoverageTests {
         let client = NetworkClient(transport: Transport(), middlewares: [middleware])
         let request = APIRequest(
             method: .get,
-            url: URL(string: "https://httpbin.org/anything")!
+            url: URL(string: "https://httpbingo.org/anything")!
         )
 
-        let body: E2EHTTPBinAnything = try await client.load(request: request, authScope: "public")
+        let body: E2EHTTPBingoAnything = try await client.load(request: request, authScope: "public")
         #expect(headerValue(body.headers, key: "X-E2E-Token") == "nova-e2e")
     }
 

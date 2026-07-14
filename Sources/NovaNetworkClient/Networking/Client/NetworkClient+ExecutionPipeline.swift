@@ -1,3 +1,4 @@
+import NovaNetworkCore
 import Foundation
 
 extension NetworkClient {
@@ -459,6 +460,8 @@ extension NetworkClient {
             return "offline_queue_capacity_exceeded"
         case .offlineQueueUnavailable:
             return "offline_queue_unavailable"
+        case .authenticationRefreshFailed:
+            return "authentication_refresh_failed"
         }
     }
 

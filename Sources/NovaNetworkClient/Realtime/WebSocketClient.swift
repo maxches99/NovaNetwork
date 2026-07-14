@@ -1,3 +1,4 @@
+import NovaNetworkCore
 import Foundation
 
 actor WebSocketStateHub {

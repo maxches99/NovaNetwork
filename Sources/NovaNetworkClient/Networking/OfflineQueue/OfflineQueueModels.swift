@@ -1,3 +1,4 @@
+import NovaNetworkCore
 import Foundation
 
 public enum OfflineReplayConflictPolicy: String, Sendable, Equatable, Codable {

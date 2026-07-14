@@ -11,6 +11,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  swift-6-3-compatibility:
+    name: Swift 6.3 Compatibility
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Select Xcode 26.3 SDK
+        run: sudo xcode-select --switch /Applications/Xcode_26.3.app/Contents/Developer
+
+      - name: Install Latest Swift 6.3 Toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSLo "${RUNNER_TEMP}/swiftly.pkg" https://download.swift.org/swiftly/darwin/swiftly.pkg
+          installer -pkg "${RUNNER_TEMP}/swiftly.pkg" -target CurrentUserHomeDirectory
+          "${HOME}/.swiftly/bin/swiftly" init \
+            --skip-install \
+            --no-modify-profile \
+            --quiet-shell-followup \
+            --assume-yes
+          "${HOME}/.swiftly/bin/swiftly" install --use 6.3 --assume-yes
+          echo "${HOME}/.swiftly/bin" >> "${GITHUB_PATH}"
+
+      - name: Verify Swift 6.3
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(swift --version)
+          echo "${VERSION}"
+          grep -Eq 'Swift version 6\.3([.[:space:]]|$)' <<< "${VERSION}"
+
+      - name: Build with Complete Concurrency Checking
+        run: swift build -Xswiftc -strict-concurrency=complete -Xswiftc -warn-concurrency
+
+      - name: Test
+        run: swift test
+
   build-test-coverage:
     name: Build, Test, Coverage Gates
     runs-on: macos-15
@@ -18,15 +58,18 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
-      - name: Setup Swift 6.2
-        uses: swift-actions/setup-swift@v2
-        with:
-          swift-version: "6.2"
+      - name: Select Xcode 26.2 (Swift 6.2)
+        run: sudo xcode-select --switch /Applications/Xcode_26.2.app/Contents/Developer
 
-      - name: Show Swift Version
-        run: swift --version
+      - name: Verify Swift 6.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(swift --version)
+          echo "${VERSION}"
+          grep -Eq 'Swift version 6\.2([.[:space:]]|$)' <<< "${VERSION}"
 
       - name: Build
         run: swift build
@@ -47,9 +90,10 @@ jobs:
             exit 1
           fi
 
+          SOURCE_FILES=$(find Sources/NovaNetworkClient Sources/NovaNetworkCore -name "*.swift" -print)
           REPORT=$(xcrun llvm-cov report "${TEST_BIN}" \
             -instr-profile="${PROF_DATA}" \
-            Sources/NovaNetworkClient/**/*.swift)
+            ${SOURCE_FILES})
 
           echo "${REPORT}"
 

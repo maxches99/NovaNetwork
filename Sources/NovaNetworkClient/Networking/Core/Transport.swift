@@ -1,16 +1,16 @@
+import NovaNetworkCore
 import Foundation
 
-public protocol NetworkTransport: Sendable {
-    func execute(_ request: APIRequest) async throws -> NetworkResponse
-}
+/// The default URLSession-backed HTTP, streaming, upload, and download transport.
+public struct Transport: NetworkTransport, StreamingNetworkTransport, TransferNetworkTransport {
+    let session: URLSession
 
-public struct Transport: NetworkTransport {
-    private let session: URLSession
-
+    /// Creates a transport backed by the supplied URL session.
     public init(session: URLSession = .shared) {
         self.session = session
     }
 
+    /// Executes a complete HTTP request, accepting successful and 304 responses.
     public func execute(_ request: APIRequest) async throws -> NetworkResponse {
         let urlRequest = request.urlRequest()
 
@@ -26,7 +26,7 @@ public struct Transport: NetworkTransport {
                 partial[key] = String(describing: item.value)
             }
 
-            guard (200..<300).contains(httpResponse.statusCode) else {
+            guard (200..<300).contains(httpResponse.statusCode) || httpResponse.statusCode == 304 else {
                 throw NetworkError.httpStatus(code: httpResponse.statusCode, headers: headers, body: data)
             }
 

@@ -1,3 +1,4 @@
+import NovaNetworkCore
 import Foundation
 
 /// Named overlays for the preset v2 composition model (`base preset + overlays`).

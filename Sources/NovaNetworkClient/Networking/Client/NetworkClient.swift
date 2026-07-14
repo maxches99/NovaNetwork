@@ -1,8 +1,10 @@
+import NovaNetworkCore
 import Foundation
 
-public final class NetworkClient: @unchecked Sendable {
+/// A concurrency-safe HTTP client with coalescing, resilience, caching, transfers, and telemetry.
+public final class NetworkClient: Sendable {
     private let coalescer: RequestCoalescer<NetworkResponse, NetworkError>
-    private let transport: any NetworkTransport
+    let transport: any NetworkTransport
     private let fingerprintPolicy: FingerprintPolicy
     private let retryPolicy: RetryPolicy
     private let retryClock: any RetryClock
@@ -12,23 +14,30 @@ public final class NetworkClient: @unchecked Sendable {
     private let offlineWriteStore: (any OfflineWriteStore)?
     private let offlineConnectivityMonitor: (any OfflineConnectivityMonitor)?
     let offlineConflictResolver: (@Sendable (OfflineQueueConflictMetadata) -> OfflineConflictResolutionDecision)?
-    private let decoder: JSONDecoder
+    let decoder: JSONDecoder
     private let networkObserver: (@Sendable (NetworkClientEvent) -> Void)?
     private let middlewares: [NetworkMiddleware]
     let telemetryHooks: NetworkTelemetryHooks?
-    private let httpExecutionPipeline: any NetworkClientHTTPExecutionPipeline
+    let httpExecutionPipeline: any NetworkClientHTTPExecutionPipeline
     let offlineReplayCoordinator: any NetworkClientOfflineReplayCoordinating
+    let httpAuthRefreshProvider: HTTPAuthRefreshProvider?
+    let httpAuthRefreshPolicy: HTTPAuthRefreshPolicy
+    let httpAuthRefreshCoordinator: HTTPAuthRefreshCoordinator
     private let eventHub = NetworkClientEventHub()
     let offlineQueueEventHub = OfflineQueueEventHub()
     private let circuitBreakerStore = CircuitBreakerStore()
     private let rateLimiter = KeyRateLimiter()
     private let runtimePolicyStore = RuntimePolicyStore()
-    private var offlineReplayListenerTask: Task<Void, Never>?
+    private let lifetime = NetworkClientLifetime()
 
     struct RequestDeadline: Sendable {
         let deadlineNanoseconds: UInt64
     }
 
+    /// Creates a configured network client.
+    ///
+    /// Authentication refresh is disabled unless `httpAuthRefreshProvider` is supplied.
+    /// All other arguments preserve the raw request API's existing defaults.
     public init(
         transport: any NetworkTransport = Transport(),
         cancellationPolicy: CancellationPolicy = .keepRunning,
@@ -47,6 +56,8 @@ public final class NetworkClient: @unchecked Sendable {
         networkObserver: (@Sendable (NetworkClientEvent) -> Void)? = nil,
         middlewares: [NetworkMiddleware] = [],
         telemetryHooks: NetworkTelemetryHooks? = nil,
+        httpAuthRefreshProvider: HTTPAuthRefreshProvider? = nil,
+        httpAuthRefreshPolicy: HTTPAuthRefreshPolicy = .default,
         decoder: JSONDecoder = JSONDecoder()
     ) {
         self.transport = transport
@@ -85,6 +96,11 @@ public final class NetworkClient: @unchecked Sendable {
         self.networkObserver = networkObserver
         self.middlewares = middlewares
         self.telemetryHooks = telemetryHooks
+        self.httpAuthRefreshProvider = httpAuthRefreshProvider
+        self.httpAuthRefreshPolicy = httpAuthRefreshPolicy
+        self.httpAuthRefreshCoordinator = HTTPAuthRefreshCoordinator(
+            telemetry: telemetryHooks?.onHTTPAuthRefresh
+        )
         self.httpExecutionPipeline = DefaultNetworkClientHTTPExecutionPipeline(
             transport: transport,
             retryPolicy: retryPolicy,
@@ -98,17 +114,13 @@ public final class NetworkClient: @unchecked Sendable {
         self.offlineReplayCoordinator = DefaultNetworkClientOfflineReplayCoordinator()
 
         if let offlineConnectivityMonitor {
-            offlineReplayListenerTask = Task {
-                let stream = offlineConnectivityMonitor.statusStream()
-                for await isOnline in stream where isOnline {
+            Task { [lifetime, weak self] in
+                await lifetime.startConnectivityListener(monitor: offlineConnectivityMonitor) { [weak self] in
+                    guard let self else { return }
                     _ = await self.flushOfflineQueue()
                 }
             }
         }
-    }
-
-    deinit {
-        offlineReplayListenerTask?.cancel()
     }
 
     public func events() -> AsyncStream<NetworkClientEvent> {
@@ -188,6 +200,19 @@ public final class NetworkClient: @unchecked Sendable {
         let fingerprint = makeFingerprint(for: request, authScope: authScope)
         let key = fingerprint.key
         let resolvedPolicy = (cachePolicy ?? defaultCachePolicy).normalized
+        let forceRevalidation = requestRequiresRevalidation(request)
+
+        if !requestAllowsCacheLookup(request) {
+            emit(.cacheMiss(key: key))
+            return try await fetchNetworkAndOptionallyStore(
+                request: request,
+                authScope: authScope,
+                key: key,
+                storeInCache: false,
+                cachedETag: nil,
+                options: options
+            )
+        }
 
         switch resolvedPolicy {
         case .networkOnly:
@@ -214,13 +239,13 @@ public final class NetworkClient: @unchecked Sendable {
                     )
                 }
 
-                let age = ageSeconds(since: cached.storedAtNanoseconds)
+                let age = correctedAgeSeconds(cached: cached)
                 let effectiveMaxAge = effectiveMaxAge(clientMaxAge: maxAge, cached: cached)
-                if age <= effectiveMaxAge || isFreshByExpiresHeader(cached: cached) {
+                if !forceRevalidation && (age <= effectiveMaxAge || isFreshByExpiresHeader(cached: cached)) {
                     emit(.cacheHit(
                         key: key,
                         isStale: false,
-                        ageMilliseconds: ageMilliseconds(since: cached.storedAtNanoseconds)
+                        ageMilliseconds: age * 1_000
                     ))
                     return cached.body
                 }
@@ -233,8 +258,22 @@ public final class NetworkClient: @unchecked Sendable {
                         key: key,
                         storeInCache: true,
                         cachedETag: cached.etag,
+                        cachedLastModified: cached.lastModified,
                         options: options
                     )
+                } catch let error as NetworkError where canServeStaleIfError(
+                    cached: cached,
+                    clientMaxAge: maxAge,
+                    error: error
+                ) {
+                    emit(
+                        .cacheStaleIfError(
+                            key: key,
+                            ageMilliseconds: age * 1_000,
+                            reason: Self.failureReason(error: error)
+                        )
+                    )
+                    return cached.body
                 } catch {
                     emit(.cacheMiss(key: key))
                     throw error
@@ -264,22 +303,22 @@ public final class NetworkClient: @unchecked Sendable {
                     )
                 }
 
-                let age = ageSeconds(since: cached.storedAtNanoseconds)
+                let age = correctedAgeSeconds(cached: cached)
                 let freshness = effectiveStaleAges(clientMaxAge: maxAge, clientStaleAge: staleAge, cached: cached)
-                if age <= freshness.maxAge || isFreshByExpiresHeader(cached: cached) {
+                if !forceRevalidation && (age <= freshness.maxAge || isFreshByExpiresHeader(cached: cached)) {
                     emit(.cacheHit(
                         key: key,
                         isStale: false,
-                        ageMilliseconds: ageMilliseconds(since: cached.storedAtNanoseconds)
+                        ageMilliseconds: age * 1_000
                     ))
                     return cached.body
                 }
 
-                if age <= freshness.staleAge {
+                if !forceRevalidation && age <= freshness.staleAge {
                     emit(.cacheHit(
                         key: key,
                         isStale: true,
-                        ageMilliseconds: ageMilliseconds(since: cached.storedAtNanoseconds)
+                        ageMilliseconds: age * 1_000
                     ))
 
                     Task {
@@ -289,9 +328,35 @@ public final class NetworkClient: @unchecked Sendable {
                             key: key,
                             storeInCache: true,
                             cachedETag: cached.etag,
+                            cachedLastModified: cached.lastModified,
                             options: options
                         )
                     }
+                    return cached.body
+                }
+
+                do {
+                    return try await fetchNetworkAndOptionallyStore(
+                        request: request,
+                        authScope: authScope,
+                        key: key,
+                        storeInCache: true,
+                        cachedETag: cached.etag,
+                        cachedLastModified: cached.lastModified,
+                        options: options
+                    )
+                } catch let error as NetworkError where canServeStaleIfError(
+                    cached: cached,
+                    clientMaxAge: maxAge,
+                    error: error
+                ) {
+                    emit(
+                        .cacheStaleIfError(
+                            key: key,
+                            ageMilliseconds: age * 1_000,
+                            reason: Self.failureReason(error: error)
+                        )
+                    )
                     return cached.body
                 }
             }
@@ -651,55 +716,62 @@ public final class NetworkClient: @unchecked Sendable {
         }
     }
 
-    public func loadBatch(
-        requests: [APIRequest],
-        authScope: String?,
-        cachePolicy: CachePolicy? = nil,
-        options: RequestExecutionOptions = .init()
-    ) async throws -> [Data] {
-        var orderedResults: [Data] = []
-        orderedResults.reserveCapacity(requests.count)
-        for request in requests {
-            let data = try await load(
-                request: request,
-                authScope: authScope,
-                cachePolicy: cachePolicy,
-                options: options
-            )
-            orderedResults.append(data)
-        }
-        return orderedResults
-    }
-
+    /// Loads response bytes incrementally when the transport supports streaming.
+    ///
+    /// The default ``Transport`` emits bounded 64 KiB chunks on supported operating systems.
+    /// A non-streaming transport falls back to one complete response chunk. Cancelling or
+    /// terminating iteration cancels the consumer task and underlying stream.
     public func loadStream(
         request: APIRequest,
         authScope: String?,
         cachePolicy: CachePolicy? = nil,
         options: RequestExecutionOptions = .init()
     ) -> AsyncThrowingStream<Data, Error> {
+        let key = makeFingerprint(for: request, authScope: authScope).key
         if let streamingTransport = transport as? any StreamingNetworkTransport {
             return AsyncThrowingStream { continuation in
-                Task {
+                telemetryHooks?.onTransferEvent?(.init(kind: .stream, phase: .started, key: key))
+                let consumer = Task {
                     do {
                         let prepared = try await prepareRequestForExecution(
                             request: request,
-                            key: makeFingerprint(for: request, authScope: authScope).key,
+                            key: key,
                             options: options
                         )
                         let stream = streamingTransport.stream(prepared, authScope: authScope)
                         for try await chunk in stream {
+                            telemetryHooks?.onTransferEvent?(
+                                .init(
+                                    kind: .stream,
+                                    phase: .progress,
+                                    key: key,
+                                    completedBytes: Int64(chunk.count)
+                                )
+                            )
                             continuation.yield(chunk)
                         }
+                        telemetryHooks?.onTransferEvent?(.init(kind: .stream, phase: .completed, key: key))
                         continuation.finish()
                     } catch {
+                        let cancelled = error is CancellationError || Task.isCancelled
+                        telemetryHooks?.onTransferEvent?(
+                            .init(
+                                kind: .stream,
+                                phase: cancelled ? .cancelled : .failed,
+                                key: key,
+                                reason: String(describing: type(of: error))
+                            )
+                        )
                         continuation.finish(throwing: error)
                     }
                 }
+                continuation.onTermination = { _ in consumer.cancel() }
             }
         }
 
         return AsyncThrowingStream { continuation in
-            Task {
+            telemetryHooks?.onTransferEvent?(.init(kind: .stream, phase: .started, key: key))
+            let consumer = Task {
                 do {
                     let data = try await self.load(
                         request: request,
@@ -707,12 +779,32 @@ public final class NetworkClient: @unchecked Sendable {
                         cachePolicy: cachePolicy,
                         options: options
                     )
+                    telemetryHooks?.onTransferEvent?(
+                        .init(
+                            kind: .stream,
+                            phase: .progress,
+                            key: key,
+                            completedBytes: Int64(data.count),
+                            totalBytes: Int64(data.count)
+                        )
+                    )
                     continuation.yield(data)
+                    telemetryHooks?.onTransferEvent?(.init(kind: .stream, phase: .completed, key: key))
                     continuation.finish()
                 } catch {
+                    let cancelled = error is CancellationError || Task.isCancelled
+                    telemetryHooks?.onTransferEvent?(
+                        .init(
+                            kind: .stream,
+                            phase: cancelled ? .cancelled : .failed,
+                            key: key,
+                            reason: String(describing: type(of: error))
+                        )
+                    )
                     continuation.finish(throwing: error)
                 }
             }
+            continuation.onTermination = { _ in consumer.cancel() }
         }
     }
 
@@ -772,7 +864,7 @@ public final class NetworkClient: @unchecked Sendable {
         emit(.memoryPressureHandled(cacheCleared: clearCache, inFlightCancelled: cancelInFlight))
     }
 
-    private func makeFingerprint(for request: APIRequest, authScope: String?) -> RequestFingerprint {
+    func makeFingerprint(for request: APIRequest, authScope: String?) -> RequestFingerprint {
         RequestFingerprint.make(
             method: request.method.rawValue,
             url: request.url,
@@ -790,6 +882,7 @@ public final class NetworkClient: @unchecked Sendable {
         key: String,
         storeInCache: Bool,
         cachedETag: String?,
+        cachedLastModified: String? = nil,
         options: RequestExecutionOptions
     ) async throws -> Data {
         let resolvedRuntimePolicy = await runtimePolicyStore.resolve(url: request.url)
@@ -825,12 +918,14 @@ public final class NetworkClient: @unchecked Sendable {
             }
         }
 
-        let conditionalRequest: APIRequest
+        var conditionalHeaders: [String: String] = [:]
         if let etag = cachedETag {
-            conditionalRequest = request.withMergedHeaders(["If-None-Match": etag])
-        } else {
-            conditionalRequest = request
+            conditionalHeaders["If-None-Match"] = etag
         }
+        if let lastModified = cachedLastModified {
+            conditionalHeaders["If-Modified-Since"] = lastModified
+        }
+        let conditionalRequest = request.withMergedHeaders(conditionalHeaders)
         let preparedRequest = try await prepareRequestForExecution(
             request: conditionalRequest,
             key: key,
@@ -843,7 +938,7 @@ public final class NetworkClient: @unchecked Sendable {
                 key: coalescingKey,
                 options: coalescerRunOptions(from: options)
             ) {
-                await self.httpExecutionPipeline.execute(
+                await self.executeWithHTTPAuthRefresh(
                     .init(
                         key: key,
                         request: preparedRequest,
@@ -855,6 +950,8 @@ public final class NetworkClient: @unchecked Sendable {
                     )
                 )
             }
+        } catch is CancellationError {
+            throw NetworkError.cancelled
         } catch {
             if let breakerPolicy = resolvedBreakerPolicy,
                let networkError = error as? NetworkError,
@@ -869,11 +966,16 @@ public final class NetworkClient: @unchecked Sendable {
 
         if outcome.statusCode == 304, let cached = await cache.entry(forKey: key) {
             if storeInCache {
+                var mergedHeaders = cached.headers
+                for (name, value) in outcome.headers {
+                    mergedHeaders[name] = value
+                }
                 let revalidated = CachedResponse(
                     body: cached.body,
                     statusCode: cached.statusCode,
-                    headers: cached.headers,
-                    etag: cached.etag,
+                    headers: mergedHeaders,
+                    etag: outcome.headerValue(for: "ETag") ?? cached.etag,
+                    lastModified: outcome.headerValue(for: "Last-Modified") ?? cached.lastModified,
                     storedAtNanoseconds: DispatchTime.now().uptimeNanoseconds,
                     varyRequestHeaders: cached.varyRequestHeaders
                 )
@@ -883,12 +985,13 @@ public final class NetworkClient: @unchecked Sendable {
             return cached.body
         }
 
-        if storeInCache && shouldStoreInCache(outcome.headers) {
+        if storeInCache && requestAllowsCacheStorage(preparedRequest) && shouldStoreInCache(outcome.headers) {
             let cached = CachedResponse(
                 body: outcome.body,
                 statusCode: outcome.statusCode,
                 headers: outcome.headers,
                 etag: outcome.headerValue(for: "ETag"),
+                lastModified: outcome.headerValue(for: "Last-Modified"),
                 storedAtNanoseconds: DispatchTime.now().uptimeNanoseconds,
                 varyRequestHeaders: varyHeaders(from: outcome.headers, requestHeaders: preparedRequest.headers)
             )
@@ -1049,7 +1152,7 @@ public final class NetworkClient: @unchecked Sendable {
         )
     }
 
-    private func prepareRequestForExecution(
+    func prepareRequestForExecution(
         request: APIRequest,
         key: String,
         options: RequestExecutionOptions
