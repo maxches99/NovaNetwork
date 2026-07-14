@@ -318,9 +318,9 @@ This is a library and does not render UI. “UI” below means observable API ou
 | NFR-5 | T-GATE-2 real-public-API E2E | e2e | QA | passed |
 | FR-END-2, NFR-7 | T-E2E-END typed endpoint against JSONPlaceholder | e2e | QA | passed |
 | FR-BATCH-1...3, NFR-7 | T-E2E-BATCH bounded collecting batch against public APIs | e2e | QA | passed |
-| FR-XFER-1...3, NFR-7 | T-E2E-XFER incremental stream, upload, and download against HTTPBin | e2e | QA | passed |
-| FR-AUTH-1...3, NFR-7 | T-E2E-AUTH 401 refresh and replay against HTTPBin bearer | e2e | QA | passed |
-| FR-CACHE-1, NFR-7 | T-E2E-CACHE ETag conditional revalidation against HTTPBin | e2e | QA | passed |
+| FR-XFER-1...3, NFR-7 | T-E2E-XFER incremental stream and upload against HTTPBingo, plus download finalization against JSONPlaceholder | e2e | QA | passed |
+| FR-AUTH-1...3, NFR-7 | T-E2E-AUTH 401 refresh and replay against HTTPBingo bearer | e2e | QA | passed |
+| FR-CACHE-1, NFR-7 | T-E2E-CACHE ETag conditional revalidation against HTTPBingo | e2e | QA | passed |
 
 ### Negative tests
 

@@ -4,11 +4,11 @@ import Testing
 
 // Requirements: NFR-7, T-E2E-END, T-E2E-BATCH, T-E2E-XFER, T-E2E-AUTH, T-E2E-CACHE.
 
-private struct E2EHTTPBinUpload: Decodable, Sendable {
+private struct E2EHTTPBingoUpload: Decodable, Sendable {
     let data: String
 }
 
-private struct E2EHTTPBinBearer: Decodable, Sendable {
+private struct E2EHTTPBingoBearer: Decodable, Sendable {
     let authenticated: Bool
     let token: String
 }
@@ -71,7 +71,7 @@ extension E2ECoverageTests {
         )
         let requests = [
             APIRequest(method: .get, url: URL(string: "https://jsonplaceholder.typicode.com/todos/1")!),
-            APIRequest(method: .get, url: URL(string: "https://httpbin.org/status/503")!),
+            APIRequest(method: .get, url: URL(string: "https://httpbingo.org/status/503")!),
             APIRequest(method: .get, url: URL(string: "https://jsonplaceholder.typicode.com/todos/2")!)
         ]
 
@@ -101,13 +101,13 @@ extension E2ECoverageTests {
     }
 
     @Test
-    func e2eV2DefaultTransportStreamsIncrementallyFromHTTPBin() async throws {
+    func e2eV2DefaultTransportStreamsIncrementallyFromHTTPBingo() async throws {
         guard e2eEnabled() else { return }
 
         let client = NetworkClient(transport: Transport())
         let request = APIRequest(
             method: .get,
-            url: URL(string: "https://httpbin.org/stream-bytes/100000?chunk_size=16384&seed=42")!
+            url: URL(string: "https://httpbingo.org/stream-bytes/100000?chunk_size=16384&seed=42")!
         )
         var chunks: [Data] = []
 
@@ -120,13 +120,13 @@ extension E2ECoverageTests {
     }
 
     @Test
-    func e2eV2UploadCompletesAgainstHTTPBin() async throws {
+    func e2eV2UploadCompletesAgainstHTTPBingo() async throws {
         guard e2eEnabled() else { return }
 
         let client = NetworkClient(transport: Transport())
         let request = APIRequest(
             method: .post,
-            url: URL(string: "https://httpbin.org/post")!,
+            url: URL(string: "https://httpbingo.org/post")!,
             headers: ["Content-Type": "text/plain"]
         )
         var response: NetworkResponse?
@@ -143,12 +143,12 @@ extension E2ECoverageTests {
 
         let completed = try #require(response)
         #expect(completed.statusCode == 200)
-        let payload = try JSONDecoder().decode(E2EHTTPBinUpload.self, from: completed.body)
+        let payload = try JSONDecoder().decode(E2EHTTPBingoUpload.self, from: completed.body)
         #expect(payload.data == "nova-v2-upload")
     }
 
     @Test
-    func e2eV2DownloadFinalizesHTTPBinBytes() async throws {
+    func e2eV2DownloadFinalizesJSONPlaceholderPayload() async throws {
         guard e2eEnabled() else { return }
 
         let root = FileManager.default.temporaryDirectory
@@ -158,7 +158,7 @@ extension E2ECoverageTests {
         let client = NetworkClient(transport: Transport())
         let request = APIRequest(
             method: .get,
-            url: URL(string: "https://httpbin.org/bytes/4096?seed=42")!
+            url: URL(string: "https://jsonplaceholder.typicode.com/todos/4")!
         )
         var downloaded: DownloadedFile?
 
@@ -173,11 +173,13 @@ extension E2ECoverageTests {
         }
 
         #expect(downloaded?.fileURL == destination)
-        #expect(try Data(contentsOf: destination).count == 4_096)
+        let payload = try JSONDecoder().decode(E2ETodo.self, from: Data(contentsOf: destination))
+        #expect(payload.id == 4)
+        #expect(!payload.title.isEmpty)
     }
 
     @Test
-    func e2eV2AuthRefreshReplaysHTTPBinBearerRequest() async throws {
+    func e2eV2AuthRefreshReplaysHTTPBingoBearerRequest() async throws {
         guard e2eEnabled() else { return }
 
         let refresh = E2EAuthRefreshProbe()
@@ -189,11 +191,11 @@ extension E2ECoverageTests {
         )
         let request = APIRequest(
             method: .get,
-            url: URL(string: "https://httpbin.org/bearer")!,
+            url: URL(string: "https://httpbingo.org/bearer")!,
             headers: ["Accept": "application/json"]
         )
 
-        let result: E2EHTTPBinBearer = try await client.load(
+        let result: E2EHTTPBingoBearer = try await client.load(
             request: request,
             authScope: "e2e-bearer"
         )
@@ -214,7 +216,7 @@ extension E2ECoverageTests {
         )
         let request = APIRequest(
             method: .get,
-            url: URL(string: "https://httpbin.org/etag/nova-v2-e2e")!,
+            url: URL(string: "https://httpbingo.org/etag/nova-v2-e2e")!,
             headers: ["Cache-Control": "no-cache"]
         )
 

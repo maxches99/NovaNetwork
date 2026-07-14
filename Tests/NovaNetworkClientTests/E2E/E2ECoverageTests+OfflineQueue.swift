@@ -73,7 +73,7 @@ extension E2ECoverageTests {
         let client = NetworkClient(transport: Transport())
         let request = APIRequest(
             method: .get,
-            url: URL(string: "https://httpbin.org/status/404")!
+            url: URL(string: "https://httpbingo.org/status/404")!
         )
 
         do {
@@ -204,7 +204,7 @@ extension E2ECoverageTests {
         let client = NetworkClient(transport: Transport())
         let failingRequest = APIRequest(
             method: .get,
-            url: URL(string: "https://httpbin.org/status/503")!
+            url: URL(string: "https://httpbingo.org/status/503")!
         )
         let options = RequestExecutionOptions(
             circuitBreakerPolicy: .init(
@@ -267,7 +267,7 @@ extension E2ECoverageTests {
         )
         let request = APIRequest(
             method: .post,
-            url: URL(string: "https://httpbin.org/anything")!,
+            url: URL(string: "https://httpbingo.org/anything")!,
             body: Data("{\"name\":\"dedupe\"}".utf8)
         )
         let options = RequestExecutionOptions(
@@ -292,7 +292,7 @@ extension E2ECoverageTests {
             .appendingPathComponent("NovaNetworkClient-E2E-Conflict-\(UUID().uuidString)", isDirectory: true)
         let request = APIRequest(
             method: .post,
-            url: URL(string: "https://httpbin.org/status/422")!,
+            url: URL(string: "https://httpbingo.org/status/422")!,
             body: Data("{\"name\":\"conflict\"}".utf8)
         )
 
@@ -331,7 +331,7 @@ extension E2ECoverageTests {
             .appendingPathComponent("NovaNetworkClient-E2E-Encrypt-\(UUID().uuidString)", isDirectory: true)
         let request = APIRequest(
             method: .post,
-            url: URL(string: "https://httpbin.org/anything")!,
+            url: URL(string: "https://httpbingo.org/anything")!,
             body: Data("very-sensitive-body".utf8)
         )
         let cipher = AESGCMOfflineWriteStoreCipher(keyProvider: { e2eFixedKey() })
@@ -368,7 +368,7 @@ extension E2ECoverageTests {
     func e2eTelemetryOfflineQueueResultTypesIncludeNewTerminalValues() async throws {
         guard e2eEnabled() else { return }
 
-        let request = APIRequest(method: .post, url: URL(string: "https://httpbin.org/anything")!)
+        let request = APIRequest(method: .post, url: URL(string: "https://httpbingo.org/anything")!)
         let context = TelemetryOfflineQueueContext(
             type: .replaySuppressed,
             queueID: "q-id",
@@ -418,7 +418,7 @@ extension E2ECoverageTests {
 
         let request = APIRequest(
             method: .post,
-            url: URL(string: "https://httpbin.org/anything")!,
+            url: URL(string: "https://httpbingo.org/anything")!,
             body: Data("{\"name\":\"event\"}".utf8)
         )
         _ = try await client.enqueueWrite(
