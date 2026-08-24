@@ -12,6 +12,7 @@ When multiple callers ask for the same resource at the same time, only one under
 - [Website source and build instructions](DocumentationSite/README.md)
 - [Core Concepts](Sources/NovaNetworkClient/NovaNetworkClient.docc/CoreConcepts.md)
 - [Choosing an API](Sources/NovaNetworkClient/NovaNetworkClient.docc/ChoosingAnAPI.md)
+- [Declarative Endpoints (`@Endpoint` macro and OpenAPI generation)](Sources/NovaNetworkClient/NovaNetworkClient.docc/DeclarativeEndpoints.md)
 - [Production Checklist](Sources/NovaNetworkClient/NovaNetworkClient.docc/ProductionChecklist.md)
 - [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md)
@@ -23,8 +24,10 @@ When multiple callers ask for the same resource at the same time, only one under
 - [Telemetry Contract v2](docs/TELEMETRY_CONTRACT_V2.md)
 - [NovaNetwork v2.0 DFR](docs/dfr/NOVA_NETWORK_V2_DFR.md)
 - [NovaNetwork v2.1 DFR](docs/dfr/NOVA_NETWORK_V2_1_DFR.md)
+- [NovaNetwork v2.11 DFR](docs/dfr/NOVA_NETWORK_V2_11_DFR.md)
 - [v2.0 Traceability Pack](docs/TRACEABILITY_PACK_v2.0.md)
 - [v2.1 Traceability Pack](docs/TRACEABILITY_PACK_v2.1.md)
+- [v2.11 Traceability Pack](docs/TRACEABILITY_PACK_v2.11.md)
 - [v1.15 Traceability Pack](docs/TRACEABILITY_PACK_v1.15.md)
 - [v1.16 Traceability Pack](docs/TRACEABILITY_PACK_v1.16.md)
 - [v1.19 Traceability Pack](docs/TRACEABILITY_PACK_v1.19.md)
@@ -55,9 +58,38 @@ targets: [
 ]
 ```
 
+The package has **no dependencies** in this configuration.
+
+### Optional: the `@Endpoint` macro
+
+The `@Endpoint` macro is the only part of the package that needs `swift-syntax`, so it lives behind
+a SwiftPM trait that is off by default. SwiftPM prunes the dependency entirely while the trait is
+disabled, so opting out costs nothing:
+
+```swift
+dependencies: [
+    .package(url: "https://github.com/maxches99/NovaNetwork", from: "2.11.0", traits: ["EndpointMacros"])
+]
+```
+
+```swift
+.product(name: "NovaNetworkMacros", package: "NovaNetwork")
+```
+
+Generating endpoints from an OpenAPI document needs neither the trait nor the macro — see
+[Declarative Endpoints](#declarative-endpoints-v211).
+
 ## Features
 
 - Typed `Endpoint<Response>` execution with endpoint-specific decoding.
+- Declarative endpoints: the opt-in `@Endpoint` macro generates request construction from a method,
+  a path template, and a type's stored properties, with `@Path`/`@Query`/`@Header`/`@Body` markers
+  and compile-time diagnostics for every misuse.
+- OpenAPI 3.0/3.1 code generation (`swift package nova-openapi`) producing deterministic, checked-in
+  endpoint and model types that depend only on `NovaNetworkCore` — no macro, no swift-syntax.
+- Shared declarative runtime (`EndpointDefinition`, `EndpointRequestBuilder`,
+  `EndpointParameterConvertible`) so hand-written, macro-generated, and spec-generated endpoints
+  build identical requests.
 - Linux build gate: `NovaNetworkClient`'s Apple-only APIs (certificate pinning, mTLS, the offline
   queue's optional AES-GCM cipher) are behind explicit availability checks, and fingerprint
   hashing no longer requires `CryptoKit`, so the core client compiles on Linux (see
@@ -295,6 +327,92 @@ available on iOS and macOS; other platforms receive
 
 For model-only targets, depend on and `import NovaNetworkCore`. Existing targets may continue
 to import `NovaNetworkClient`, which re-exports the core public API.
+
+## Declarative Endpoints (v2.11)
+
+Two ways to stop hand-writing `makeRequest()`. Both produce ordinary `Endpoint` conformances, both
+go through the same `EndpointRequestBuilder`, and they can be mixed with hand-written endpoints in
+one target.
+
+### The `@Endpoint` macro
+
+Requires the opt-in `EndpointMacros` trait — see [Installation](#optional-the-endpoint-macro).
+
+```swift
+import NovaNetworkMacros
+
+protocol PetstoreAPI: EndpointDefinition {}
+
+extension PetstoreAPI {
+    var baseURL: URL { URL(string: "https://api.petstore.example.com/v1")! }
+}
+
+@Endpoint(.get, "/pets/{petId}/photos", response: [Photo].self)
+struct GetPetPhotos: PetstoreAPI {
+    let petId: Int                            // fills {petId}: the name matches the placeholder
+    var limit: Int?                           // unmarked, so it becomes ?limit=…
+    @Query("sort_by") var sortBy: String?
+    @Header("X-Trace") var trace: String?
+}
+
+@Endpoint(.post, "/pets", response: Pet.self)
+struct CreatePet: PetstoreAPI {
+    @Body var pet: NewPet
+    @Header("Idempotency-Key") var idempotencyKey: String
+}
+
+let photos = try await client.execute(endpoint: GetPetPhotos(petId: 7, limit: 20), authScope: "petstore")
+```
+
+Each stored property takes one role, resolved in this order: an explicit `@Path`/`@Query`/`@Header`/
+`@Body` marker, then a path parameter when the property name matches a `{placeholder}`, then a query
+item under its own name. `baseURL`, `timeout`, `additionalHeaders`, and `jsonEncoder` are protocol
+customization points and are never parameters; static and computed properties are ignored.
+
+Behavior worth knowing, and identical for every declarative endpoint:
+
+- a `nil` query item or header is omitted, never sent as the text `"nil"`; a `nil` path parameter is
+  an error, since omitting it would change which resource the URL addresses;
+- arrays repeat by default (`?tag=a&tag=b`); `@Query("tag", style: .commaSeparated)` sends `?tag=a,b`,
+  alongside `.spaceDelimited` and `.pipeDelimited`;
+- path values are percent-encoded against the unreserved set, so a value containing `/`, `?`, or `#`
+  stays one segment.
+
+Misuse is a diagnostic on the offending declaration, not a malformed expansion: a non-struct or
+generic type, an interpolated path, an unfilled `{placeholder}`, a `@Path` with no matching
+placeholder, two `@Body` properties, `@Body` on `GET`/`HEAD`, two markers on one property, or an
+empty wire name.
+
+### Generating from OpenAPI
+
+```bash
+swift package --allow-writing-to-package-directory nova-openapi \
+  --spec openapi.yaml --output Sources/MyApp/GeneratedEndpoints.swift
+```
+
+The generator reads OpenAPI 3.0.x and 3.1.x as JSON or as a documented YAML subset, and writes one
+`struct` per operation plus `Codable` models from `components/schemas`. Output is deterministic —
+the same document always produces the same bytes — and depends only on `NovaNetworkCore`, so it
+compiles with the macro trait disabled. Generated names come from `operationId`, or from the method
+and path when there is none (`GET /pets/{petId}/photo` → `GetPetsByPetIdPhoto`).
+
+```swift
+let pets = try await client.execute(
+    endpoint: ListPets(limit: 20, tags: ["kitten"]),
+    authScope: "petstore",
+    decoder: PetstoreAPI.makeDecoder()   // configured for the document's date format
+)
+```
+
+Anything the generator cannot represent faithfully is a warning naming its location, never a silent
+substitution: a multi-branch `oneOf`/`anyOf` falls back to a generated JSON value type, a recursive
+schema is boxed as `Indirect<…>`, a payload with no JSON media type is skipped, and a document
+without `servers` produces endpoints that take `baseURL` as an initializer parameter. Anchors,
+aliases, tags, and multi-document YAML streams are rejected with a line and column rather than
+guessed at. Credentials from `securitySchemes` never reach generated code.
+
+A complete worked example — spec, checked-in output, and a runnable program — is in
+[`Examples/OpenAPIPetstore`](Examples/OpenAPIPetstore).
 
 ## Preset Quick Start (v1.15)
 

@@ -3,7 +3,8 @@
     @Intro(title: "Build a reliable Swift networking layer") {
 
         Create your first typed request, see concurrent callers share work, add bounded resilience,
-        and model reusable server operations. Each tutorial ends with a complete program you can run.
+        and model reusable server operations -- by hand or declaratively. Each tutorial ends with a
+        complete program you can run.
     }
 
     @Chapter(name: "Get Started") {
@@ -29,6 +30,7 @@
         @Image(source: "Production.svg", alt: "A typed endpoint protected by retry and cache policies.")
         @TutorialReference(tutorial: "doc:AddResilience")
         @TutorialReference(tutorial: "doc:ModelRequestsAsEndpoints")
+        @TutorialReference(tutorial: "doc:DeclareEndpointsWithMacro")
     }
 
     @Chapter(name: "Build Production Flows") {

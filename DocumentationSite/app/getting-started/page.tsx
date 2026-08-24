@@ -15,9 +15,9 @@ export default function GettingStartedPage() {
         <section id="install"><h2>Install the package</h2><p>Add the repository URL in Xcode’s Package Dependencies panel, then link <code>NovaNetworkClient</code> to your target.</p><CodeBlock filename="Package.swift" code={`dependencies: [
     .package(
         url: "https://github.com/maxches99/NovaNetwork.git",
-        from: "2.10.0"
+        from: "2.11.0"
     )
-]`} /></section>
+]`} /><p>That configuration resolves no third-party dependencies. The optional <code>@Endpoint</code> macro is the one part of the package that needs swift-syntax, so it sits behind a SwiftPM trait you enable with <code>traits: [&quot;EndpointMacros&quot;]</code>.</p></section>
         <section id="request"><h2>Make your first request</h2><p>Import the package, describe the response, and let the generic return type drive decoding.</p><CodeBlock filename="FirstRequest.swift" code={`import Foundation
 import NovaNetworkClient
 

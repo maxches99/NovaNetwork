@@ -19,6 +19,7 @@ If you're new to the package, start with <doc:GettingStarted> or follow the inte
 - <doc:GettingStarted>
 - <doc:CoreConcepts>
 - <doc:ChoosingAnAPI>
+- <doc:DeclarativeEndpoints>
 - <doc:ProductionChecklist>
 - <doc:Tutorial-Table-of-Contents>
 
@@ -47,6 +48,7 @@ If you're new to the package, start with <doc:GettingStarted> or follow the inte
 - ``Transport``
 - ``Endpoint``
 - ``AnyEndpoint``
+- ``EndpointDefinition``
 - ``BatchExecutionOptions``
 - ``BatchItemResult``
 - ``StreamingNetworkTransport``
@@ -60,6 +62,16 @@ If you're new to the package, start with <doc:GettingStarted> or follow the inte
 - ``WebSocketConnectionState``
 - ``WebSocketMessage``
 - ``WebSocketError``
+
+### Declarative Endpoints
+
+- <doc:DeclarativeEndpoints>
+- ``EndpointDefinition``
+- ``EndpointRequestBuilder``
+- ``EndpointParameterConvertible``
+- ``EndpointQueryStyle``
+- ``EndpointDefinitionError``
+- ``NoContent``
 
 ### Server-Sent Events
 

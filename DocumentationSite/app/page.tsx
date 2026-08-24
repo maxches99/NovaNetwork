@@ -9,6 +9,7 @@ const capabilities = [
   ["04", "Offline delivery", "Queue writes, replay them deliberately, and model recovery instead of hiding it behind a transport wrapper."],
   ["05", "Realtime & transfers", "Use WebSocket, Server-Sent Events, multipart uploads, downloads, and progress APIs from the same package."],
   ["06", "Observable by design", "Inspect lifecycle events, metrics, diagnostics, and deterministic test support without replacing the client."],
+  ["07", "Declarative endpoints", "Generate request construction from an annotated Swift type, or generate whole endpoint types from an OpenAPI document."],
 ] as const;
 
 export default function Home() {
@@ -122,7 +123,7 @@ let profile: Profile = try await client.load(
         <section className="marketing-section learning-preview">
           <div className="section-heading">
             <div><p className="eyebrow">Learn by building</p><h2>From first request to production confidence.</h2></div>
-            <Link className="text-link" href="/tutorials">All 8 tutorials →</Link>
+            <Link className="text-link" href="/tutorials">All {tutorials.length} tutorials →</Link>
           </div>
           <div className="tutorial-grid">
             {tutorials.slice(0, 4).map((tutorial, index) => (
