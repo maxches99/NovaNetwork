@@ -7,3 +7,6 @@ DerivedData/
 .swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
 .netrc
 /.tools
+# Only produced when the optional EndpointMacros trait pulls in swift-syntax; a library
+# should not pin its consumers' resolution.
+Package.resolved

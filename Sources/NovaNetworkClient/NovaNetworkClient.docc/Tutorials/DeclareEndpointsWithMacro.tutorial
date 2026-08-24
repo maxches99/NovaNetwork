@@ -1,0 +1,125 @@
+@Tutorial() {
+
+    @Intro(title: "Declare endpoints with a macro") {
+
+        Describe an operation with its method, path, and parameters, and let `@Endpoint` write the
+        request construction. The result is an ordinary endpoint: the same client pipeline, the same
+        execution call.
+    }
+
+    @Section(title: "Enable the macro") {
+
+        @ContentAndMedia {
+
+            The macro is the only part of the package that needs swift-syntax, so it sits behind the
+            `EndpointMacros` package trait. Leave the trait off and the package resolves nothing;
+            turn it on where you want the macro.
+        }
+
+        @Steps {
+
+            @Step {
+
+                Enable the trait on the package dependency and depend on the `NovaNetworkMacros`
+                product.
+
+                `NovaNetworkMacros` re-exports `NovaNetworkCore`, so one import brings in both the
+                macro and the runtime it generates calls into.
+
+                @Code(name: "Package.swift", file: "DeclarativePackage.swift")
+            }
+        }
+    }
+
+    @Section(title: "Declare one operation") {
+
+        @ContentAndMedia {
+
+            An endpoint needs a base URL. Supplying it once on a shared protocol keeps every
+            operation in the API down to the part that actually differs.
+        }
+
+        @Steps {
+
+            @Step {
+
+                Declare a protocol for the API and give it the base URL.
+
+                @Code(name: "Endpoints.swift", file: "DeclarativeEndpoint-01.swift", previousFile: "Empty.swift")
+            }
+
+            @Step {
+
+                Annotate a struct with its method, path, and response type.
+
+                The `id` property fills `{id}` because their names match — no marker needed, and the
+                value is percent-encoded as a single path segment.
+
+                @Code(name: "Endpoints.swift", file: "DeclarativeEndpoint-02.swift")
+            }
+        }
+    }
+
+    @Section(title: "Add parameters and a body") {
+
+        @ContentAndMedia {
+
+            Every stored property takes one role: a path parameter when it matches a placeholder, a
+            query item by default, or whatever an explicit marker says.
+        }
+
+        @Steps {
+
+            @Step {
+
+                Add an operation with query and header parameters.
+
+                `userId` becomes `?userId=` under its own name. `@Query("_limit")` renames a property
+                to its wire spelling, and a `nil` value is omitted rather than sent empty.
+
+                @Code(name: "Endpoints.swift", file: "DeclarativeEndpoint-03.swift", previousFile: "DeclarativeEndpoint-02.swift")
+            }
+
+            @Step {
+
+                Add a `POST` whose body is JSON-encoded by `@Body`.
+
+                The body uses the endpoint's `jsonEncoder` and sets `Content-Type: application/json`
+                unless a `@Header` parameter already supplied one.
+
+                @Code(name: "Endpoints.swift", file: "DeclarativeEndpoint-04.swift")
+            }
+        }
+    }
+
+    @Section(title: "Execute and go further") {
+
+        @ContentAndMedia {
+
+            Generated endpoints execute exactly like hand-written ones, through the same coalescing,
+            caching, retry, middleware, and telemetry pipeline.
+        }
+
+        @Steps {
+
+            @Step {
+
+                Use the complete source below in an executable target and run it.
+
+                @Code(name: "Endpoints.swift", file: "DeclarativeEndpoint.swift", previousFile: "DeclarativeEndpoint-04.swift")
+
+                > Experiment: give an endpoint an array parameter and compare
+                > `@Query("tag")` with `@Query("tag", style: .commaSeparated)` by printing
+                > `makeRequest().urlRequest().url`.
+            }
+
+            @Step {
+
+                Already have an OpenAPI document? Generate the same kind of endpoint types from it
+                with `swift package nova-openapi`, and read <doc:DeclarativeEndpoints> for both paths.
+
+                @Code(name: "Endpoints.swift", file: "DeclarativeEndpoint.swift")
+            }
+        }
+    }
+}

@@ -2,6 +2,7 @@
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
+import CompilerPluginSupport
 
 let package = Package(
     name: "NovaNetworkClient",
@@ -10,6 +11,10 @@ let package = Package(
         .library(name: "NovaNetworkCore", targets: ["NovaNetworkCore"]),
         .library(name: "NovaNetworkClient", targets: ["NovaNetworkClient"]),
         .library(name: "NovaNetworkClientTestSupport", targets: ["NovaNetworkClientTestSupport"]),
+        .library(name: "NovaNetworkMacros", targets: ["NovaNetworkMacros"]),
+        .library(name: "NovaNetworkOpenAPI", targets: ["NovaNetworkOpenAPI"]),
+        .executable(name: "nova-openapi", targets: ["NovaNetworkOpenAPIGenerator"]),
+        .plugin(name: "GenerateOpenAPIEndpoints", targets: ["GenerateOpenAPIEndpoints"]),
         .executable(name: "NovaNetworkClientBenchmarks", targets: ["NovaNetworkClientBenchmarks"]),
         .executable(name: "NovaNetworkClientJSONPlaceholderExample", targets: ["NovaNetworkClientJSONPlaceholderExample"]),
         .executable(name: "NovaNetworkClientBatchTodosExample", targets: ["NovaNetworkClientBatchTodosExample"]),
@@ -21,6 +26,22 @@ let package = Package(
         .executable(name: "NovaNetworkClientOfflineReplayReferenceExample", targets: ["NovaNetworkClientOfflineReplayReferenceExample"]),
         .executable(name: "NovaNetworkClientDiagnosticsReferenceExample", targets: ["NovaNetworkClientDiagnosticsReferenceExample"]),
         .executable(name: "NovaNetworkClientProductionProfileExample", targets: ["NovaNetworkClientProductionProfileExample"]),
+        .executable(name: "NovaNetworkClientOpenAPIPetstoreExample", targets: ["NovaNetworkClientOpenAPIPetstoreExample"]),
+    ],
+    traits: [
+        .trait(
+            name: "EndpointMacros",
+            description: """
+            Enables the @Endpoint macro and its parameter markers. Off by default: the macro is the \
+            only part of this package that needs swift-syntax, and SwiftPM prunes that dependency \
+            entirely when the trait is disabled, so the default package graph resolves nothing. \
+            Enable it with .package(url: ..., from: "2.11.0", traits: ["EndpointMacros"]).
+            """
+        ),
+    ],
+    dependencies: [
+        // Only reachable with the EndpointMacros trait enabled; pruned from resolution otherwise.
+        .package(url: "https://github.com/swiftlang/swift-syntax.git", from: "602.0.0"),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
@@ -33,6 +54,45 @@ let package = Package(
             name: "NovaNetworkClient",
             dependencies: ["NovaNetworkCore"],
             path: "Sources/NovaNetworkClient"
+        ),
+        .macro(
+            name: "NovaNetworkMacrosPlugin",
+            dependencies: [
+                .product(name: "SwiftSyntaxMacros", package: "swift-syntax", condition: .when(traits: ["EndpointMacros"])),
+                .product(name: "SwiftCompilerPlugin", package: "swift-syntax", condition: .when(traits: ["EndpointMacros"])),
+            ],
+            path: "Sources/NovaNetworkMacrosPlugin"
+        ),
+        .target(
+            name: "NovaNetworkMacros",
+            dependencies: [
+                "NovaNetworkCore",
+                .target(name: "NovaNetworkMacrosPlugin", condition: .when(traits: ["EndpointMacros"])),
+            ],
+            path: "Sources/NovaNetworkMacros"
+        ),
+        .target(
+            name: "NovaNetworkOpenAPI",
+            path: "Sources/NovaNetworkOpenAPI"
+        ),
+        .executableTarget(
+            name: "NovaNetworkOpenAPIGenerator",
+            dependencies: ["NovaNetworkOpenAPI"],
+            path: "Sources/NovaNetworkOpenAPIGenerator"
+        ),
+        .plugin(
+            name: "GenerateOpenAPIEndpoints",
+            capability: .command(
+                intent: .custom(
+                    verb: "nova-openapi",
+                    description: "Generates NovaNetwork endpoint types from an OpenAPI document."
+                ),
+                permissions: [
+                    .writeToPackageDirectory(reason: "Writes the generated endpoints file into the package."),
+                ]
+            ),
+            dependencies: ["NovaNetworkOpenAPIGenerator"],
+            path: "Plugins/GenerateOpenAPIEndpoints"
         ),
         .target(
             name: "NovaNetworkClientTestSupport",
@@ -53,6 +113,20 @@ let package = Package(
             name: "NovaNetworkCoreTests",
             dependencies: ["NovaNetworkCore"],
             path: "Tests/NovaNetworkCoreTests"
+        ),
+        .testTarget(
+            name: "NovaNetworkMacrosTests",
+            dependencies: [
+                "NovaNetworkMacros",
+                .target(name: "NovaNetworkMacrosPlugin", condition: .when(traits: ["EndpointMacros"])),
+                .product(name: "SwiftSyntaxMacrosGenericTestSupport", package: "swift-syntax", condition: .when(traits: ["EndpointMacros"])),
+            ],
+            path: "Tests/NovaNetworkMacrosTests"
+        ),
+        .testTarget(
+            name: "NovaNetworkOpenAPITests",
+            dependencies: ["NovaNetworkOpenAPI", "NovaNetworkPetstoreGenerated", "NovaNetworkClient"],
+            path: "Tests/NovaNetworkOpenAPITests"
         ),
         .executableTarget(
             name: "NovaNetworkClientBenchmarks",
@@ -108,6 +182,19 @@ let package = Package(
             name: "NovaNetworkClientProductionProfileExample",
             dependencies: ["NovaNetworkClient"],
             path: "Examples/ProductionProfile"
+        ),
+        .target(
+            // Checked-in output of `swift package nova-openapi`, in a target that depends on
+            // NovaNetworkCore alone: generated code needs neither the macro nor its trait.
+            name: "NovaNetworkPetstoreGenerated",
+            dependencies: ["NovaNetworkCore"],
+            path: "Examples/OpenAPIPetstore/Generated"
+        ),
+        .executableTarget(
+            name: "NovaNetworkClientOpenAPIPetstoreExample",
+            dependencies: ["NovaNetworkClient", "NovaNetworkPetstoreGenerated"],
+            path: "Examples/OpenAPIPetstore",
+            exclude: ["petstore.yaml", "Generated"]
         ),
     ]
 )

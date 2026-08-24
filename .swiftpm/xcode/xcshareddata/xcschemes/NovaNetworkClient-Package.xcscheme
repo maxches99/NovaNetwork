@@ -203,6 +203,62 @@
                ReferencedContainer = "container:">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "NovaNetworkMacros"
+               BuildableName = "NovaNetworkMacros"
+               BlueprintName = "NovaNetworkMacros"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "NovaNetworkOpenAPI"
+               BuildableName = "NovaNetworkOpenAPI"
+               BlueprintName = "NovaNetworkOpenAPI"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "nova-openapi"
+               BuildableName = "nova-openapi"
+               BlueprintName = "nova-openapi"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "NovaNetworkClientOpenAPIPetstoreExample"
+               BuildableName = "NovaNetworkClientOpenAPIPetstoreExample"
+               BlueprintName = "NovaNetworkClientOpenAPIPetstoreExample"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -253,6 +309,26 @@
                ReferencedContainer = "container:">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "NovaNetworkMacrosTests"
+               BuildableName = "NovaNetworkMacrosTests"
+               BlueprintName = "NovaNetworkMacrosTests"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "NovaNetworkOpenAPITests"
+               BuildableName = "NovaNetworkOpenAPITests"
+               BlueprintName = "NovaNetworkOpenAPITests"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction
@@ -269,9 +345,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "NovaNetworkClientProductionProfileExample"
-            BuildableName = "NovaNetworkClientProductionProfileExample"
-            BlueprintName = "NovaNetworkClientProductionProfileExample"
+            BlueprintIdentifier = "NovaNetworkClientOpenAPIPetstoreExample"
+            BuildableName = "NovaNetworkClientOpenAPIPetstoreExample"
+            BlueprintName = "NovaNetworkClientOpenAPIPetstoreExample"
             ReferencedContainer = "container:">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -295,9 +371,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "NovaNetworkClientProductionProfileExample"
-            BuildableName = "NovaNetworkClientProductionProfileExample"
-            BlueprintName = "NovaNetworkClientProductionProfileExample"
+            BlueprintIdentifier = "NovaNetworkClientOpenAPIPetstoreExample"
+            BuildableName = "NovaNetworkClientOpenAPIPetstoreExample"
+            BlueprintName = "NovaNetworkClientOpenAPIPetstoreExample"
             ReferencedContainer = "container:">
          </BuildableReference>
       </BuildableProductRunnable>

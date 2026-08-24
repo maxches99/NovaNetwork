@@ -38,6 +38,15 @@ current Swift lanes:
 swift build -Xswiftc -strict-concurrency=complete -Xswiftc -warn-concurrency
 ```
 
+The `@Endpoint` macro is behind the opt-in `EndpointMacros` trait, so `swift build` and `swift test`
+never compile it. Anything touching `Sources/NovaNetworkMacros*` or `Tests/NovaNetworkMacrosTests`
+has to be built and tested with the trait enabled as well:
+
+```bash
+swift build --traits EndpointMacros
+swift test --traits EndpointMacros
+```
+
 ## Linting
 
 There's no SwiftLint SwiftPM plugin dependency (this project avoids adding dependencies unless

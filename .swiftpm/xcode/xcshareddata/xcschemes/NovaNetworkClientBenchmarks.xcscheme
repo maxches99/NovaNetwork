@@ -50,6 +50,16 @@
                ReferencedContainer = "container:">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "NovaNetworkOpenAPITests"
+               BuildableName = "NovaNetworkOpenAPITests"
+               BlueprintName = "NovaNetworkOpenAPITests"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction

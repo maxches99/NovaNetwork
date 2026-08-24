@@ -20,6 +20,10 @@ Use this file as the default operating guide for coding agents.
 - Build: `swift build`
 - Test: `swift test`
 - Run a specific test: `swift test --filter <TestName>`
+- Build/test the `@Endpoint` macro (opt-in trait, excluded from the default build):
+  `swift build --traits EndpointMacros` / `swift test --traits EndpointMacros`
+- Regenerate the OpenAPI example after changing the generator or the spec:
+  `swift run nova-openapi --spec Examples/OpenAPIPetstore/petstore.yaml --output Examples/OpenAPIPetstore/Generated/GeneratedPetstoreAPI.swift`
 
 ## Working Rules
 - Keep changes minimal and focused on the requested task.
@@ -98,8 +102,8 @@ Treat DFR (Design/Functional Requirements) as the source of truth and contract a
 
 ## Validation Checklist
 Before finishing:
-1. Build succeeds (`swift build`).
-2. Tests pass (`swift test`).
+1. Build succeeds (`swift build`, and `swift build --traits EndpointMacros` when macro code changed).
+2. Tests pass (`swift test`, and `swift test --traits EndpointMacros` when macro code changed).
 3. Unit test coverage is above 90%.
 4. E2E suite is green against real public APIs (`RUN_E2E_TESTS=1 swift test --filter E2ECoverageTests`), with no mocks/stubs.
 5. `README.md` is updated if user-facing behavior changed.

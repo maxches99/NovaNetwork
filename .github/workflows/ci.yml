@@ -142,7 +142,7 @@ jobs:
             exit 1
           fi
 
-          SOURCE_FILES=$(find Sources/NovaNetworkClient Sources/NovaNetworkCore -name "*.swift" -print)
+          SOURCE_FILES=$(find Sources/NovaNetworkClient Sources/NovaNetworkCore Sources/NovaNetworkOpenAPI -name "*.swift" -print)
           REPORT=$(xcrun llvm-cov report "${TEST_BIN}" \
             -instr-profile="${PROF_DATA}" \
             ${SOURCE_FILES})
@@ -210,8 +210,76 @@ jobs:
           swift --version
           swift --version | grep -Eq 'Swift version 6\.2\.3([.[:space:]]|$)'
 
-      - name: Build NovaNetworkClient and NovaNetworkClientTestSupport
-        run: swift build --target NovaNetworkClient --target NovaNetworkClientTestSupport
+      - name: Build NovaNetworkClient, NovaNetworkClientTestSupport, and NovaNetworkOpenAPI
+        run: |
+          swift build \
+            --target NovaNetworkClient \
+            --target NovaNetworkClientTestSupport \
+            --target NovaNetworkOpenAPI
+
+  endpoint-macros-trait:
+    # The @Endpoint macro lives behind the EndpointMacros package trait, so the default build never
+    # compiles it. Without this job the macro and its tests would rot unnoticed. The first step also
+    # holds the line on the trait's whole point: with it disabled, the package resolves nothing.
+    name: Endpoint Macros Trait (Swift 6.2)
+    runs-on: macos-15
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Select Xcode 26.2 (Swift 6.2)
+        run: sudo xcode-select --switch /Applications/Xcode_26.2.app/Contents/Developer
+
+      - name: Verify the Default Package Graph Has No Dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEPENDENCIES=$(swift package show-dependencies --format flatlist)
+          if [[ -n "${DEPENDENCIES}" ]]; then
+            echo "The default package graph must resolve zero dependencies, but resolved:"
+            echo "${DEPENDENCIES}"
+            exit 1
+          fi
+          echo "Default package graph resolves no dependencies."
+
+      - name: Build with the Trait Enabled
+        run: swift build --traits EndpointMacros -Xswiftc -strict-concurrency=complete -Xswiftc -warn-concurrency
+
+      - name: Test with the Trait Enabled
+        run: swift test --traits EndpointMacros
+
+  openapi-generator:
+    # Generated code is checked in, so the generator has to stay honest about two things: the same
+    # spec always produces the same bytes, and the file in the repository is what today's generator
+    # emits. Both fail here as a diff rather than as a surprise in someone's pull request.
+    name: OpenAPI Generator Determinism
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Select Xcode 26.2 (Swift 6.2)
+        run: sudo xcode-select --switch /Applications/Xcode_26.2.app/Contents/Developer
+
+      - name: Regenerate the Petstore Example
+        run: |
+          swift run nova-openapi \
+            --spec Examples/OpenAPIPetstore/petstore.yaml \
+            --output Examples/OpenAPIPetstore/Generated/GeneratedPetstoreAPI.swift
+
+      - name: Fail If the Checked-In Output Is Stale
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! git diff --exit-code -- Examples/OpenAPIPetstore/Generated/GeneratedPetstoreAPI.swift; then
+            echo "Generated endpoints are stale. Regenerate them with the command above and commit the result."
+            exit 1
+          fi
+          echo "Checked-in generated endpoints match the generator's current output."
 
   api-breaking-changes-gate:
     # Compares public API against the most recently tagged release (2.0.0). Known, deliberate,

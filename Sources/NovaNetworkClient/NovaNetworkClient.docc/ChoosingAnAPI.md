@@ -11,6 +11,8 @@ Start with the smallest API that matches the shape and lifetime of your operatio
 | One raw response body | ``NetworkClient/load(request:authScope:cachePolicy:options:)`` |
 | One `Decodable` value | ``NetworkClient/load(request:authScope:cachePolicy:as:decoder:options:)`` |
 | Reusable request construction and decoding | `Endpoint` and ``NetworkClient/execute(endpoint:authScope:cachePolicy:decoder:options:)`` |
+| The same, without hand-writing `makeRequest()` | The `@Endpoint` macro -- see <doc:DeclarativeEndpoints> |
+| Many operations already described by an OpenAPI document | `swift package nova-openapi` -- see <doc:DeclarativeEndpoints> |
 | Several bounded requests with stable result ordering | ``NetworkClient/loadBatch(requests:authScope:cachePolicy:options:batchOptions:)`` |
 | Incremental response bytes | ``NetworkClient/loadStream(request:authScope:cachePolicy:options:)`` |
 | Server-Sent Events | ``NetworkClient/loadServerSentEvents(request:authScope:options:reconnectPolicy:)`` |
@@ -33,8 +35,16 @@ the same operation is called from multiple places, needs custom decoding, or des
 A feature, account session, or application should normally share a client. Recreating a client for
 every request prevents callers from sharing in-flight work and discards in-memory cache state.
 
+### Let the declaration write the request
+
+Once an endpoint is more than a fixed URL -- path parameters, optional query items, a JSON body --
+the hand-written `makeRequest()` is mostly restating what the URL template already says. `@Endpoint`
+generates it from the declaration, and `swift package nova-openapi` generates whole endpoint types
+from an OpenAPI document. Both produce ordinary `Endpoint` conformances, so nothing else changes.
+
 ## See Also
 
+- <doc:DeclarativeEndpoints>
 - <doc:ModelRequestsAsEndpoints>
 - ``NetworkClientConfiguration``
 - ``NetworkClientPreset``

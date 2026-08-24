@@ -239,6 +239,44 @@ for try await message in messages {
 await socket.disconnect(reason: "tutorial-complete")` },
     ],
   },
+  {
+    slug: "declarative-endpoints",
+    title: "Declare endpoints with a macro",
+    summary: "Generate request construction from a method, a path template, and stored properties.",
+    eyebrow: "Declarative",
+    duration: "12 min",
+    level: "Intermediate",
+    symbol: "@",
+    tone: "orange",
+    outcome: "A typed endpoint whose makeRequest() is generated, executed through the same client pipeline.",
+    steps: [
+      { title: "Enable the macro trait", explanation: "The macro is the only part of the package that needs swift-syntax, so it is opt-in. Leave the trait off and the package resolves no dependencies at all.", code: `dependencies: [
+    .package(
+        url: "https://github.com/maxches99/NovaNetwork.git",
+        from: "2.11.0",
+        traits: ["EndpointMacros"]
+    )
+]` },
+      { title: "Supply the base URL once", explanation: "A shared protocol keeps every operation down to the part that actually differs.", code: `protocol PetstoreAPI: EndpointDefinition {}
+
+extension PetstoreAPI {
+    var baseURL: URL {
+        URL(string: "https://api.petstore.example.com/v1")!
+    }
+}` },
+      { title: "Declare the operation", explanation: "petId fills {petId} because the names match. Unmarked properties become query items, and a nil value is omitted rather than sent empty.", code: `@Endpoint(.get, "/pets/{petId}/photos", response: [Photo].self)
+struct GetPetPhotos: PetstoreAPI {
+    let petId: Int
+    var limit: Int?
+    @Query("sort_by") var sortBy: String?
+    @Header("X-Trace") var trace: String?
+}` },
+      { title: "Execute it like any endpoint", explanation: "Generated endpoints run through the same coalescing, caching, retry, middleware, and telemetry pipeline as hand-written ones.", code: `let photos = try await client.execute(
+    endpoint: GetPetPhotos(petId: 7, limit: 20),
+    authScope: "petstore"
+)`, note: "Already have an OpenAPI document? swift package nova-openapi generates the same kind of types from it, with no macro and no trait required." },
+    ],
+  },
 ];
 
 export function tutorialForSlug(slug: string) {

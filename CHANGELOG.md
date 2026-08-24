@@ -9,6 +9,10 @@ convention; not every one is a tagged release — see [Releases](#releases).
 
 ## Unreleased
 
+- [2.11](docs/WHATS_NEW_v2.11.md) — Declarative endpoints: the opt-in `@Endpoint` macro (behind the
+  `EndpointMacros` SwiftPM trait, so the default package graph still resolves zero dependencies),
+  an OpenAPI 3.0/3.1 generator exposed as `swift package nova-openapi`, and the shared
+  `EndpointDefinition`/`EndpointRequestBuilder` runtime both front ends target.
 - [2.10](docs/WHATS_NEW_v2.10.md) — Apple-style Swift-DocC learning experience with a complete
   Getting Started guide, eight progressive interactive tutorials, core-concept and API-selection
   guides, a production checklist, type-checked tutorial resources, and a standalone documentation
