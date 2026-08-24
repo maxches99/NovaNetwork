@@ -136,3 +136,28 @@ jobs:
             echo "E2E policy violation: only real public APIs are allowed; mocks/stubs/fake endpoints are forbidden."
             exit 1
           fi
+
+  linux-client-build-gate:
+    # Compile-only gate: NovaNetworkClient and NovaNetworkClientTestSupport have never had a
+    # Linux CI run before this job. This intentionally does not run swift test on Linux yet --
+    # only confirms the packages still compile against swift-corelibs-foundation, catching
+    # regressions like an unguarded Apple-only import (CryptoKit, Security) before they land.
+    name: Linux Client Build Gate (Swift 6.2.3)
+    runs-on: ubuntu-latest
+    container: swift:6.2.3-noble
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Verify Swift 6.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift --version
+          swift --version | grep -Eq 'Swift version 6\.2\.3([.[:space:]]|$)'
+
+      - name: Build NovaNetworkClient and NovaNetworkClientTestSupport
+        run: swift build --target NovaNetworkClient --target NovaNetworkClientTestSupport
+          fi

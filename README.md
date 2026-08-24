@@ -47,6 +47,10 @@ targets: [
 ## Features
 
 - Typed `Endpoint<Response>` execution with endpoint-specific decoding.
+- Linux build gate: `NovaNetworkClient`'s Apple-only APIs (certificate pinning, mTLS, the offline
+  queue's optional AES-GCM cipher) are behind explicit availability checks, and fingerprint
+  hashing no longer requires `CryptoKit`, so the core client compiles on Linux (see
+  [Linux Compatibility](#linux-compatibility) for exactly what that does and doesn't claim).
 - `NetworkError` conforms to `Equatable` and `LocalizedError`; `NetworkErrorContext` and
   `ContextualNetworkError` attach request/attempt context without changing its existing cases.
 - `NovaNetworkClientTestSupport`: request-matching routes, chaos injection, a deterministic
@@ -1024,6 +1028,29 @@ Scenarios include typed load, coalescing, batch loading, cache hit path, middlew
 ```bash
 RUN_E2E_TESTS=1 swift test --filter E2ECoverageTests
 ```
+
+## Linux Compatibility
+
+`NovaNetworkCore` has a Linux CI guarantee (Ubuntu, Swift 6.2.3, strict concurrency). Full
+`NovaNetworkClient` Linux support is a work in progress: it has never run on Linux before this
+was added, so this section describes what has been *audited and gated*, not what has been
+*proven working* — the CI job below is the actual verification going forward.
+
+- Apple-only APIs are behind explicit availability gates: certificate pinning and mTLS
+  (`Security`, `#if canImport(Security)`) and the offline queue's optional AES-GCM encryption
+  cipher (`CryptoKit`, `#if canImport(CryptoKit)`) simply aren't available where those frameworks
+  aren't; everything else in `NovaNetworkClient` — coalescing, retry, circuit breaker, rate
+  limiting, caching, the offline queue itself (without that one optional cipher), batching,
+  fingerprinting, WebSocket — does not depend on either.
+- Request/cache-key fingerprinting no longer requires `CryptoKit`: `SHA256Util` uses a
+  from-scratch, dependency-free SHA-256 implementation (verified against the NIST SHA-256 test
+  vectors, including a streaming variant fed non-block-aligned chunks) when `CryptoKit` isn't
+  available, so this core, non-optional behavior isn't gated behind an Apple-only framework.
+  Encryption (as opposed to fingerprinting) remains `CryptoKit`-only rather than a hand-rolled
+  authenticated cipher — the security cost of getting that wrong is not a risk worth taking.
+- A new CI job (`linux-client-build-gate`) compiles `NovaNetworkClient` and
+  `NovaNetworkClientTestSupport` on Ubuntu with Swift 6.2.3. It's compile-only for now — running
+  the test suite on Linux is a separate, unverified step.
 
 ## License
 

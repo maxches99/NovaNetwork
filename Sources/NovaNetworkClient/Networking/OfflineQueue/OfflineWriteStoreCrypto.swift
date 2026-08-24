@@ -1,6 +1,8 @@
 import NovaNetworkCore
-import CryptoKit
 import Foundation
+#if canImport(CryptoKit)
+import CryptoKit
+#endif
 
 public enum OfflineWriteStoreCipherError: Error, Equatable {
     case keyUnavailable
@@ -15,6 +17,12 @@ public protocol OfflineWriteStoreCipher: Sendable {
     func decrypt(_ ciphertext: Data, algorithm: String, version: Int) throws -> Data
 }
 
+// AES-GCM authenticated encryption is only available where CryptoKit is (currently Apple
+// platforms). This is deliberately not reimplemented in pure Swift: unlike the fingerprint
+// hashing in SHA256Util, this protects data at rest, and hand-rolling an authenticated cipher is
+// not a risk worth taking. `DiskOfflineWriteStore`'s `cipher` parameter is optional, so the
+// offline queue itself works everywhere; only this specific encryption strategy is Apple-only.
+#if canImport(CryptoKit)
 public struct AESGCMOfflineWriteStoreCipher: OfflineWriteStoreCipher {
     private let keyProvider: @Sendable () throws -> Data
 
@@ -127,3 +135,4 @@ public struct RotatingAESGCMOfflineWriteStoreCipher: OfflineWriteStoreCipher {
         return SymmetricKey(data: keyData)
     }
 }
+#endif
