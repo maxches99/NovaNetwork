@@ -1,0 +1,53 @@
+name: Deploy Documentation Site
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "DocumentationSite/**"
+      - ".github/workflows/deploy-docs.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Build and Deploy to Cloudflare Workers
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: DocumentationSite
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Enable pnpm
+        run: corepack enable pnpm
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: DocumentationSite/pnpm-lock.yaml
+
+      - name: Install website dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build website
+        run: pnpm build
+
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: DocumentationSite
+          wranglerVersion: "4.92.0"
+          command: deploy --config dist/server/wrangler.json
