@@ -24,15 +24,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Enable pnpm
+        run: corepack enable pnpm
+
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: pnpm
           cache-dependency-path: DocumentationSite/pnpm-lock.yaml
-
-      - name: Enable pnpm
-        run: corepack enable pnpm
 
       - name: Install website dependencies
         run: pnpm install --frozen-lockfile
