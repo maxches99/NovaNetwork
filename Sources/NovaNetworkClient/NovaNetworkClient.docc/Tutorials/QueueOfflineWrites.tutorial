@@ -1,0 +1,42 @@
+@Tutorial() {
+    @Intro(title: "Queue writes offline") {
+        Persist an idempotent write when connectivity is unavailable and inspect its replay receipt.
+    }
+
+    @Section(title: "Create durable storage") {
+        @ContentAndMedia {
+            The disk store survives process restarts. Use an application-owned directory and define retention limits deliberately.
+        }
+        @Steps {
+            @Step {
+                Create a disk-backed store and inject it into the client.
+                @Code(name: "OfflineWrite.swift", file: "OfflineWrite-01.swift", previousFile: "Empty.swift")
+            }
+            @Step {
+                Build a POST request with a stable idempotency key.
+                @Code(name: "OfflineWrite.swift", file: "OfflineWrite-02.swift")
+            }
+        }
+    }
+
+    @Section(title: "Enqueue and observe") {
+        @ContentAndMedia {
+            The enqueue result tells you whether the write completed immediately or was saved for replay.
+        }
+        @Steps {
+            @Step {
+                Select enqueue-when-offline with bounded capacity and lifetime.
+                @Code(name: "OfflineWrite.swift", file: "OfflineWrite-03.swift", previousFile: "OfflineWrite-02.swift")
+            }
+            @Step {
+                Handle both outcomes and inspect the current queue depth.
+                @Code(name: "OfflineWrite.swift", file: "OfflineWrite.swift")
+            }
+            @Step {
+                Decide how your UI represents pending, completed, and manual-review states.
+                @Code(name: "OfflineWrite.swift", file: "OfflineWrite-04.swift", previousFile: "OfflineWrite.swift")
+                > Experiment: Switch to `.alwaysEnqueue` to exercise the queued path without disabling connectivity.
+            }
+        }
+    }
+}

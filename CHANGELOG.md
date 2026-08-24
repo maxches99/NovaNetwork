@@ -9,6 +9,10 @@ convention; not every one is a tagged release — see [Releases](#releases).
 
 ## Unreleased
 
+- [2.10](docs/WHATS_NEW_v2.10.md) — Apple-style Swift-DocC learning experience with a complete
+  Getting Started guide, eight progressive interactive tutorials, core-concept and API-selection
+  guides, a production checklist, type-checked tutorial resources, and a standalone documentation
+  website with a dedicated CI build.
 - **Relicensed from GPL-3.0 to the Apache License, Version 2.0**, so the package can be adopted
   in closed-source applications. Single copyright holder, no prior external contributions, so no
   contributor consent was required. See [LICENSE](LICENSE).

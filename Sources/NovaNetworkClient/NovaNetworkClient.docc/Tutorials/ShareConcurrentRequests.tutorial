@@ -1,0 +1,99 @@
+@Tutorial() {
+
+    @Intro(title: "Share concurrent requests") {
+
+        Start two equivalent loads together and use coalescer metrics to verify that both callers
+        shared one in-flight operation.
+    }
+
+    @Section(title: "Create one request identity") {
+
+        @ContentAndMedia {
+
+            Coalescing begins with request identity. Equivalent methods, URLs, query items, headers,
+            bodies, and authentication scopes produce the same default fingerprint.
+        }
+
+        @Steps {
+
+            @Step {
+
+                Reuse one client and one immutable `APIRequest` value.
+
+                @Code(name: "ConcurrentRequests.swift", file: "ConcurrentRequests-01.swift", previousFile: "Empty.swift")
+            }
+
+            @Step {
+
+                Choose one stable scope for callers that may safely share work.
+
+                Never use an access token as the scope. Use a stable user, account, or tenant label.
+
+                @Code(name: "ConcurrentRequests.swift", file: "ConcurrentRequests-02.swift")
+            }
+        }
+    }
+
+    @Section(title: "Overlap two loads") {
+
+        @ContentAndMedia {
+
+            `async let` creates child tasks immediately, so the two loads can overlap. Sequential
+            `await` calls would normally execute as separate operations.
+        }
+
+        @Steps {
+
+            @Step {
+
+                Start two typed loads before awaiting either result.
+
+                @Code(name: "ConcurrentRequests.swift", file: "ConcurrentRequests-03.swift", previousFile: "ConcurrentRequests-02.swift")
+            }
+
+            @Step {
+
+                Await both values together.
+
+                @Code(name: "ConcurrentRequests.swift", file: "ConcurrentRequests-04.swift")
+            }
+
+            @Step {
+
+                Read the client's coalescer metrics after both calls finish.
+
+                The first caller creates a miss; a caller that joins the same in-flight key creates a hit.
+
+                @Code(name: "ConcurrentRequests.swift", file: "ConcurrentRequests-05.swift")
+            }
+        }
+    }
+
+    @Section(title: "Verify the behavior") {
+
+        @ContentAndMedia {
+
+            Run the full example and inspect both the values and metrics.
+        }
+
+        @Steps {
+
+            @Step {
+
+                Use the complete program below.
+
+                @Code(name: "ConcurrentRequests.swift", file: "ConcurrentRequests.swift", previousFile: "ConcurrentRequests-05.swift")
+            }
+
+            @Step {
+
+                Confirm the two IDs match and at least one caller joined shared work.
+
+                @Code(name: "ConcurrentRequests.swift", file: "ConcurrentRequests-06.swift", previousFile: "ConcurrentRequests.swift")
+
+                > Experiment: Give the second request a different `authScope`. Its fingerprint is
+                > intentionally isolated, so it won't join the first operation.
+            }
+        }
+    }
+}

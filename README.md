@@ -6,6 +6,13 @@ When multiple callers ask for the same resource at the same time, only one under
 
 ## Documentation
 
+- [Getting Started](Sources/NovaNetworkClient/NovaNetworkClient.docc/GettingStarted.md)
+- [Interactive DocC Tutorials](Sources/NovaNetworkClient/NovaNetworkClient.docc/Tutorial-Table-of-Contents.tutorial)
+- [Documentation Website](https://novanetworkclient-docs.maxchesnikov.chatgpt.site)
+- [Website source and build instructions](DocumentationSite/README.md)
+- [Core Concepts](Sources/NovaNetworkClient/NovaNetworkClient.docc/CoreConcepts.md)
+- [Choosing an API](Sources/NovaNetworkClient/NovaNetworkClient.docc/ChoosingAnAPI.md)
+- [Production Checklist](Sources/NovaNetworkClient/NovaNetworkClient.docc/ProductionChecklist.md)
 - [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md)
 - [Setup & Usage Guide](docs/SETUP_GUIDE.md)
@@ -33,7 +40,7 @@ When multiple callers ask for the same resource at the same time, only one under
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/your-org/NovaNetworkClient.git", from: "1.0.0")
+    .package(url: "https://github.com/maxches99/NovaNetwork", from: "2.0.0")
 ]
 ```
 
@@ -42,7 +49,7 @@ targets: [
     .target(
         name: "YourTarget",
         dependencies: [
-            .product(name: "NovaNetworkClient", package: "NovaNetworkClient")
+            .product(name: "NovaNetworkClient", package: "NovaNetwork")
         ]
     )
 ]

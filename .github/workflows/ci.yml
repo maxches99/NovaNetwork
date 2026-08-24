@@ -11,6 +11,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  documentation-site:
+    name: Documentation Website
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: DocumentationSite
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: DocumentationSite/pnpm-lock.yaml
+
+      - name: Enable pnpm
+        run: corepack enable pnpm
+
+      - name: Install website dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build website
+        run: pnpm build
+
+      - name: Verify rendered documentation routes
+        run: pnpm test
+
   linux-core-swift-6-2:
     name: Linux Core (Swift 6.2.3)
     runs-on: ubuntu-latest

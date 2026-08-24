@@ -1,0 +1,99 @@
+@Tutorial() {
+
+    @Intro(title: "Build your first typed request") {
+
+        Add NovaNetworkClient to an app or executable and decode a todo item from JSON in a few
+        focused steps.
+    }
+
+    @Section(title: "Create the model") {
+
+        @ContentAndMedia {
+
+            Start from the shape of a successful response. A model that is both `Decodable` and
+            `Sendable` works with the client's typed Swift concurrency APIs.
+        }
+
+        @Steps {
+
+            @Step {
+
+                Import Foundation and NovaNetworkClient.
+
+                @Code(name: "FirstRequest.swift", file: "FirstRequest-01.swift", previousFile: "Empty.swift")
+            }
+
+            @Step {
+
+                Declare a `Todo` structure with the fields returned by JSONPlaceholder.
+
+                `Sendable` makes the model safe to move between concurrent tasks.
+
+                @Code(name: "FirstRequest.swift", file: "FirstRequest-02.swift")
+            }
+        }
+    }
+
+    @Section(title: "Describe and load the request") {
+
+        @ContentAndMedia {
+
+            Keep request description separate from execution. An `APIRequest` is an immutable value;
+            the `NetworkClient` owns transport and policy behavior.
+        }
+
+        @Steps {
+
+            @Step {
+
+                Create a long-lived client. Its default transport uses URLSession.
+
+                @Code(name: "FirstRequest.swift", file: "FirstRequest-03.swift", previousFile: "FirstRequest-02.swift")
+            }
+
+            @Step {
+
+                Describe a GET request and ask for JSON.
+
+                @Code(name: "FirstRequest.swift", file: "FirstRequest-04.swift")
+            }
+
+            @Step {
+
+                Load the response as `Todo`. The `public` authentication scope is a stable identity,
+                not a credential.
+
+                @Code(name: "FirstRequest.swift", file: "FirstRequest-05.swift")
+            }
+        }
+    }
+
+    @Section(title: "Run the complete program") {
+
+        @ContentAndMedia {
+
+            Put the operation in an async entry point and handle failures at the boundary of the program.
+        }
+
+        @Steps {
+
+            @Step {
+
+                Move the client and request setup into an async executable entry point.
+
+                @Code(name: "FirstRequest.swift", file: "FirstRequest-06.swift", previousFile: "FirstRequest-05.swift")
+            }
+
+            @Step {
+
+                Load the todo inside the failure boundary, run the program, and confirm that it
+                prints a title.
+
+                @Code(name: "FirstRequest.swift", file: "FirstRequest.swift", previousFile: "FirstRequest-06.swift")
+
+                > Experiment: Change the final path component from `1` to another todo ID and compare
+                > the decoded values.
+            }
+        }
+    }
+}

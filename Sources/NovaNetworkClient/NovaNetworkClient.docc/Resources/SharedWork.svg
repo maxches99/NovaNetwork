@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600" role="img" aria-labelledby="title description">
+  <title id="title">Share concurrent network work</title>
+  <desc id="description">Two caller paths merge into one network operation and split into two results.</desc>
+  <defs><linearGradient id="background" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#071f2f"/><stop offset="1" stop-color="#123b53"/></linearGradient></defs>
+  <rect width="1200" height="600" rx="36" fill="url(#background)"/>
+  <circle cx="170" cy="190" r="68" fill="#31c7b1"/><circle cx="170" cy="410" r="68" fill="#62a8ff"/>
+  <path d="M238 190C390 190 410 300 520 300M238 410C390 410 410 300 520 300" fill="none" stroke="#b8f5ed" stroke-width="18" stroke-linecap="round"/>
+  <rect x="520" y="190" width="270" height="220" rx="38" fill="#143f52" stroke="#6be1d0" stroke-width="5"/>
+  <path d="M590 265h130M590 315h90M590 365h150" stroke="#d9fffa" stroke-width="17" stroke-linecap="round"/>
+  <path d="M790 300h170" stroke="#8ee8dc" stroke-width="18" stroke-linecap="round"/>
+  <circle cx="1030" cy="300" r="78" fill="#806cff"/><path d="m992 300 26 26 53-61" fill="none" stroke="white" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

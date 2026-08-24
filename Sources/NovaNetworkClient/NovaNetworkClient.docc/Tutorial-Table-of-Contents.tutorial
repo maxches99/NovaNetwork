@@ -1,0 +1,44 @@
+@Tutorials(name: "Develop with NovaNetworkClient") {
+
+    @Intro(title: "Build a reliable Swift networking layer") {
+
+        Create your first typed request, see concurrent callers share work, add bounded resilience,
+        and model reusable server operations. Each tutorial ends with a complete program you can run.
+    }
+
+    @Chapter(name: "Get Started") {
+
+        Learn the request, response, and client types by loading a value from a public API.
+
+        @Image(source: "GetStarted.svg", alt: "A request flowing from a Swift app to a typed response.")
+        @TutorialReference(tutorial: "doc:BuildYourFirstRequest")
+    }
+
+    @Chapter(name: "Understand Shared Work") {
+
+        Explore request identity and verify that equivalent concurrent calls use one in-flight operation.
+
+        @Image(source: "SharedWork.svg", alt: "Two concurrent callers joining one shared network operation.")
+        @TutorialReference(tutorial: "doc:ShareConcurrentRequests")
+    }
+
+    @Chapter(name: "Prepare for Production") {
+
+        Add deliberate resilience policies and organize repeated operations as typed endpoints.
+
+        @Image(source: "Production.svg", alt: "A typed endpoint protected by retry and cache policies.")
+        @TutorialReference(tutorial: "doc:AddResilience")
+        @TutorialReference(tutorial: "doc:ModelRequestsAsEndpoints")
+    }
+
+    @Chapter(name: "Build Production Flows") {
+
+        Handle credential renewal, bounded fan-out, durable offline writes, and realtime connections.
+
+        @Image(source: "Production.svg", alt: "Production networking flows built from explicit policies.")
+        @TutorialReference(tutorial: "doc:RefreshAuthentication")
+        @TutorialReference(tutorial: "doc:LoadBoundedBatch")
+        @TutorialReference(tutorial: "doc:QueueOfflineWrites")
+        @TutorialReference(tutorial: "doc:OpenRealtimeChannel")
+    }
+}

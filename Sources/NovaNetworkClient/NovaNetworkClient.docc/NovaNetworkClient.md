@@ -1,6 +1,6 @@
 # ``NovaNetworkClient``
 
-Deduplicate concurrent network requests with configurable fingerprinting, cancellation, retry policy, and observability.
+Build a typed, concurrency-safe Swift networking layer with shared in-flight work, resilience, and observability.
 
 ## Overview
 
@@ -9,7 +9,18 @@ Deduplicate concurrent network requests with configurable fingerprinting, cancel
 Use ``NetworkClient`` for a batteries-included integration with `URLSession`, or import
 `NovaNetworkCore` for transport-neutral request, response, endpoint, and error contracts.
 
+If you're new to the package, start with <doc:GettingStarted> or follow the interactive
+<doc:Tutorial-Table-of-Contents> tutorial path in Xcode.
+
 ## Topics
+
+### Essentials
+
+- <doc:GettingStarted>
+- <doc:CoreConcepts>
+- <doc:ChoosingAnAPI>
+- <doc:ProductionChecklist>
+- <doc:Tutorial-Table-of-Contents>
 
 ### Request Deduplication
 

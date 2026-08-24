@@ -1,0 +1,105 @@
+@Tutorial() {
+
+    @Intro(title: "Add bounded resilience") {
+
+        Configure deliberate retry and cache behavior, then handle typed failures without hiding them.
+    }
+
+    @Section(title: "Choose retry boundaries") {
+
+        @ContentAndMedia {
+
+            The default retry policy makes one attempt. Add retries only when the operation is safe
+            to repeat and bound both the number of attempts and the backoff.
+        }
+
+        @Steps {
+
+            @Step {
+
+                Start from a mutable `NetworkClientConfiguration` value.
+
+                @Code(name: "ResilientClient.swift", file: "ResilientClient-01.swift", previousFile: "Empty.swift")
+            }
+
+            @Step {
+
+                Allow up to three attempts with bounded exponential backoff.
+
+                GET is retry-eligible by default. Don't broadly retry POST requests without a
+                server-supported idempotency contract.
+
+                @Code(name: "ResilientClient.swift", file: "ResilientClient-02.swift")
+            }
+        }
+    }
+
+    @Section(title: "Add a freshness policy") {
+
+        @ContentAndMedia {
+
+            Coalescing shares overlapping work. Caching can serve a later call after the first one
+            has completed.
+        }
+
+        @Steps {
+
+            @Step {
+
+                Keep successful responses fresh for 30 seconds.
+
+                @Code(name: "ResilientClient.swift", file: "ResilientClient-03.swift", previousFile: "ResilientClient-02.swift")
+            }
+
+            @Step {
+
+                Observe high-level events when you need operational visibility.
+
+                @Code(name: "ResilientClient.swift", file: "ResilientClient-04.swift")
+            }
+
+            @Step {
+
+                Construct the client after all configuration values are set.
+
+                @Code(name: "ResilientClient.swift", file: "ResilientClient-05.swift")
+            }
+        }
+    }
+
+    @Section(title: "Handle the failure contract") {
+
+        @ContentAndMedia {
+
+            Retries reduce selected transient failures; they don't turn failure into success. Keep
+            the typed error path visible to the feature using the client.
+        }
+
+        @Steps {
+
+            @Step {
+
+                Switch on `NetworkError` cases that change product behavior, such as HTTP status or cancellation.
+
+                @Code(name: "ResilientClient.swift", file: "ResilientClient-06.swift", previousFile: "ResilientClient-05.swift")
+            }
+
+            @Step {
+
+                Use the complete source below to perform two sequential loads. The second can use the fresh cache.
+
+                @Code(name: "ResilientClient.swift", file: "ResilientClient.swift")
+            }
+
+            @Step {
+
+                Run the program and inspect its cache events.
+
+                @Code(name: "ResilientClient.swift", file: "ResilientClient-07.swift", previousFile: "ResilientClient.swift")
+
+                > Experiment: Set `maxAge` to `0` and compare the event sequence. Then restore a
+                > product-appropriate value before shipping.
+            }
+        }
+    }
+}

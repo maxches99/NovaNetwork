@@ -1,0 +1,42 @@
+@Tutorial() {
+    @Intro(title: "Refresh authentication once") {
+        Recover from an HTTP authentication challenge while equivalent callers share one refresh operation.
+    }
+
+    @Section(title: "Own credential state") {
+        @ContentAndMedia {
+            Keep mutable credentials behind an actor and identify signed-in work with a stable `authScope`.
+        }
+        @Steps {
+            @Step {
+                Create a token vault that can be read safely from concurrent middleware calls.
+                @Code(name: "AuthRefresh.swift", file: "AuthRefresh-01.swift", previousFile: "Empty.swift")
+            }
+            @Step {
+                Attach the current token before every send.
+                @Code(name: "AuthRefresh.swift", file: "AuthRefresh-02.swift")
+            }
+        }
+    }
+
+    @Section(title: "Bound refresh and replay") {
+        @ContentAndMedia {
+            The HTTP refresh coordinator shares one refresh per authentication scope and replays challenged requests with replacement headers.
+        }
+        @Steps {
+            @Step {
+                Provide refreshed headers and allow only one refresh attempt.
+                @Code(name: "AuthRefresh.swift", file: "AuthRefresh-03.swift", previousFile: "AuthRefresh-02.swift")
+            }
+            @Step {
+                Load the protected resource with a user-specific scope and keep the failure path visible.
+                @Code(name: "AuthRefresh.swift", file: "AuthRefresh.swift")
+            }
+            @Step {
+                Replace the example URL and token closure with your authentication service.
+                @Code(name: "AuthRefresh.swift", file: "AuthRefresh-04.swift", previousFile: "AuthRefresh.swift")
+                > Experiment: Start two requests with the same `authScope` after a 401 and verify that your refresh endpoint receives one call.
+            }
+        }
+    }
+}

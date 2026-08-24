@@ -1,0 +1,90 @@
+@Tutorial() {
+
+    @Intro(title: "Model requests as endpoints") {
+
+        Move repeated request construction and decoding into a typed operation while keeping the
+        client's coalescing, caching, retry, middleware, and telemetry pipeline.
+    }
+
+    @Section(title: "Define the operation") {
+
+        @ContentAndMedia {
+
+            An `Endpoint` associates one response type with the request that produces it. This keeps
+            server details out of views and feature coordinators.
+        }
+
+        @Steps {
+
+            @Step {
+
+                Declare a value type that conforms to `Endpoint`.
+
+                @Code(name: "TypedEndpoint.swift", file: "TypedEndpoint-01.swift", previousFile: "Empty.swift")
+            }
+
+            @Step {
+
+                Build the request in `makeRequest()`.
+
+                Because `Todo` is `Decodable`, the protocol's default JSON decoder supplies `decode`.
+
+                @Code(name: "TypedEndpoint.swift", file: "TypedEndpoint-02.swift")
+            }
+        }
+    }
+
+    @Section(title: "Execute through the shared client") {
+
+        @ContentAndMedia {
+
+            Endpoint execution uses the same standard pipeline as a raw load.
+        }
+
+        @Steps {
+
+            @Step {
+
+                Create the endpoint and execute it with a stable authentication scope.
+
+                @Code(name: "TypedEndpoint.swift", file: "TypedEndpoint-03.swift", previousFile: "TypedEndpoint-02.swift")
+            }
+
+            @Step {
+
+                Pass per-call cache and execution options only when the operation needs to override client defaults.
+
+                @Code(name: "TypedEndpoint.swift", file: "TypedEndpoint-04.swift", previousFile: "TypedEndpoint-03.swift")
+            }
+        }
+    }
+
+    @Section(title: "Reuse and test the endpoint") {
+
+        @ContentAndMedia {
+
+            Keep the endpoint small and value-semantic. Tests can validate the generated request and
+            separately exercise client behavior with `NovaNetworkClientTestSupport`.
+        }
+
+        @Steps {
+
+            @Step {
+
+                Use the complete source below in an executable target.
+
+                @Code(name: "TypedEndpoint.swift", file: "TypedEndpoint.swift", previousFile: "TypedEndpoint-03.swift")
+            }
+
+            @Step {
+
+                Run the program with several IDs.
+
+                @Code(name: "TypedEndpoint.swift", file: "TypedEndpoint-05.swift", previousFile: "TypedEndpoint.swift")
+
+                > Experiment: Add a query item or header owned by your API contract, then inspect
+                > `makeRequest().urlRequest()` in a unit test.
+            }
+        }
+    }
+}

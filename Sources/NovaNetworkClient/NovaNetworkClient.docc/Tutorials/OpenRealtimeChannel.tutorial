@@ -1,0 +1,42 @@
+@Tutorial() {
+    @Intro(title: "Open a realtime channel") {
+        Connect a WebSocket, consume a structured message stream, and close it deliberately.
+    }
+
+    @Section(title: "Define lifecycle policy") {
+        @ContentAndMedia {
+            Reconnect and heartbeat behavior are part of the product contract, not hidden transport defaults.
+        }
+        @Steps {
+            @Step {
+                Choose the endpoint and bound reconnect attempts.
+                @Code(name: "RealtimeChannel.swift", file: "RealtimeChannel-01.swift", previousFile: "Empty.swift")
+            }
+            @Step {
+                Create the client and observe connection-state changes.
+                @Code(name: "RealtimeChannel.swift", file: "RealtimeChannel-02.swift")
+            }
+        }
+    }
+
+    @Section(title: "Exchange a message") {
+        @ContentAndMedia {
+            Messages arrive through an `AsyncThrowingStream` and naturally follow structured task cancellation.
+        }
+        @Steps {
+            @Step {
+                Connect, send text, and create the incoming message stream.
+                @Code(name: "RealtimeChannel.swift", file: "RealtimeChannel-03.swift", previousFile: "RealtimeChannel-02.swift")
+            }
+            @Step {
+                Await one message with a timeout, then disconnect cleanly.
+                @Code(name: "RealtimeChannel.swift", file: "RealtimeChannel.swift")
+            }
+            @Step {
+                Replace the public echo endpoint with your service and define how reconnect affects subscriptions.
+                @Code(name: "RealtimeChannel.swift", file: "RealtimeChannel-04.swift", previousFile: "RealtimeChannel.swift")
+                > Experiment: Disable reconnect and compare the emitted state sequence after the server closes the socket.
+            }
+        }
+    }
+}

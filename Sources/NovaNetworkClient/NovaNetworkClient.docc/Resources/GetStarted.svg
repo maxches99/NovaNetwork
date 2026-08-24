@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600" role="img" aria-labelledby="title description">
+  <title id="title">Get started with a typed request</title>
+  <desc id="description">A Swift source card connects to a typed response card through a bright request path.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101a35"/><stop offset="1" stop-color="#25135c"/>
+    </linearGradient>
+    <linearGradient id="path" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff8a3d"/><stop offset="1" stop-color="#bd7cff"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="600" rx="36" fill="url(#background)"/>
+  <circle cx="180" cy="90" r="150" fill="#ff7a45" opacity=".12"/>
+  <circle cx="1040" cy="520" r="220" fill="#9b6cff" opacity=".14"/>
+  <rect x="105" y="145" width="360" height="310" rx="28" fill="#182548" stroke="#53688f" stroke-width="3"/>
+  <circle cx="150" cy="190" r="10" fill="#ff7a45"/><circle cx="182" cy="190" r="10" fill="#ffd166"/><circle cx="214" cy="190" r="10" fill="#59d39b"/>
+  <path d="M155 255h190M155 305h250M155 355h145" stroke="#c7d7ff" stroke-width="18" stroke-linecap="round" opacity=".82"/>
+  <path d="M495 300h190" stroke="url(#path)" stroke-width="16" stroke-linecap="round"/>
+  <path d="m670 270 42 30-42 30" fill="none" stroke="#bd7cff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="735" y="145" width="360" height="310" rx="28" fill="#241d50" stroke="#765fad" stroke-width="3"/>
+  <path d="M825 235h180M825 285h120M825 335h205M825 385h145" stroke="#eadfff" stroke-width="18" stroke-linecap="round" opacity=".86"/>
+</svg>

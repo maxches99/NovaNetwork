@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600" role="img" aria-labelledby="title description">
+  <title id="title">Prepare the client for production</title>
+  <desc id="description">A typed endpoint passes through cache and retry policy layers into a protected service.</desc>
+  <defs><linearGradient id="background" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#241221"/><stop offset="1" stop-color="#4d1d35"/></linearGradient></defs>
+  <rect width="1200" height="600" rx="36" fill="url(#background)"/>
+  <rect x="90" y="205" width="250" height="190" rx="30" fill="#5e2942" stroke="#f080a9" stroke-width="4"/>
+  <path d="M145 270h140M145 325h95" stroke="#ffe0eb" stroke-width="18" stroke-linecap="round"/>
+  <path d="M340 300h105" stroke="#f3a2bf" stroke-width="16"/>
+  <rect x="445" y="125" width="235" height="150" rx="26" fill="#3b315e" stroke="#aa96ff" stroke-width="4"/>
+  <path d="M500 180h125M500 225h85" stroke="#e7e0ff" stroke-width="16" stroke-linecap="round"/>
+  <rect x="445" y="325" width="235" height="150" rx="26" fill="#1d4c4d" stroke="#63d9c9" stroke-width="4"/>
+  <path d="M500 380h125M500 425h85" stroke="#d8fff9" stroke-width="16" stroke-linecap="round"/>
+  <path d="M680 200C770 200 760 300 835 300M680 400C770 400 760 300 835 300" fill="none" stroke="#ffd0df" stroke-width="16"/>
+  <path d="M910 155 1035 210v100c0 80-48 123-125 155-77-32-125-75-125-155V210z" fill="#bd4876" stroke="#ffacc8" stroke-width="5"/>
+  <path d="m850 302 40 40 78-92" fill="none" stroke="white" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

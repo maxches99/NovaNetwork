@@ -1,0 +1,42 @@
+@Tutorial() {
+    @Intro(title: "Load a bounded batch") {
+        Fetch an ordered collection concurrently without creating unbounded network fan-out.
+    }
+
+    @Section(title: "Describe ordered work") {
+        @ContentAndMedia {
+            Batch output preserves input order even when individual responses complete in a different order.
+        }
+        @Steps {
+            @Step {
+                Define the response model and create a client.
+                @Code(name: "BoundedBatch.swift", file: "BoundedBatch-01.swift", previousFile: "Empty.swift")
+            }
+            @Step {
+                Build an ordered request for each identifier.
+                @Code(name: "BoundedBatch.swift", file: "BoundedBatch-02.swift")
+            }
+        }
+    }
+
+    @Section(title: "Control concurrency") {
+        @ContentAndMedia {
+            A concurrency ceiling limits active child requests while the batch continues to make progress.
+        }
+        @Steps {
+            @Step {
+                Load at most four requests at once.
+                @Code(name: "BoundedBatch.swift", file: "BoundedBatch-03.swift", previousFile: "BoundedBatch-02.swift")
+            }
+            @Step {
+                Decode the ordered payloads and print the results.
+                @Code(name: "BoundedBatch.swift", file: "BoundedBatch.swift")
+            }
+            @Step {
+                Compare fail-fast `loadBatch` with collecting `loadBatchResults` for your product flow.
+                @Code(name: "BoundedBatch.swift", file: "BoundedBatch-04.swift", previousFile: "BoundedBatch.swift")
+                > Experiment: Add one invalid URL path and use `loadBatchResults` to retain the successful items.
+            }
+        }
+    }
+}

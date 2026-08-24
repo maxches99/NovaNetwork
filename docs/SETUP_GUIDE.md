@@ -2,6 +2,10 @@
 
 This guide covers full setup and practical usage of `NovaNetworkClient`.
 
+> New to the package? Start with the shorter, progressive
+> [Getting Started](../Sources/NovaNetworkClient/NovaNetworkClient.docc/GettingStarted.md), then
+> follow the [interactive DocC tutorials](../Sources/NovaNetworkClient/NovaNetworkClient.docc/Tutorial-Table-of-Contents.tutorial).
+
 ## Table of Contents
 
 1. [Requirements](#requirements)
@@ -34,7 +38,7 @@ Add package dependency:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/your-org/NovaNetworkClient.git", from: "1.0.0")
+    .package(url: "https://github.com/maxches99/NovaNetwork", from: "2.0.0")
 ]
 ```
 
@@ -45,7 +49,7 @@ targets: [
     .target(
         name: "YourTarget",
         dependencies: [
-            .product(name: "NovaNetworkClient", package: "NovaNetworkClient")
+            .product(name: "NovaNetworkClient", package: "NovaNetwork")
         ]
     )
 ]
