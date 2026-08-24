@@ -2,6 +2,7 @@
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
+import CompilerPluginSupport
 
 let package = Package(
     name: "NovaNetworkClient",
@@ -10,6 +11,7 @@ let package = Package(
         .library(name: "NovaNetworkCore", targets: ["NovaNetworkCore"]),
         .library(name: "NovaNetworkClient", targets: ["NovaNetworkClient"]),
         .library(name: "NovaNetworkClientTestSupport", targets: ["NovaNetworkClientTestSupport"]),
+        .library(name: "NovaNetworkMacros", targets: ["NovaNetworkMacros"]),
         .executable(name: "NovaNetworkClientBenchmarks", targets: ["NovaNetworkClientBenchmarks"]),
         .executable(name: "NovaNetworkClientJSONPlaceholderExample", targets: ["NovaNetworkClientJSONPlaceholderExample"]),
         .executable(name: "NovaNetworkClientBatchTodosExample", targets: ["NovaNetworkClientBatchTodosExample"]),
@@ -22,6 +24,21 @@ let package = Package(
         .executable(name: "NovaNetworkClientDiagnosticsReferenceExample", targets: ["NovaNetworkClientDiagnosticsReferenceExample"]),
         .executable(name: "NovaNetworkClientProductionProfileExample", targets: ["NovaNetworkClientProductionProfileExample"]),
     ],
+    traits: [
+        .trait(
+            name: "EndpointMacros",
+            description: """
+            Enables the @Endpoint macro and its parameter markers. Off by default: the macro is the \
+            only part of this package that needs swift-syntax, and SwiftPM prunes that dependency \
+            entirely when the trait is disabled, so the default package graph resolves nothing. \
+            Enable it with .package(url: ..., from: "2.11.0", traits: ["EndpointMacros"]).
+            """
+        ),
+    ],
+    dependencies: [
+        // Only reachable with the EndpointMacros trait enabled; pruned from resolution otherwise.
+        .package(url: "https://github.com/swiftlang/swift-syntax.git", from: "602.0.0"),
+    ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
         // Targets can depend on other targets in this package and products from dependencies.
@@ -33,6 +50,22 @@ let package = Package(
             name: "NovaNetworkClient",
             dependencies: ["NovaNetworkCore"],
             path: "Sources/NovaNetworkClient"
+        ),
+        .macro(
+            name: "NovaNetworkMacrosPlugin",
+            dependencies: [
+                .product(name: "SwiftSyntaxMacros", package: "swift-syntax", condition: .when(traits: ["EndpointMacros"])),
+                .product(name: "SwiftCompilerPlugin", package: "swift-syntax", condition: .when(traits: ["EndpointMacros"])),
+            ],
+            path: "Sources/NovaNetworkMacrosPlugin"
+        ),
+        .target(
+            name: "NovaNetworkMacros",
+            dependencies: [
+                "NovaNetworkCore",
+                .target(name: "NovaNetworkMacrosPlugin", condition: .when(traits: ["EndpointMacros"])),
+            ],
+            path: "Sources/NovaNetworkMacros"
         ),
         .target(
             name: "NovaNetworkClientTestSupport",
@@ -53,6 +86,15 @@ let package = Package(
             name: "NovaNetworkCoreTests",
             dependencies: ["NovaNetworkCore"],
             path: "Tests/NovaNetworkCoreTests"
+        ),
+        .testTarget(
+            name: "NovaNetworkMacrosTests",
+            dependencies: [
+                "NovaNetworkMacros",
+                .target(name: "NovaNetworkMacrosPlugin", condition: .when(traits: ["EndpointMacros"])),
+                .product(name: "SwiftSyntaxMacrosGenericTestSupport", package: "swift-syntax", condition: .when(traits: ["EndpointMacros"])),
+            ],
+            path: "Tests/NovaNetworkMacrosTests"
         ),
         .executableTarget(
             name: "NovaNetworkClientBenchmarks",
