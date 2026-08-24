@@ -6,6 +6,8 @@ When multiple callers ask for the same resource at the same time, only one under
 
 ## Documentation
 
+- [Changelog](CHANGELOG.md)
+- [Contributing](CONTRIBUTING.md)
 - [Setup & Usage Guide](docs/SETUP_GUIDE.md)
 - [Unit Test Policy](docs/UNIT_TEST_POLICY.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)

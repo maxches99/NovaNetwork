@@ -24,6 +24,7 @@ Use ``NetworkClient`` for a batteries-included integration with `URLSession`, or
 ### Networking
 
 - ``NetworkClient``
+- ``NetworkClientConfiguration``
 - ``NetworkClientPreset``
 - ``NetworkClientPresetOverlayKind``
 - ``NetworkClientProductionProfileGenerator``
@@ -43,12 +44,48 @@ Use ``NetworkClient`` for a batteries-included integration with `URLSession`, or
 - ``UploadEvent``
 - ``DownloadEvent``
 - ``DownloadDestinationPolicy``
-- ``NetworkError``
 - ``WebSocketClient``
 - ``WebSocketConfiguration``
 - ``WebSocketConnectionState``
 - ``WebSocketMessage``
 - ``WebSocketError``
+
+### Server-Sent Events
+
+- ``ServerSentEvent``
+- ``SSEParsedElement``
+- ``SSELineParser``
+- ``SSEDecoder``
+- ``ServerSentEventTransport``
+- ``ServerSentEventError``
+- ``SSEReconnectPolicy``
+
+### Multipart Uploads
+
+- ``MultipartFormDataPart``
+- ``MultipartFormDataEncoder``
+- ``MultipartFormDataError``
+
+### Certificate Pinning and Mutual TLS (Apple platforms)
+
+- ``CertificatePinningPolicy``
+- ``CertificatePinningValidationEvent``
+- ``SubjectPublicKeyInfoPin``
+- ``ClientCertificateProvider``
+- ``ClientCertificateIdentity``
+- ``PinningURLSessionDelegate``
+
+### Response Decoding
+
+- ``ResponseDecoding``
+- ``JSONResponseDecoding``
+- ``ContentTypeNegotiatingResponseDecoding``
+
+### Error Handling
+
+- ``NetworkError``
+- ``NetworkErrorContext``
+- ``ContextualNetworkError``
 
 ### Resilience
 

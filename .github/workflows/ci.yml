@@ -160,4 +160,27 @@ jobs:
 
       - name: Build NovaNetworkClient and NovaNetworkClientTestSupport
         run: swift build --target NovaNetworkClient --target NovaNetworkClientTestSupport
-          fi
+
+  api-breaking-changes-gate:
+    # Compares public API against the most recently tagged release (2.0.0). Known, deliberate,
+    # source-compatible differences are allowlisted in docs/api-breakage-allowlist.txt -- see
+    # that file and CONTRIBUTING.md#api-compatibility for what's there and why. Once a new tag
+    # is cut, update `treeish` below to the new tag and clear entries from the allowlist that
+    # the new baseline already reflects.
+    name: API Breaking Changes Gate (vs 2.0.0)
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Select Xcode 26.2 (Swift 6.2)
+        run: sudo xcode-select --switch /Applications/Xcode_26.2.app/Contents/Developer
+
+      - name: Diagnose API-Breaking Changes Against 2.0.0
+        run: |
+          swift package diagnose-api-breaking-changes 2.0.0 \
+            --breakage-allowlist-path docs/api-breakage-allowlist.txt
