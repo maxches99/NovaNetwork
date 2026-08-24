@@ -894,7 +894,26 @@ struct RequestCoalescerTests {
             func values() -> [String] { starts }
         }
 
+        /// Holds the blocking operation open until the test has queued everything behind it.
+        actor Gate {
+            private var isOpen = false
+            private var waiters: [CheckedContinuation<Void, Never>] = []
+
+            func open() {
+                isOpen = true
+                let pending = waiters
+                waiters.removeAll()
+                for waiter in pending { waiter.resume() }
+            }
+
+            func wait() async {
+                guard !isOpen else { return }
+                await withCheckedContinuation { waiters.append($0) }
+            }
+        }
+
         let recorder = StartRecorder()
+        let gate = Gate()
         let coalescer = RequestCoalescer<Data, TestError>(limits: .init(maxInFlightKeys: 1))
         await coalescer.updateFairnessPolicy(.init(highWeight: 1, mediumWeight: 1, lowWeight: 4))
         let policy = await coalescer.currentFairnessPolicy()
@@ -905,11 +924,17 @@ struct RequestCoalescerTests {
             options: .init(priority: .medium, capacityScheduling: .queueByPriority)
         ) {
             await recorder.append("blocker")
-            try? await Task.sleep(nanoseconds: 80_000_000)
+            await gate.wait()
             return .success(Data("blocker".utf8))
         }
 
-        try? await Task.sleep(nanoseconds: 10_000_000)
+        // The only in-flight slot has to be taken before anything can queue behind it.
+        try await waitUntil("blocker holds the single capacity slot") {
+            await coalescer.inFlightEntries().contains { $0.key == "blocker" }
+        }
+
+        // Task creation order does not determine enqueue order, and that race is what this test
+        // used to lose under load. Wait for each request to actually reach the queue instead.
         let lowTask = Task<Data, Error> {
             try await coalescer.run(
                 key: "low",
@@ -919,6 +944,10 @@ struct RequestCoalescerTests {
                 return .success(Data("low".utf8))
             }
         }
+        try await waitUntil("low is queued") {
+            await coalescer.queuedCapacityWaiterKeys == ["low"]
+        }
+
         let highTaskA = Task<Data, Error> {
             try await coalescer.run(
                 key: "high-a",
@@ -928,6 +957,10 @@ struct RequestCoalescerTests {
                 return .success(Data("high-a".utf8))
             }
         }
+        try await waitUntil("high-a is queued behind low") {
+            await coalescer.queuedCapacityWaiterKeys == ["low", "high-a"]
+        }
+
         let highTaskB = Task<Data, Error> {
             try await coalescer.run(
                 key: "high-b",
@@ -937,6 +970,11 @@ struct RequestCoalescerTests {
                 return .success(Data("high-b".utf8))
             }
         }
+        try await waitUntil("high-b is queued behind low and high-a") {
+            await coalescer.queuedCapacityWaiterKeys == ["low", "high-a", "high-b"]
+        }
+
+        await gate.open()
 
         _ = try await blocker
         _ = try await lowTask.value
@@ -949,6 +987,9 @@ struct RequestCoalescerTests {
             Issue.record("Expected low and high queue starts")
             return
         }
+
+        // With lowWeight 4 against highWeight 1, the low-priority entry runs before the second
+        // high-priority one even though both high entries were queued after it.
         #expect(lowIndex < secondHighIndex)
     }
 
@@ -1127,4 +1168,26 @@ struct RequestCoalescerTests {
         let entries = await coalescer.inFlightEntries()
         #expect(entries.isEmpty)
     }
+}
+
+/// Polls `condition` until it holds or the deadline passes.
+///
+/// Scheduling tests need to observe state that becomes true asynchronously. Polling with an
+/// explicit deadline states the expectation as "this must become true", where a fixed sleep only
+/// says "this is probably true by now" -- and fails intermittently on a busy machine.
+private func waitUntil(
+    _ description: String,
+    timeout: Duration = .seconds(5),
+    pollInterval: Duration = .milliseconds(1),
+    sourceLocation: SourceLocation = #_sourceLocation,
+    _ condition: () async -> Bool
+) async throws {
+    let deadline = ContinuousClock.now + timeout
+
+    while ContinuousClock.now < deadline {
+        if await condition() { return }
+        try await Task.sleep(for: pollInterval)
+    }
+
+    Issue.record("Timed out after \(timeout) waiting until \(description)", sourceLocation: sourceLocation)
 }

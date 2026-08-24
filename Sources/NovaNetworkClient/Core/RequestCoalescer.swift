@@ -412,6 +412,17 @@ public actor RequestCoalescer<Output: Sendable, Failure: Error> {
         resumeAllCapacityWaiters()
     }
 
+    /// Keys currently waiting for capacity, in the order they were enqueued.
+    ///
+    /// Internal diagnostics for tests that need to observe queue composition directly. Task
+    /// creation order does not determine enqueue order, so a test that reasons about scheduling
+    /// has to watch the queue rather than infer it from the order it started work.
+    var queuedCapacityWaiterKeys: [String] {
+        capacityWaiters
+            .sorted { $0.sequence < $1.sequence }
+            .map(\.key)
+    }
+
     public func inFlightEntries() -> [InFlightEntry] {
         let now = DispatchTime.now().uptimeNanoseconds
         return entries.map { key, entry in
