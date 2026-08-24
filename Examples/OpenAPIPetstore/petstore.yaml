@@ -1,0 +1,187 @@
+openapi: 3.1.0
+info:
+  title: Petstore
+  version: 1.4.0
+  description: A small example API used by NovaNetwork's generator tests and documentation.
+servers:
+  - url: https://{host}/v1
+    variables:
+      host:
+        default: api.petstore.example.com
+paths:
+  /pets:
+    get:
+      operationId: listPets
+      summary: Lists pets.
+      description: Returns every pet, newest first.
+      parameters:
+        - name: limit
+          in: query
+          description: How many pets to return.
+          schema:
+            type: integer
+        - name: tags
+          in: query
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              type: string
+        - name: X-Request-Id
+          in: header
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: A list of pets.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Pet"
+    post:
+      operationId: createPet
+      summary: Adds a pet.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewPet"
+      responses:
+        "201":
+          description: The created pet.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Pet"
+  /pets/{petId}:
+    parameters:
+      - name: petId
+        in: path
+        required: true
+        description: Identifier of the pet.
+        schema:
+          type: integer
+          format: int64
+    get:
+      operationId: getPetById
+      summary: Fetches one pet.
+      responses:
+        "200":
+          description: The pet.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Pet"
+        "404":
+          description: No such pet.
+    delete:
+      summary: Removes a pet.
+      responses:
+        "204":
+          description: Removed.
+    patch:
+      operationId: updatePet
+      deprecated: true
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewPet"
+      responses:
+        "200":
+          description: The updated pet.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Pet"
+  /pets/{petId}/photo:
+    get:
+      operationId: getPetPhotoMetadata
+      summary: Reads photo metadata.
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: Metadata for the pet's photo.
+          content:
+            application/vnd.petstore+json:
+              schema:
+                $ref: "#/components/schemas/PhotoMetadata"
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Send the shared secret hunter2-not-a-real-key here.
+  schemas:
+    Pet:
+      description: A pet in the store.
+      allOf:
+        - $ref: "#/components/schemas/NewPet"
+        - type: object
+          required:
+            - id
+          properties:
+            id:
+              type: integer
+              format: int64
+            created_at:
+              type: string
+              format: date-time
+            status:
+              $ref: "#/components/schemas/PetStatus"
+            parent:
+              $ref: "#/components/schemas/Pet"
+    NewPet:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          description: The pet's name.
+          type: string
+        tag:
+          type: string
+          nullable: true
+        default:
+          type: string
+        dimensions:
+          type: object
+          properties:
+            width:
+              type: number
+            height:
+              type: number
+    PetStatus:
+      description: Availability of a pet.
+      type: string
+      enum:
+        - available
+        - pending
+        - sold
+    PhotoMetadata:
+      type: object
+      properties:
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+        payload:
+          oneOf:
+            - type: string
+            - type: integer
+        nickname:
+          anyOf:
+            - type: string
+            - type: "null"

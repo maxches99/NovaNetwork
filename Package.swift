@@ -12,6 +12,9 @@ let package = Package(
         .library(name: "NovaNetworkClient", targets: ["NovaNetworkClient"]),
         .library(name: "NovaNetworkClientTestSupport", targets: ["NovaNetworkClientTestSupport"]),
         .library(name: "NovaNetworkMacros", targets: ["NovaNetworkMacros"]),
+        .library(name: "NovaNetworkOpenAPI", targets: ["NovaNetworkOpenAPI"]),
+        .executable(name: "nova-openapi", targets: ["NovaNetworkOpenAPIGenerator"]),
+        .plugin(name: "GenerateOpenAPIEndpoints", targets: ["GenerateOpenAPIEndpoints"]),
         .executable(name: "NovaNetworkClientBenchmarks", targets: ["NovaNetworkClientBenchmarks"]),
         .executable(name: "NovaNetworkClientJSONPlaceholderExample", targets: ["NovaNetworkClientJSONPlaceholderExample"]),
         .executable(name: "NovaNetworkClientBatchTodosExample", targets: ["NovaNetworkClientBatchTodosExample"]),
@@ -23,6 +26,7 @@ let package = Package(
         .executable(name: "NovaNetworkClientOfflineReplayReferenceExample", targets: ["NovaNetworkClientOfflineReplayReferenceExample"]),
         .executable(name: "NovaNetworkClientDiagnosticsReferenceExample", targets: ["NovaNetworkClientDiagnosticsReferenceExample"]),
         .executable(name: "NovaNetworkClientProductionProfileExample", targets: ["NovaNetworkClientProductionProfileExample"]),
+        .executable(name: "NovaNetworkClientOpenAPIPetstoreExample", targets: ["NovaNetworkClientOpenAPIPetstoreExample"]),
     ],
     traits: [
         .trait(
@@ -68,6 +72,29 @@ let package = Package(
             path: "Sources/NovaNetworkMacros"
         ),
         .target(
+            name: "NovaNetworkOpenAPI",
+            path: "Sources/NovaNetworkOpenAPI"
+        ),
+        .executableTarget(
+            name: "NovaNetworkOpenAPIGenerator",
+            dependencies: ["NovaNetworkOpenAPI"],
+            path: "Sources/NovaNetworkOpenAPIGenerator"
+        ),
+        .plugin(
+            name: "GenerateOpenAPIEndpoints",
+            capability: .command(
+                intent: .custom(
+                    verb: "nova-openapi",
+                    description: "Generates NovaNetwork endpoint types from an OpenAPI document."
+                ),
+                permissions: [
+                    .writeToPackageDirectory(reason: "Writes the generated endpoints file into the package."),
+                ]
+            ),
+            dependencies: ["NovaNetworkOpenAPIGenerator"],
+            path: "Plugins/GenerateOpenAPIEndpoints"
+        ),
+        .target(
             name: "NovaNetworkClientTestSupport",
             dependencies: ["NovaNetworkClient"],
             path: "Sources/NovaNetworkClientTestSupport"
@@ -95,6 +122,11 @@ let package = Package(
                 .product(name: "SwiftSyntaxMacrosGenericTestSupport", package: "swift-syntax", condition: .when(traits: ["EndpointMacros"])),
             ],
             path: "Tests/NovaNetworkMacrosTests"
+        ),
+        .testTarget(
+            name: "NovaNetworkOpenAPITests",
+            dependencies: ["NovaNetworkOpenAPI", "NovaNetworkPetstoreGenerated", "NovaNetworkClient"],
+            path: "Tests/NovaNetworkOpenAPITests"
         ),
         .executableTarget(
             name: "NovaNetworkClientBenchmarks",
@@ -150,6 +182,19 @@ let package = Package(
             name: "NovaNetworkClientProductionProfileExample",
             dependencies: ["NovaNetworkClient"],
             path: "Examples/ProductionProfile"
+        ),
+        .target(
+            // Checked-in output of `swift package nova-openapi`, in a target that depends on
+            // NovaNetworkCore alone: generated code needs neither the macro nor its trait.
+            name: "NovaNetworkPetstoreGenerated",
+            dependencies: ["NovaNetworkCore"],
+            path: "Examples/OpenAPIPetstore/Generated"
+        ),
+        .executableTarget(
+            name: "NovaNetworkClientOpenAPIPetstoreExample",
+            dependencies: ["NovaNetworkClient", "NovaNetworkPetstoreGenerated"],
+            path: "Examples/OpenAPIPetstore",
+            exclude: ["petstore.yaml", "Generated"]
         ),
     ]
 )
