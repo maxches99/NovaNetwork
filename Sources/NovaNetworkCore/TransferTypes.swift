@@ -84,12 +84,39 @@ public protocol TransferNetworkTransport: NetworkTransport {
     /// Uploads request body bytes and emits progress plus one completion event.
     func upload(_ request: APIRequest, body: Data) -> AsyncThrowingStream<UploadEvent, any Error>
 
+    /// Uploads a request body streamed from a file, without buffering its contents in memory.
+    ///
+    /// Conformers that can stream directly from disk (like the default `Transport`) should
+    /// override this; the default implementation reads the file into memory and delegates to
+    /// the `body:`-based overload, so existing conformers remain source-compatible.
+    func upload(_ request: APIRequest, fromFile fileURL: URL) -> AsyncThrowingStream<UploadEvent, any Error>
+
     /// Downloads a response to a final destination and emits progress plus one completion event.
     func download(
         _ request: APIRequest,
         to destinationURL: URL,
         policy: DownloadDestinationPolicy
     ) -> AsyncThrowingStream<DownloadEvent, any Error>
+}
+
+public extension TransferNetworkTransport {
+    /// Reads the file into memory and delegates to the `Data`-based upload overload.
+    func upload(_ request: APIRequest, fromFile fileURL: URL) -> AsyncThrowingStream<UploadEvent, any Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let data = try Data(contentsOf: fileURL)
+                    for try await event in upload(request, body: data) {
+                        continuation.yield(event)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: NetworkError.transport(underlying: error))
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
 }
 
 /// Telemetry emitted for transfer lifecycle changes.

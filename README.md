@@ -96,6 +96,10 @@ targets: [
 - Streaming helper (`loadStream`) with true incremental URLSession delivery on supported platforms.
 - Server-Sent Events (`loadServerSentEvents`) with a spec-compliant, platform-independent parser,
   automatic reconnect, `Last-Event-ID` replay, and server-driven `retry:` timing.
+- Multipart form-data uploads (`uploadMultipart`, `MultipartFormDataEncoder`) streamed from disk
+  in fixed-size chunks, never buffering file parts fully in memory.
+- File-based uploads (`upload(request:fromFile:...)`) streamed natively from disk via
+  `URLSession.upload(for:fromFile:)`.
 - Request helpers (`APIRequestBuilder`, `Encodable` JSON body initializer).
 - Idempotency helpers (`APIRequest.withIdempotencyKey`, `IdempotencyPolicy`).
 - Cache management (`preload`, `invalidate`).
@@ -685,6 +689,38 @@ swift test --filter connectivityFlapSequenceQueuesOfflineWritesAndRecoversOnFlus
 ```
 
 `OfflineStoreRecoveryReport` includes `orphanedTemporaryRecords`, `corruptionBudgetExceeded`, and `recoveryLossRate` for provable recovery-loss accounting.
+
+## Multipart Form Data
+
+```swift
+let result = client.uploadMultipart(
+    url: URL(string: "https://api.example.com/items")!,
+    parts: [
+        .text(name: "title", value: "My upload"),
+        .file(name: "photo", filename: "photo.jpg", contentType: "image/jpeg", fileURL: photoURL),
+    ],
+    authScope: "user:42"
+)
+
+for try await event in result {
+    switch event {
+    case .progress(let progress):
+        print("uploaded:", progress.completedBytes)
+    case .completed(let response):
+        print("status:", response.statusCode)
+    }
+}
+```
+
+`.file` parts are streamed from disk in fixed-size chunks and are never fully buffered in
+memory, regardless of file size. `Content-Type` defaults to `multipart/form-data;
+boundary=...` unless already supplied in `headers`.
+
+`uploadMultipart` is a convenience over `MultipartFormDataEncoder`, which can also be used
+directly: `write(to:)` streams the encoded body to any file you choose, and `contentType`
+returns the matching header value. That decouples encoding from transport, so the same encoded
+file can be handed to any file-based upload path, including a durable/resumable one, instead of
+`uploadMultipart`'s own upload-then-delete-temp-file flow.
 
 ## Request Builder
 

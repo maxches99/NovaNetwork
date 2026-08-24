@@ -58,6 +58,64 @@ public extension NetworkClient {
         }
     }
 
+    /// Uploads a file through a transfer-capable transport, streaming its contents from disk.
+    ///
+    /// The transport is never asked to buffer the whole file in memory when it can stream
+    /// directly from `fileURL` (the default ``Transport`` does). The returned stream emits
+    /// progress and exactly one completion event. Stopping iteration or cancelling the consumer
+    /// cancels the underlying operation.
+    func upload(
+        request: APIRequest,
+        fromFile fileURL: URL,
+        authScope: String?,
+        options: RequestExecutionOptions = .init()
+    ) -> AsyncThrowingStream<UploadEvent, any Error> {
+        guard let transferTransport = transport as? any TransferNetworkTransport else {
+            return AsyncThrowingStream { continuation in
+                continuation.finish(throwing: NetworkError.invalidResponse)
+            }
+        }
+        let key = makeFingerprint(for: request, authScope: authScope).key
+        return AsyncThrowingStream { continuation in
+            telemetryHooks?.onTransferEvent?(.init(kind: .upload, phase: .started, key: key))
+            let consumer = Task {
+                do {
+                    let prepared = try await prepareRequestForExecution(request: request, key: key, options: options)
+                    for try await event in transferTransport.upload(prepared, fromFile: fileURL) {
+                        switch event {
+                        case .progress(let progress):
+                            telemetryHooks?.onTransferEvent?(
+                                .init(
+                                    kind: .upload,
+                                    phase: .progress,
+                                    key: key,
+                                    completedBytes: progress.completedBytes,
+                                    totalBytes: progress.totalBytes
+                                )
+                            )
+                        case .completed:
+                            telemetryHooks?.onTransferEvent?(.init(kind: .upload, phase: .completed, key: key))
+                        }
+                        continuation.yield(event)
+                    }
+                    continuation.finish()
+                } catch {
+                    let cancelled = error is CancellationError || (error as? NetworkError)?.failureReason == .cancelled
+                    telemetryHooks?.onTransferEvent?(
+                        .init(
+                            kind: .upload,
+                            phase: cancelled ? .cancelled : .failed,
+                            key: key,
+                            reason: String(describing: type(of: error))
+                        )
+                    )
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in consumer.cancel() }
+        }
+    }
+
     /// Downloads a request to a file through a transfer-capable transport.
     func download(
         request: APIRequest,

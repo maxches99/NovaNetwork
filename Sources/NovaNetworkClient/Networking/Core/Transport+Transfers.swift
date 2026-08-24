@@ -159,6 +159,66 @@ public extension Transport {
         }
     }
 
+    /// Uploads a file with native URLSession progress callbacks, streaming its contents from
+    /// disk without buffering them in memory.
+    func upload(_ request: APIRequest, fromFile fileURL: URL) -> AsyncThrowingStream<UploadEvent, any Error> {
+        AsyncThrowingStream { continuation in
+            let producer = Task {
+                let delegate = URLSessionTransferProgressDelegate { progress in
+                    continuation.yield(.progress(progress))
+                }
+                do {
+                    var urlRequest = request.urlRequest()
+                    urlRequest.httpBody = nil
+                    let networkResponse: NetworkResponse
+                    if #available(iOS 15, macOS 12, watchOS 8, tvOS 15, *) {
+                        let (data, response) = try await session.upload(
+                            for: urlRequest,
+                            fromFile: fileURL,
+                            delegate: delegate
+                        )
+                        let metadata = try Self.httpMetadata(from: response)
+                        guard (200..<300).contains(metadata.statusCode) else {
+                            throw NetworkError.httpStatus(
+                                code: metadata.statusCode,
+                                headers: metadata.headers,
+                                body: data
+                            )
+                        }
+                        networkResponse = NetworkResponse(
+                            statusCode: metadata.statusCode,
+                            headers: metadata.headers,
+                            body: data
+                        )
+                    } else {
+                        let body = try Data(contentsOf: fileURL)
+                        let fallback = APIRequest(
+                            method: request.method,
+                            url: request.url,
+                            queryItems: request.queryItems,
+                            headers: request.headers,
+                            body: body,
+                            timeout: request.timeout
+                        )
+                        networkResponse = try await execute(fallback)
+                        continuation.yield(
+                            .progress(.init(completedBytes: Int64(body.count), totalBytes: Int64(body.count)))
+                        )
+                    }
+                    continuation.yield(.completed(networkResponse))
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish(throwing: NetworkError.cancelled)
+                } catch let error as NetworkError {
+                    continuation.finish(throwing: error)
+                } catch {
+                    continuation.finish(throwing: NetworkError.transport(underlying: error))
+                }
+            }
+            continuation.onTermination = { _ in producer.cancel() }
+        }
+    }
+
     /// Downloads a response to a destination with native URLSession progress callbacks.
     func download(
         _ request: APIRequest,
