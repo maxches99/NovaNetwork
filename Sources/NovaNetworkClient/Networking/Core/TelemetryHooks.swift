@@ -396,6 +396,8 @@ public struct NetworkTelemetryHooks: Sendable {
     public typealias OnBatchCompleted = @Sendable (TelemetryBatchContext) -> Void
     /// Receives upload, download, and streaming lifecycle events.
     public typealias OnTransferEvent = @Sendable (TelemetryTransferContext) -> Void
+    /// Receives durable managed and background transfer lifecycle events.
+    public typealias OnManagedTransferEvent = @Sendable (TelemetryManagedTransferContext) -> Void
     /// Receives one lifecycle event per actual single-flight HTTP auth refresh.
     public typealias OnHTTPAuthRefresh = @Sendable (TelemetryHTTPAuthRefreshContext) -> Void
 
@@ -415,6 +417,8 @@ public struct NetworkTelemetryHooks: Sendable {
     public let onBatchCompleted: OnBatchCompleted?
     /// Transfer lifecycle hook.
     public let onTransferEvent: OnTransferEvent?
+    /// Managed transfer lifecycle hook.
+    public let onManagedTransferEvent: OnManagedTransferEvent?
     /// HTTP authentication refresh lifecycle hook.
     public let onHTTPAuthRefresh: OnHTTPAuthRefresh?
 
@@ -434,6 +438,7 @@ public struct NetworkTelemetryHooks: Sendable {
         onPolicyUpdated: OnPolicyUpdated? = nil,
         onBatchCompleted: OnBatchCompleted? = nil,
         onTransferEvent: OnTransferEvent? = nil,
+        onManagedTransferEvent: OnManagedTransferEvent? = nil,
         onHTTPAuthRefresh: OnHTTPAuthRefresh? = nil
     ) {
         self.onRequestStart = onRequestStart
@@ -450,6 +455,7 @@ public struct NetworkTelemetryHooks: Sendable {
         self.onPolicyUpdated = onPolicyUpdated
         self.onBatchCompleted = onBatchCompleted
         self.onTransferEvent = onTransferEvent
+        self.onManagedTransferEvent = onManagedTransferEvent
         self.onHTTPAuthRefresh = onHTTPAuthRefresh
     }
 }

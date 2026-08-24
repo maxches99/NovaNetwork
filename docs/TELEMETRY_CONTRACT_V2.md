@@ -53,6 +53,20 @@ The SDK now defines stable SLO metric names:
 - `onWebSocketEvent` with `type == reconnect_success` -> `sdk.reconnect.success`
 - `onOfflineQueueEvent` with `type == replaySucceeded` -> `sdk.replay.success`
 
+### Managed transfer events (2.1 additive mapping)
+
+`onManagedTransferEvent` maps to `managed_transfer.<event>` and includes only credential-free
+attributes:
+
+- `transfer_id`, `kind`, and `event`;
+- optional `completed_bytes`, `total_bytes`, and `offset`;
+- optional background `session_identifier` and `task_identifier`;
+- an optional sanitized `reason` code.
+
+Lifecycle values include `started`, `suspended`, `resumed`, `restored`, `progress`, `completed`,
+`failed`, `cancelled`, resume decisions, and background scheduling/reconciliation/handoff. Request
+headers, cookies, authorization values, and response bodies are never mapped into this payload.
+
 ### Pipeline metric
 - `offlineQueuePipelineMetrics().ageDistribution.p95Seconds` -> `sdk.queue.age.p95.ms`
 - Conversion: `seconds * 1000`.
@@ -60,6 +74,7 @@ The SDK now defines stable SLO metric names:
 ## Compatibility
 - Contract v1 style hooks remain available.
 - Contract v2 is additive and delivered through `OpenTelemetryAdapter` and payload structs.
+- The 2.1 managed-transfer mapping is additive and does not change existing event names.
 - `OfflineQueueAgeDistribution` now includes `p95Seconds` (initializer remains backward-compatible).
 
 ## Golden Validation

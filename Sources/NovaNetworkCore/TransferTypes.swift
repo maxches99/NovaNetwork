@@ -31,7 +31,7 @@ public enum UploadEvent: Sendable {
 }
 
 /// Policy applied when a download destination already exists.
-public enum DownloadDestinationPolicy: Sendable, Equatable {
+public enum DownloadDestinationPolicy: String, Codable, Sendable, Equatable {
     /// Fail without modifying the existing file.
     case failIfExists
 

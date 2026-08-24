@@ -15,7 +15,9 @@ When multiple callers ask for the same resource at the same time, only one under
 - [Examples](Examples/README.md)
 - [Telemetry Contract v2](docs/TELEMETRY_CONTRACT_V2.md)
 - [NovaNetwork v2.0 DFR](docs/dfr/NOVA_NETWORK_V2_DFR.md)
+- [NovaNetwork v2.1 DFR](docs/dfr/NOVA_NETWORK_V2_1_DFR.md)
 - [v2.0 Traceability Pack](docs/TRACEABILITY_PACK_v2.0.md)
+- [v2.1 Traceability Pack](docs/TRACEABILITY_PACK_v2.1.md)
 - [v1.15 Traceability Pack](docs/TRACEABILITY_PACK_v1.15.md)
 - [v1.16 Traceability Pack](docs/TRACEABILITY_PACK_v1.16.md)
 - [v1.19 Traceability Pack](docs/TRACEABILITY_PACK_v1.19.md)
@@ -65,6 +67,8 @@ targets: [
 - Swift 6.2 strict-concurrency compliance and a Swift 6.3 compatibility CI lane.
 - Bounded concurrent batches with stable ordering, fail-fast, and collecting modes.
 - Incremental response streaming plus native URLSession upload/download progress APIs.
+- Durable managed transfers with stable IDs, resumable HTTP Range downloads, TUS uploads,
+  integrity checks, restoration, and Apple background URLSession coordination.
 - Single-flight HTTP authentication refresh, isolated by authentication scope.
 - Standalone cross-platform `NovaNetworkCore` product for request/response/error/endpoint models.
 - HTTP Cache 2.0 with ETag and Last-Modified revalidation, corrected age, request directives,
@@ -206,6 +210,81 @@ let bodies = try await client.loadBatch(
     batchOptions: .init(maxConcurrentRequests: 4)
 )
 ```
+
+## v2.1 Resumable Transfer Quick Start
+
+```swift
+import Foundation
+import NovaNetworkClient
+
+let transferRoot = FileManager.default.urls(
+    for: .applicationSupportDirectory,
+    in: .userDomainMask
+)[0].appendingPathComponent("Transfers", isDirectory: true)
+
+let journal = DiskTransferJournal(
+    directoryURL: transferRoot.appendingPathComponent("journal", isDirectory: true)
+)
+let manager = ManagedTransferManager(
+    journal: journal,
+    partialDirectoryURL: transferRoot.appendingPathComponent("partial", isDirectory: true)
+)
+
+let handle = try await manager.startDownload(
+    request: APIRequest(
+        method: .get,
+        url: URL(string: "https://cdn.example.com/archive.zip")!,
+        headers: ["Authorization": "Bearer live-only"]
+    ),
+    to: transferRoot.appendingPathComponent("archive.zip"),
+    destinationPolicy: .replace,
+    options: .init(
+        resume: .requiresValidator,
+        integrity: .expectedSHA256(expectedDigest)
+    )
+)
+
+for await event in handle.events {
+    if case .completed(let snapshot) = event {
+        print("Completed \(snapshot.id)")
+    }
+}
+```
+
+Call `manager.restore()` after relaunch, then pass a fresh authenticated `APIRequest` to
+`resumeDownload` or `resumeUpload`. Request headers and credentials are deliberately not stored
+in the journal. `ManagedTransferManager` uses the built-in TUS 1.0 strategy by default for
+resumable uploads, or accepts a custom `ResumableUploadStrategy`.
+
+For Apple background transfers, create a `BackgroundTransferCoordinator`, use a stable unique
+background session identifier, and forward the host lifecycle callback:
+
+```swift
+let background = BackgroundTransferCoordinator(journal: journal)
+
+let handle = try await background.scheduleDownload(
+    request: request,
+    to: destinationURL,
+    options: .init(
+        execution: .background(sessionIdentifier: "com.example.app.transfers"),
+        integrity: .expectedByteCount(expectedBytes),
+        networkPolicy: .init(
+            allowsCellularAccess: false,
+            isDiscretionary: true
+        )
+    )
+)
+
+// Forward from the app delegate's background URLSession callback.
+await background.handleEvents(
+    forSessionIdentifier: identifier,
+    completionHandler: completionHandler
+)
+```
+
+The app still owns platform entitlements and lifecycle forwarding. Background execution is
+available on iOS and macOS; other platforms receive
+`ManagedTransferError.backgroundTransfersUnavailable`.
 
 For model-only targets, depend on and `import NovaNetworkCore`. Existing targets may continue
 to import `NovaNetworkClient`, which re-exports the core public API.

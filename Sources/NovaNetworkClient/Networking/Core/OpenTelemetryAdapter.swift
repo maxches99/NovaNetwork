@@ -43,6 +43,9 @@ public struct OpenTelemetryAdapter: Sendable {
                 if context.type == .reconnectSuccess {
                     exporter.export(metric: reconnectSuccessMetric(context: context))
                 }
+            },
+            onManagedTransferEvent: { context in
+                exporter.export(event: managedTransferPayload(context: context))
             }
         )
     }
@@ -219,6 +222,40 @@ public struct OpenTelemetryAdapter: Sendable {
         }
         return TelemetryEventPayload(
             eventName: "websocket.\(context.type.rawValue)",
+            eventVersion: eventVersion,
+            contractVersion: contractVersion,
+            attributes: attributes
+        )
+    }
+
+    func managedTransferPayload(
+        context: TelemetryManagedTransferContext
+    ) -> TelemetryEventPayload {
+        var attributes: [String: TelemetryAttributeValue] = [
+            "transfer_id": .string(context.transferID.rawValue),
+            "kind": .string(context.kind.rawValue),
+            "event": .string(context.event.rawValue)
+        ]
+        if let completedBytes = context.completedBytes {
+            attributes["completed_bytes"] = .int(Int(clamping: completedBytes))
+        }
+        if let totalBytes = context.totalBytes {
+            attributes["total_bytes"] = .int(Int(clamping: totalBytes))
+        }
+        if let offset = context.offset {
+            attributes["offset"] = .int(Int(clamping: offset))
+        }
+        if let sessionIdentifier = context.sessionIdentifier {
+            attributes["session_identifier"] = .string(sessionIdentifier)
+        }
+        if let taskIdentifier = context.taskIdentifier {
+            attributes["task_identifier"] = .int(taskIdentifier)
+        }
+        if let reason = context.reason {
+            attributes["reason"] = .string(reason)
+        }
+        return TelemetryEventPayload(
+            eventName: "managed_transfer.\(context.event.rawValue)",
             eventVersion: eventVersion,
             contractVersion: contractVersion,
             attributes: attributes

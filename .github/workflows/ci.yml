@@ -11,6 +11,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  linux-core-swift-6-2:
+    name: Linux Core (Swift 6.2.3)
+    runs-on: ubuntu-latest
+    container: swift:6.2.3-noble
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Verify Swift 6.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift --version
+          swift --version | grep -Eq 'Swift version 6\.2\.3([.[:space:]]|$)'
+
+      - name: Build Cross-Platform Core
+        run: swift build --target NovaNetworkCore -Xswiftc -strict-concurrency=complete -Xswiftc -warn-concurrency
+
   swift-6-3-compatibility:
     name: Swift 6.3 Compatibility
     runs-on: macos-15
