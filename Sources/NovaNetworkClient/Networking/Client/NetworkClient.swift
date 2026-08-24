@@ -37,8 +37,10 @@ public final class NetworkClient: Sendable {
     /// Creates a configured network client.
     ///
     /// Authentication refresh is disabled unless `httpAuthRefreshProvider` is supplied.
-    /// All other arguments preserve the raw request API's existing defaults.
-    public init(
+    /// All other arguments preserve the raw request API's existing defaults. Equivalent to
+    /// building a ``NetworkClientConfiguration`` with the same arguments and calling
+    /// ``init(configuration:)``; prefer that initializer when configuring many options at once.
+    public convenience init(
         transport: any NetworkTransport = Transport(),
         cancellationPolicy: CancellationPolicy = .keepRunning,
         coalescerLimits: RequestCoalescer<NetworkResponse, NetworkError>.Limits = .init(),
@@ -60,6 +62,47 @@ public final class NetworkClient: Sendable {
         httpAuthRefreshPolicy: HTTPAuthRefreshPolicy = .default,
         decoder: JSONDecoder = JSONDecoder()
     ) {
+        self.init(
+            configuration: NetworkClientConfiguration(
+                transport: transport,
+                cancellationPolicy: cancellationPolicy,
+                coalescerLimits: coalescerLimits,
+                fingerprintPolicy: fingerprintPolicy,
+                retryPolicy: retryPolicy,
+                retryClock: retryClock,
+                retryRandomGenerator: retryRandomGenerator,
+                defaultCachePolicy: defaultCachePolicy,
+                cacheMaxEntries: cacheMaxEntries,
+                cache: cache,
+                offlineWriteStore: offlineWriteStore,
+                offlineConnectivityMonitor: offlineConnectivityMonitor,
+                offlineConflictResolver: offlineConflictResolver,
+                observer: observer,
+                networkObserver: networkObserver,
+                middlewares: middlewares,
+                telemetryHooks: telemetryHooks,
+                httpAuthRefreshProvider: httpAuthRefreshProvider,
+                httpAuthRefreshPolicy: httpAuthRefreshPolicy,
+                decoder: decoder
+            )
+        )
+    }
+
+    /// Creates a configured network client from a ``NetworkClientConfiguration``.
+    ///
+    /// Authentication refresh is disabled unless `configuration.httpAuthRefreshProvider` is
+    /// supplied. All other fields preserve the raw request API's existing defaults.
+    public init(configuration: NetworkClientConfiguration) {
+        let transport = configuration.transport
+        let telemetryHooks = configuration.telemetryHooks
+        let networkObserver = configuration.networkObserver
+        let observer = configuration.observer
+        let retryPolicy = configuration.retryPolicy
+        let retryClock = configuration.retryClock
+        let retryRandomGenerator = configuration.retryRandomGenerator
+        let middlewares = configuration.middlewares
+        let offlineConnectivityMonitor = configuration.offlineConnectivityMonitor
+
         self.transport = transport
         let combinedObserver: RequestCoalescer<NetworkResponse, NetworkError>.Observer? = { event in
             observer?(event)
@@ -77,27 +120,27 @@ public final class NetworkClient: Sendable {
             )
         }
         self.coalescer = RequestCoalescer(
-            policy: cancellationPolicy,
-            limits: coalescerLimits,
+            policy: configuration.cancellationPolicy,
+            limits: configuration.coalescerLimits,
             observer: combinedObserver,
             queueMetricsObserver: queueMetricsObserver,
             overflowFailureFactory: { NetworkError.coalescerLimitExceeded }
         )
-        self.fingerprintPolicy = fingerprintPolicy
+        self.fingerprintPolicy = configuration.fingerprintPolicy
         self.retryPolicy = retryPolicy
         self.retryClock = retryClock
         self.retryRandomGenerator = retryRandomGenerator
-        self.defaultCachePolicy = defaultCachePolicy.normalized
-        self.cache = cache ?? MemoryResponseCache(maxEntries: cacheMaxEntries)
-        self.offlineWriteStore = offlineWriteStore
+        self.defaultCachePolicy = configuration.defaultCachePolicy.normalized
+        self.cache = configuration.cache ?? MemoryResponseCache(maxEntries: configuration.cacheMaxEntries)
+        self.offlineWriteStore = configuration.offlineWriteStore
         self.offlineConnectivityMonitor = offlineConnectivityMonitor
-        self.offlineConflictResolver = offlineConflictResolver
-        self.decoder = decoder
+        self.offlineConflictResolver = configuration.offlineConflictResolver
+        self.decoder = configuration.decoder
         self.networkObserver = networkObserver
         self.middlewares = middlewares
         self.telemetryHooks = telemetryHooks
-        self.httpAuthRefreshProvider = httpAuthRefreshProvider
-        self.httpAuthRefreshPolicy = httpAuthRefreshPolicy
+        self.httpAuthRefreshProvider = configuration.httpAuthRefreshProvider
+        self.httpAuthRefreshPolicy = configuration.httpAuthRefreshPolicy
         self.httpAuthRefreshCoordinator = HTTPAuthRefreshCoordinator(
             telemetry: telemetryHooks?.onHTTPAuthRefresh
         )

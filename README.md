@@ -47,6 +47,8 @@ targets: [
 ## Features
 
 - Typed `Endpoint<Response>` execution with endpoint-specific decoding.
+- `NetworkClientConfiguration`: a mutable value grouping every construction option, as an
+  alternative to `NetworkClient.init`'s labeled arguments for configuring many options at once.
 - Swift 6.2 strict-concurrency compliance and a Swift 6.3 compatibility CI lane.
 - Bounded concurrent batches with stable ordering, fail-fast, and collecting modes.
 - Incremental response streaming plus native URLSession upload/download progress APIs.
@@ -136,6 +138,27 @@ async let second = client.load(request: request, authScope: "user:42")
 let (a, b) = try await (first, second)
 print(a == b) // true
 ```
+
+## Configuration
+
+`NetworkClient.init` takes each option as a labeled argument, which reads well for a handful of
+options. For configuring many options at once, build a `NetworkClientConfiguration` instead:
+
+```swift
+var configuration = NetworkClientConfiguration()
+configuration.transport = Transport()
+configuration.retryPolicy = RetryPolicy(maxAttempts: 3)
+configuration.defaultCachePolicy = .cacheFirst(maxAge: 30)
+configuration.middlewares = [authMiddleware]
+configuration.telemetryHooks = hooks
+configuration.addMiddleware(loggingMiddleware)
+
+let client = NetworkClient(configuration: configuration)
+```
+
+The two initializers are equivalent and interchangeable; `NetworkClientConfiguration` is a plain
+mutable value, so a base configuration can be built once and adapted per environment (for
+example, per build configuration or test target) before constructing a client from it.
 
 ## v2.0 API Quick Start
 
