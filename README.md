@@ -100,6 +100,9 @@ targets: [
   in fixed-size chunks, never buffering file parts fully in memory.
 - File-based uploads (`upload(request:fromFile:...)`) streamed natively from disk via
   `URLSession.upload(for:fromFile:)`.
+- Certificate pinning (`Transport.pinned`, `CertificatePinningPolicy`) with SPKI SHA-256 public
+  key pins, backup pins for rotation, per-host allow/reject for unpinned hosts, and mutual TLS
+  client certificate support (Apple platforms only).
 - Request helpers (`APIRequestBuilder`, `Encodable` JSON body initializer).
 - Idempotency helpers (`APIRequest.withIdempotencyKey`, `IdempotencyPolicy`).
 - Cache management (`preload`, `invalidate`).
@@ -762,6 +765,57 @@ let client = NetworkClient(
     fingerprintPolicy: policy
 )
 ```
+
+## Certificate Pinning and Mutual TLS (Apple platforms)
+
+```swift
+let policy = CertificatePinningPolicy(
+    pinsByHost: [
+        "api.example.com": [
+            "4UgYzKuqOyIb7kHr8BLRmzF7nVf1ZLld+MPOVlPZSxA=", // primary
+            "X9ow7ZHXqNUe817kCZu4lYmsTgZz4xM5956G5xkLbcw=", // backup, for rotation
+        ]
+    ],
+    unpinnedHostPolicy: .allowDefaultEvaluation
+)
+
+let transport = Transport.pinned(
+    policy: policy,
+    onValidation: { event in
+        print("pinning:", event.host, event.outcome)
+    }
+)
+
+let client = NetworkClient(transport: transport)
+```
+
+Pins are base64 SPKI SHA-256 digests, matching:
+
+```bash
+openssl x509 -in cert.pem -pubkey -noout \
+  | openssl pkey -pubin -outform DER \
+  | openssl dgst -sha256 -binary \
+  | openssl base64
+```
+
+Configuring more than one pin per host allows certificate/key rotation without an app update:
+a connection succeeds as soon as any certificate in the chain matches any configured pin. Hosts
+without configured pins follow `unpinnedHostPolicy` (`allowDefaultEvaluation` or `reject`); the
+platform's own trust evaluation still runs first for pinned hosts, so a connection must satisfy
+both the system trust store and the pin.
+
+For mutual TLS, supply a `ClientCertificateProvider`:
+
+```swift
+let transport = Transport.pinned(
+    policy: policy,
+    clientCertificateProvider: .fixed(
+        ClientCertificateIdentity(identity: mySecIdentity)
+    )
+)
+```
+
+This functionality depends on the `Security` framework and is available on Apple platforms only.
 
 ## Behavior Contract
 
