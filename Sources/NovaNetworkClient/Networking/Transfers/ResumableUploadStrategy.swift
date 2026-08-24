@@ -1,5 +1,8 @@
 import NovaNetworkCore
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Server-specific contract used by managed uploads to create, inspect, and append resources.
 public protocol ResumableUploadStrategy: Sendable {

@@ -1,5 +1,8 @@
 import NovaNetworkCore
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 enum BackgroundDelegateEvent: Sendable {
     case progress(transferID: TransferID, completedBytes: Int64, totalBytes: Int64?)

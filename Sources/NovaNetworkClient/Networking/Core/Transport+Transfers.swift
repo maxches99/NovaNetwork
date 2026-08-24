@@ -1,5 +1,8 @@
 import NovaNetworkCore
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 private final class URLSessionTransferProgressDelegate: NSObject, URLSessionTaskDelegate, URLSessionDownloadDelegate, Sendable {
     private let progressHandler: @Sendable (TransferProgress) -> Void

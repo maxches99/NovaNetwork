@@ -1,5 +1,8 @@
 import NovaNetworkCore
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 extension Transport: ServerSentEventTransport {
     /// Streams and incrementally parses a `text/event-stream` response.

@@ -1,5 +1,8 @@
 import NovaNetworkCore
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// High-level owner of foreground resumable downloads and uploads.
 ///

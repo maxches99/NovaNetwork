@@ -1,5 +1,8 @@
 import NovaNetworkCore
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// The default URLSession-backed HTTP, streaming, upload, and download transport.
 public struct Transport: NetworkTransport, StreamingNetworkTransport, TransferNetworkTransport {

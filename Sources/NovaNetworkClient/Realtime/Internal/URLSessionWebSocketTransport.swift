@@ -1,5 +1,8 @@
 import NovaNetworkCore
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 protocol WebSocketTransport: Sendable {
     func connect(url: URL, headers: [String: String]) async throws
