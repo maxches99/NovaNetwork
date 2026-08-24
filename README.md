@@ -8,7 +8,7 @@ When multiple callers ask for the same resource at the same time, only one under
 
 - [Getting Started](Sources/NovaNetworkClient/NovaNetworkClient.docc/GettingStarted.md)
 - [Interactive DocC Tutorials](Sources/NovaNetworkClient/NovaNetworkClient.docc/Tutorial-Table-of-Contents.tutorial)
-- [Documentation Website](https://novanetworkclient-docs.maxchesnikov.chatgpt.site)
+- [Documentation Website](https://nova-network-documentation.maxches99.workers.dev)
 - [Website source and build instructions](DocumentationSite/README.md)
 - [Core Concepts](Sources/NovaNetworkClient/NovaNetworkClient.docc/CoreConcepts.md)
 - [Choosing an API](Sources/NovaNetworkClient/NovaNetworkClient.docc/ChoosingAnAPI.md)
