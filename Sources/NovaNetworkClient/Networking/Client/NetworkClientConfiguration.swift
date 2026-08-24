@@ -57,6 +57,9 @@ public struct NetworkClientConfiguration: Sendable {
     public var httpAuthRefreshPolicy: HTTPAuthRefreshPolicy
     /// Decoder used for typed `Decodable` responses.
     public var decoder: JSONDecoder
+    /// Default strategy for `NetworkClient.decode(request:...)`, used when a call site does not
+    /// supply its own. `nil` uses `JSONResponseDecoding(decoder: decoder)`.
+    public var responseDecoding: (any ResponseDecoding)?
 
     /// Creates a configuration with the same defaults as `NetworkClient.init`.
     public init(
@@ -79,7 +82,8 @@ public struct NetworkClientConfiguration: Sendable {
         telemetryHooks: NetworkTelemetryHooks? = nil,
         httpAuthRefreshProvider: HTTPAuthRefreshProvider? = nil,
         httpAuthRefreshPolicy: HTTPAuthRefreshPolicy = .default,
-        decoder: JSONDecoder = JSONDecoder()
+        decoder: JSONDecoder = JSONDecoder(),
+        responseDecoding: (any ResponseDecoding)? = nil
     ) {
         self.transport = transport
         self.cancellationPolicy = cancellationPolicy
@@ -101,6 +105,7 @@ public struct NetworkClientConfiguration: Sendable {
         self.httpAuthRefreshProvider = httpAuthRefreshProvider
         self.httpAuthRefreshPolicy = httpAuthRefreshPolicy
         self.decoder = decoder
+        self.responseDecoding = responseDecoding
     }
 }
 

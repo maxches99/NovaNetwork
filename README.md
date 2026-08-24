@@ -47,6 +47,9 @@ targets: [
 ## Features
 
 - Typed `Endpoint<Response>` execution with endpoint-specific decoding.
+- `ResponseDecoding` strategies (`decode`, `loadResponse`) for decoders that need response
+  headers, including `Content-Type`-based negotiation, alongside the unchanged default
+  `Decodable`/`JSONDecoder` path.
 - `NetworkClientConfiguration`: a mutable value grouping every construction option, as an
   alternative to `NetworkClient.init`'s labeled arguments for configuring many options at once.
 - Swift 6.2 strict-concurrency compliance and a Swift 6.3 compatibility CI lane.
@@ -771,6 +774,33 @@ let user: User = try await client.load(
     authScope: "user:42"
 )
 ```
+
+## Response Decoding Strategies
+
+`load<T: Decodable>` and `Endpoint.decode(_:using:)` always use a fixed `JSONDecoder` — the
+existing default, unchanged. For a decoder that needs to see response headers (most commonly to
+pick a strategy by `Content-Type`), use `ResponseDecoding` instead:
+
+```swift
+let decoding = ContentTypeNegotiatingResponseDecoding(
+    decodersByMediaType: [
+        "application/xml": MyXMLResponseDecoding()
+    ]
+    // falls back to JSONResponseDecoding() for any other Content-Type
+)
+
+let user: User = try await client.decode(
+    request: request,
+    authScope: "user:42",
+    responseDecoding: decoding
+)
+```
+
+Set `configuration.responseDecoding` on a `NetworkClientConfiguration` for a client-wide default
+strategy, used whenever a call to `decode(request:...)` does not supply its own. `decode` and its
+companion `loadResponse(request:authScope:options:)` (which returns the full response — status,
+headers, and body — instead of just `Data`) always bypass the response cache, matching
+`cachePolicy: .networkOnly`.
 
 ## Fingerprint Policy
 

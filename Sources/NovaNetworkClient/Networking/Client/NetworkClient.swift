@@ -15,6 +15,7 @@ public final class NetworkClient: Sendable {
     private let offlineConnectivityMonitor: (any OfflineConnectivityMonitor)?
     let offlineConflictResolver: (@Sendable (OfflineQueueConflictMetadata) -> OfflineConflictResolutionDecision)?
     let decoder: JSONDecoder
+    let responseDecoding: (any ResponseDecoding)?
     private let networkObserver: (@Sendable (NetworkClientEvent) -> Void)?
     private let middlewares: [NetworkMiddleware]
     let telemetryHooks: NetworkTelemetryHooks?
@@ -60,7 +61,8 @@ public final class NetworkClient: Sendable {
         telemetryHooks: NetworkTelemetryHooks? = nil,
         httpAuthRefreshProvider: HTTPAuthRefreshProvider? = nil,
         httpAuthRefreshPolicy: HTTPAuthRefreshPolicy = .default,
-        decoder: JSONDecoder = JSONDecoder()
+        decoder: JSONDecoder = JSONDecoder(),
+        responseDecoding: (any ResponseDecoding)? = nil
     ) {
         self.init(
             configuration: NetworkClientConfiguration(
@@ -83,7 +85,8 @@ public final class NetworkClient: Sendable {
                 telemetryHooks: telemetryHooks,
                 httpAuthRefreshProvider: httpAuthRefreshProvider,
                 httpAuthRefreshPolicy: httpAuthRefreshPolicy,
-                decoder: decoder
+                decoder: decoder,
+                responseDecoding: responseDecoding
             )
         )
     }
@@ -136,6 +139,7 @@ public final class NetworkClient: Sendable {
         self.offlineConnectivityMonitor = offlineConnectivityMonitor
         self.offlineConflictResolver = configuration.offlineConflictResolver
         self.decoder = configuration.decoder
+        self.responseDecoding = configuration.responseDecoding
         self.networkObserver = networkObserver
         self.middlewares = middlewares
         self.telemetryHooks = telemetryHooks
@@ -254,7 +258,7 @@ public final class NetworkClient: Sendable {
                 storeInCache: false,
                 cachedETag: nil,
                 options: options
-            )
+            ).body
         }
 
         switch resolvedPolicy {
@@ -267,7 +271,7 @@ public final class NetworkClient: Sendable {
                 storeInCache: false,
                 cachedETag: nil,
                 options: options
-            )
+            ).body
         case .cacheFirst(let maxAge):
             if let cached = await cache.entry(forKey: key) {
                 guard varyMatches(cached: cached, request: request) else {
@@ -279,7 +283,7 @@ public final class NetworkClient: Sendable {
                         storeInCache: true,
                         cachedETag: nil,
                         options: options
-                    )
+                    ).body
                 }
 
                 let age = correctedAgeSeconds(cached: cached)
@@ -303,7 +307,7 @@ public final class NetworkClient: Sendable {
                         cachedETag: cached.etag,
                         cachedLastModified: cached.lastModified,
                         options: options
-                    )
+                    ).body
                 } catch let error as NetworkError where canServeStaleIfError(
                     cached: cached,
                     clientMaxAge: maxAge,
@@ -331,7 +335,7 @@ public final class NetworkClient: Sendable {
                 storeInCache: true,
                 cachedETag: nil,
                 options: options
-            )
+            ).body
         case .staleWhileRevalidate(let maxAge, let staleAge):
             if let cached = await cache.entry(forKey: key) {
                 guard varyMatches(cached: cached, request: request) else {
@@ -343,7 +347,7 @@ public final class NetworkClient: Sendable {
                         storeInCache: true,
                         cachedETag: nil,
                         options: options
-                    )
+                    ).body
                 }
 
                 let age = correctedAgeSeconds(cached: cached)
@@ -387,7 +391,7 @@ public final class NetworkClient: Sendable {
                         cachedETag: cached.etag,
                         cachedLastModified: cached.lastModified,
                         options: options
-                    )
+                    ).body
                 } catch let error as NetworkError where canServeStaleIfError(
                     cached: cached,
                     clientMaxAge: maxAge,
@@ -412,7 +416,7 @@ public final class NetworkClient: Sendable {
                 storeInCache: true,
                 cachedETag: nil,
                 options: options
-            )
+            ).body
         }
     }
 
@@ -471,7 +475,7 @@ public final class NetworkClient: Sendable {
                 storeInCache: false,
                 cachedETag: nil,
                 options: options
-            )
+            ).body
             return .completed(data)
         } catch let error as NetworkError {
             guard queuePolicy.mode == .enqueueWhenOffline, isQueueEligibleMethod, Self.isOfflineError(error) else {
@@ -1027,7 +1031,7 @@ public final class NetworkClient: Sendable {
         cachedETag: String?,
         cachedLastModified: String? = nil,
         options: RequestExecutionOptions
-    ) async throws -> Data {
+    ) async throws -> NetworkResponse {
         let resolvedRuntimePolicy = await runtimePolicyStore.resolve(url: request.url)
         let hasRequestOverrides = options.deadlineBudgetSeconds != nil || options.circuitBreakerPolicy != nil
         let resolvedRetryPolicy = resolvedRuntimePolicy.policy.retryPolicy ?? retryPolicy
@@ -1108,11 +1112,11 @@ public final class NetworkClient: Sendable {
         }
 
         if outcome.statusCode == 304, let cached = await cache.entry(forKey: key) {
+            var mergedHeaders = cached.headers
+            for (name, value) in outcome.headers {
+                mergedHeaders[name] = value
+            }
             if storeInCache {
-                var mergedHeaders = cached.headers
-                for (name, value) in outcome.headers {
-                    mergedHeaders[name] = value
-                }
                 let revalidated = CachedResponse(
                     body: cached.body,
                     statusCode: cached.statusCode,
@@ -1125,7 +1129,7 @@ public final class NetworkClient: Sendable {
                 await cache.set(revalidated, forKey: key)
             }
             emit(.cacheRevalidated(key: key, ageMilliseconds: 0))
-            return cached.body
+            return NetworkResponse(statusCode: cached.statusCode, headers: mergedHeaders, body: cached.body)
         }
 
         if storeInCache && requestAllowsCacheStorage(preparedRequest) && shouldStoreInCache(outcome.headers) {
@@ -1148,7 +1152,7 @@ public final class NetworkClient: Sendable {
             }
         }
 
-        return outcome.body
+        return outcome
     }
 
     private func shouldCountFailureForCircuitBreaker(_ error: NetworkError) -> Bool {
