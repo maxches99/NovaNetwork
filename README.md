@@ -47,6 +47,8 @@ targets: [
 ## Features
 
 - Typed `Endpoint<Response>` execution with endpoint-specific decoding.
+- `NetworkError` conforms to `Equatable` and `LocalizedError`; `NetworkErrorContext` and
+  `ContextualNetworkError` attach request/attempt context without changing its existing cases.
 - `NovaNetworkClientTestSupport`: request-matching routes, chaos injection, a deterministic
   virtual clock, and telemetry recording for testing code that uses `NovaNetworkClient`.
 - `ResponseDecoding` strategies (`decode`, `loadResponse`) for decoders that need response
@@ -886,6 +888,35 @@ This functionality depends on the `Security` framework and is available on Apple
 | Non-retriable error | Fails immediately |
 | Deadline budget exhausted | Request fails with timeout budget error and no additional retry attempt |
 | `coalescingMode: .disabled` | Identical concurrent requests execute independently |
+
+## Error Handling
+
+`NetworkError` conforms to `Equatable` and `LocalizedError`:
+
+```swift
+catch let error as NetworkError {
+    print(error.localizedDescription) // "The server returned HTTP status 429."
+    #expect(error == .clientRateLimited(retryAfterSeconds: 30)) // usable directly in test assertions
+}
+```
+
+`Equatable` cases wrapping an underlying error (`.decoding`, `.transport`,
+`.authenticationRefreshFailed`) compare that error by dynamic type and description, since `any
+Error` has no general equality contract; treat this as a best-effort comparison for tests and
+deduplication, not a guarantee of true value identity.
+
+For request and attempt context (URL, method, attempt number, auth scope) without changing
+`NetworkError`'s own cases, wrap it with `NetworkErrorContext` — directly, or automatically via
+`loadWithContext`:
+
+```swift
+do {
+    let data = try await client.loadWithContext(request: request, authScope: "user:42")
+} catch let error as ContextualNetworkError {
+    logger.error("\(error.localizedDescription)") // includes the request's method, URL, attempt
+    reportToCrashlytics(error.error, context: error.context)
+}
+```
 
 ## Observability
 
