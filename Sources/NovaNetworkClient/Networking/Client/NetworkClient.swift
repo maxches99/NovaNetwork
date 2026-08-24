@@ -808,6 +808,106 @@ public final class NetworkClient: Sendable {
         }
     }
 
+    /// Connects to a `text/event-stream` endpoint and yields parsed Server-Sent Events.
+    ///
+    /// Requires a transport that implements `ServerSentEventTransport` (the default
+    /// ``Transport`` does); other transports fail immediately with
+    /// ``ServerSentEventError/transportUnsupported``. By default the stream reconnects
+    /// automatically after the connection ends or fails, replaying a `Last-Event-ID` header
+    /// once the server has sent one and honoring any `retry:` field the server sends. Pass
+    /// ``SSEReconnectPolicy/disabled`` for a single-attempt stream instead. Cancelling or
+    /// terminating iteration cancels the underlying connection.
+    public func loadServerSentEvents(
+        request: APIRequest,
+        authScope: String?,
+        options: RequestExecutionOptions = .init(),
+        reconnectPolicy: SSEReconnectPolicy = .init()
+    ) -> AsyncThrowingStream<ServerSentEvent, Error> {
+        let key = makeFingerprint(for: request, authScope: authScope).key
+        guard let sseTransport = transport as? any ServerSentEventTransport else {
+            return AsyncThrowingStream { continuation in
+                continuation.finish(
+                    throwing: NetworkError.transport(underlying: ServerSentEventError.transportUnsupported)
+                )
+            }
+        }
+
+        return AsyncThrowingStream(bufferingPolicy: .bufferingOldest(64)) { continuation in
+            let consumer = Task {
+                var lastEventID: String?
+                var reconnectDelayNanoseconds = reconnectPolicy.defaultDelayNanoseconds
+                var attempt = 0
+                telemetryHooks?.onTransferEvent?(.init(kind: .stream, phase: .started, key: key))
+
+                while true {
+                    do {
+                        try Task.checkCancellation()
+                        var effectiveRequest = request
+                        if let lastEventID {
+                            effectiveRequest = effectiveRequest.withMergedHeaders(["Last-Event-ID": lastEventID])
+                        }
+                        let prepared = try await prepareRequestForExecution(
+                            request: effectiveRequest,
+                            key: key,
+                            options: options
+                        )
+                        for try await element in sseTransport.serverSentEventElements(prepared, authScope: authScope) {
+                            try Task.checkCancellation()
+                            switch element {
+                            case .event(let event):
+                                if let id = event.id {
+                                    lastEventID = id
+                                }
+                                attempt = 0
+                                telemetryHooks?.onTransferEvent?(.init(kind: .stream, phase: .progress, key: key))
+                                continuation.yield(event)
+                            case .retryIntervalUpdate(let milliseconds):
+                                let requested = UInt64(clamping: milliseconds) * 1_000_000
+                                reconnectDelayNanoseconds = min(requested, reconnectPolicy.maxDelayNanoseconds)
+                            }
+                        }
+                        guard reconnectPolicy.isEnabled else {
+                            telemetryHooks?.onTransferEvent?(.init(kind: .stream, phase: .completed, key: key))
+                            continuation.finish()
+                            return
+                        }
+                    } catch is CancellationError {
+                        telemetryHooks?.onTransferEvent?(.init(kind: .stream, phase: .cancelled, key: key))
+                        continuation.finish(throwing: NetworkError.cancelled)
+                        return
+                    } catch {
+                        guard reconnectPolicy.isEnabled else {
+                            telemetryHooks?.onTransferEvent?(
+                                .init(kind: .stream, phase: .failed, key: key, reason: String(describing: type(of: error)))
+                            )
+                            continuation.finish(throwing: error)
+                            return
+                        }
+                    }
+
+                    attempt += 1
+                    if let maxAttempts = reconnectPolicy.maxAttempts, attempt > maxAttempts {
+                        telemetryHooks?.onTransferEvent?(
+                            .init(kind: .stream, phase: .failed, key: key, reason: "sse_reconnect_attempts_exhausted")
+                        )
+                        continuation.finish(
+                            throwing: NetworkError.transport(underlying: ServerSentEventError.reconnectAttemptsExhausted)
+                        )
+                        return
+                    }
+                    do {
+                        try await retryClock.sleep(nanoseconds: reconnectDelayNanoseconds)
+                    } catch {
+                        telemetryHooks?.onTransferEvent?(.init(kind: .stream, phase: .cancelled, key: key))
+                        continuation.finish(throwing: NetworkError.cancelled)
+                        return
+                    }
+                }
+            }
+            continuation.onTermination = { _ in consumer.cancel() }
+        }
+    }
+
     public func coalescerMetrics() async -> RequestCoalescer<NetworkResponse, NetworkError>.Metrics {
         await coalescer.snapshotMetrics()
     }

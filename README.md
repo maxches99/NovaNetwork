@@ -94,6 +94,8 @@ targets: [
 - Typed error mapping overloads (`errorMapper`).
 - Batch loading helpers (`loadBatch`, `loadBatchResults`) with stable input order.
 - Streaming helper (`loadStream`) with true incremental URLSession delivery on supported platforms.
+- Server-Sent Events (`loadServerSentEvents`) with a spec-compliant, platform-independent parser,
+  automatic reconnect, `Last-Event-ID` replay, and server-driven `retry:` timing.
 - Request helpers (`APIRequestBuilder`, `Encodable` JSON body initializer).
 - Idempotency helpers (`APIRequest.withIdempotencyKey`, `IdempotencyPolicy`).
 - Cache management (`preload`, `invalidate`).
@@ -550,6 +552,31 @@ for try await chunk in client.loadStream(request: request, authScope: "user:42")
     print("chunk bytes:", chunk.count)
 }
 ```
+
+## Server-Sent Events
+
+```swift
+let events = client.loadServerSentEvents(
+    request: APIRequest(method: .get, url: URL(string: "https://api.example.com/stream")!),
+    authScope: "user:42"
+)
+
+for try await event in events {
+    print(event.event, event.data)
+}
+```
+
+By default the stream reconnects automatically after the connection ends or fails, resending a
+`Last-Event-ID` header once the server has provided one and honoring any `retry:` field the
+server sends. Pass `reconnectPolicy: .disabled` for a single-attempt stream, or tune
+`SSEReconnectPolicy(maxAttempts:defaultDelayNanoseconds:maxDelayNanoseconds:)` for bounded
+reconnection. Requires a transport that implements `ServerSentEventTransport` (the default
+``Transport`` does); other transports fail immediately with
+`ServerSentEventError.transportUnsupported`.
+
+The wire-format parser (`SSEDecoder`, `SSELineParser`) lives in `NovaNetworkCore` and has no
+platform dependencies, so it is usable standalone (for example against a custom transport) on
+every supported platform, including Linux.
 
 ## WebSocket (MVP)
 
