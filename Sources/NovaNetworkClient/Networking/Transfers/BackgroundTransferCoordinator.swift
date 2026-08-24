@@ -460,10 +460,14 @@ extension BackgroundTransferCoordinator {
 
     static func applyNetworkPolicy(_ policy: TransferNetworkPolicy, to request: inout URLRequest) {
         request.allowsCellularAccess = policy.allowsCellularAccess
+        // `URLRequest.allowsExpensiveNetworkAccess`/`allowsConstrainedNetworkAccess` do not exist
+        // in swift-corelibs-foundation; cellular access above is still honored on Linux.
+        #if !canImport(FoundationNetworking)
         if #available(iOS 13, macOS 10.15, watchOS 6, tvOS 13, *) {
             request.allowsExpensiveNetworkAccess = policy.allowsExpensiveNetworkAccess
             request.allowsConstrainedNetworkAccess = policy.allowsConstrainedNetworkAccess
         }
+        #endif
     }
 
     static func transferIdentity(from description: String?) -> TransferID? {

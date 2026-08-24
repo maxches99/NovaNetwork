@@ -316,6 +316,10 @@ extension ManagedTransferManager {
             }
         }
 
+        // `URLSession.bytes(for:)` does not exist in swift-corelibs-foundation, so Linux always
+        // takes the single-response fallback below, the same one used on operating system
+        // versions that predate the streaming API.
+        #if !canImport(FoundationNetworking)
         if #available(iOS 15, macOS 12, watchOS 8, tvOS 15, *) {
             let (bytes, response) = try await session.bytes(for: urlRequest)
             let metadata = try Self.metadata(from: response)
@@ -392,58 +396,86 @@ extension ManagedTransferManager {
                 validator: responseValidator
             )
         } else {
-            let stagingURL = partialURL.appendingPathExtension("response")
-            defer { try? FileManager.default.removeItem(at: stagingURL) }
-            let (response, metadata) = try await legacyDownload(
-                request: urlRequest,
-                stagingURL: stagingURL
-            )
-            _ = response
-            let disposition = try Self.downloadDisposition(
-                statusCode: metadata.statusCode,
-                headers: metadata.headers,
-                requestedOffset: initialOffset,
+            try await legacyTransferDownload(
+                id: id,
+                request: request,
+                urlRequest: urlRequest,
+                partialURL: partialURL,
+                initialOffset: initialOffset,
                 allowRestart: allowRestart
             )
-            if disposition == .retryFromZero {
-                await coordinator.recordTelemetry(
-                    id: id,
-                    event: .resumeRestarted,
-                    offset: initialOffset,
-                    reason: "precondition_failed"
-                )
-                try? FileManager.default.removeItem(at: partialURL)
-                try await transitionToPreparingForRestart(id: id)
-                return try await transferDownload(
-                    id: id,
-                    request: request,
-                    partialURL: partialURL,
-                    initialOffset: 0,
-                    validator: nil,
-                    allowRestart: false
-                )
-            }
-            try Self.merge(stagingURL: stagingURL, partialURL: partialURL, append: disposition == .append)
-            if disposition == .append {
-                await coordinator.recordTelemetry(
-                    id: id,
-                    event: .resumeAccepted,
-                    offset: initialOffset
-                )
-            }
-            let completed = Self.fileSize(at: partialURL)
-            try await coordinator.updateDownloadCheckpoint(
+        }
+        #else
+        try await legacyTransferDownload(
+            id: id,
+            request: request,
+            urlRequest: urlRequest,
+            partialURL: partialURL,
+            initialOffset: initialOffset,
+            allowRestart: allowRestart
+        )
+        #endif
+    }
+
+    func legacyTransferDownload(
+        id: TransferID,
+        request: APIRequest,
+        urlRequest: URLRequest,
+        partialURL: URL,
+        initialOffset: Int64,
+        allowRestart: Bool
+    ) async throws {
+        let stagingURL = partialURL.appendingPathExtension("response")
+        defer { try? FileManager.default.removeItem(at: stagingURL) }
+        let (response, metadata) = try await legacyDownload(
+            request: urlRequest,
+            stagingURL: stagingURL
+        )
+        _ = response
+        let disposition = try Self.downloadDisposition(
+            statusCode: metadata.statusCode,
+            headers: metadata.headers,
+            requestedOffset: initialOffset,
+            allowRestart: allowRestart
+        )
+        if disposition == .retryFromZero {
+            await coordinator.recordTelemetry(
                 id: id,
-                partialFileURL: partialURL,
-                completedBytes: completed,
-                totalBytes: Self.totalBytes(
-                    metadata: metadata,
-                    headers: metadata.headers,
-                    startingOffset: disposition == .append ? initialOffset : 0
-                ),
-                validator: Self.validator(headers: metadata.headers)
+                event: .resumeRestarted,
+                offset: initialOffset,
+                reason: "precondition_failed"
+            )
+            try? FileManager.default.removeItem(at: partialURL)
+            try await transitionToPreparingForRestart(id: id)
+            return try await transferDownload(
+                id: id,
+                request: request,
+                partialURL: partialURL,
+                initialOffset: 0,
+                validator: nil,
+                allowRestart: false
             )
         }
+        try Self.merge(stagingURL: stagingURL, partialURL: partialURL, append: disposition == .append)
+        if disposition == .append {
+            await coordinator.recordTelemetry(
+                id: id,
+                event: .resumeAccepted,
+                offset: initialOffset
+            )
+        }
+        let completed = Self.fileSize(at: partialURL)
+        try await coordinator.updateDownloadCheckpoint(
+            id: id,
+            partialFileURL: partialURL,
+            completedBytes: completed,
+            totalBytes: Self.totalBytes(
+                metadata: metadata,
+                headers: metadata.headers,
+                startingOffset: disposition == .append ? initialOffset : 0
+            ),
+            validator: Self.validator(headers: metadata.headers)
+        )
     }
 
     func runUpload(snapshot: ManagedTransferSnapshot, request: APIRequest, sourceURL: URL) async {

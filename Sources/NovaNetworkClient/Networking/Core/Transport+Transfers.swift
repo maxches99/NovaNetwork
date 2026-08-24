@@ -55,6 +55,10 @@ public extension Transport {
             let producer = Task {
                 do {
                     let urlRequest = request.urlRequest()
+                    // `URLSession.bytes(for:)` does not exist in swift-corelibs-foundation, so Linux
+                    // always takes the single-response fallback below, the same one used on
+                    // operating system versions that predate the streaming API.
+                    #if !canImport(FoundationNetworking)
                     if #available(iOS 15, macOS 12, watchOS 8, tvOS 15, *) {
                         let (bytes, response) = try await session.bytes(for: urlRequest)
                         let metadata = try Self.httpMetadata(from: response)
@@ -89,6 +93,10 @@ public extension Transport {
                         let response = try await execute(request)
                         try await Self.yieldPreserving(response.body, to: continuation)
                     }
+                    #else
+                    let response = try await execute(request)
+                    try await Self.yieldPreserving(response.body, to: continuation)
+                    #endif
                     continuation.finish()
                 } catch is CancellationError {
                     continuation.finish(throwing: NetworkError.cancelled)

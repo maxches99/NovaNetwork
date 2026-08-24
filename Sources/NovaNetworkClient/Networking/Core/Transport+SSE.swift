@@ -21,6 +21,10 @@ extension Transport: ServerSentEventTransport {
                         urlRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
                     }
 
+                    // `URLSession.bytes(for:)` does not exist in swift-corelibs-foundation, so Linux
+                    // always takes the single-response fallback below, the same one used on
+                    // operating system versions that predate the streaming API.
+                    #if !canImport(FoundationNetworking)
                     if #available(iOS 15, macOS 12, watchOS 8, tvOS 15, *) {
                         let (bytes, response) = try await session.bytes(for: urlRequest)
                         guard let httpResponse = response as? HTTPURLResponse else {
@@ -59,15 +63,11 @@ extension Transport: ServerSentEventTransport {
                             try await Self.yieldPreserving(final, to: continuation)
                         }
                     } else {
-                        let response = try await execute(request)
-                        var decoder = SSEDecoder()
-                        for element in decoder.decode(response.body) {
-                            try await Self.yieldPreserving(element, to: continuation)
-                        }
-                        if let final = decoder.flush() {
-                            try await Self.yieldPreserving(final, to: continuation)
-                        }
+                        try await singleResponseFallback(request, to: continuation)
                     }
+                    #else
+                    try await singleResponseFallback(request, to: continuation)
+                    #endif
                     continuation.finish()
                 } catch is CancellationError {
                     continuation.finish(throwing: NetworkError.cancelled)
@@ -78,6 +78,20 @@ extension Transport: ServerSentEventTransport {
                 }
             }
             continuation.onTermination = { _ in producer.cancel() }
+        }
+    }
+
+    private func singleResponseFallback(
+        _ request: APIRequest,
+        to continuation: AsyncThrowingStream<SSEParsedElement, any Error>.Continuation
+    ) async throws {
+        let response = try await execute(request)
+        var decoder = SSEDecoder()
+        for element in decoder.decode(response.body) {
+            try await Self.yieldPreserving(element, to: continuation)
+        }
+        if let final = decoder.flush() {
+            try await Self.yieldPreserving(final, to: continuation)
         }
     }
 }
