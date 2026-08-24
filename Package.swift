@@ -45,6 +45,11 @@ let package = Package(
             path: "Tests/NovaNetworkClientTests"
         ),
         .testTarget(
+            name: "NovaNetworkClientTestSupportTests",
+            dependencies: ["NovaNetworkClientTestSupport"],
+            path: "Tests/NovaNetworkClientTestSupportTests"
+        ),
+        .testTarget(
             name: "NovaNetworkCoreTests",
             dependencies: ["NovaNetworkCore"],
             path: "Tests/NovaNetworkCoreTests"

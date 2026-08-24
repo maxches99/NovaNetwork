@@ -47,6 +47,8 @@ targets: [
 ## Features
 
 - Typed `Endpoint<Response>` execution with endpoint-specific decoding.
+- `NovaNetworkClientTestSupport`: request-matching routes, chaos injection, a deterministic
+  virtual clock, and telemetry recording for testing code that uses `NovaNetworkClient`.
 - `ResponseDecoding` strategies (`decode`, `loadResponse`) for decoders that need response
   headers, including `Content-Type`-based negotiation, alongside the unchanged default
   `Decodable`/`JSONDecoder` path.
@@ -916,6 +918,65 @@ let responses = try await client.loadBatch(
     authScope: "user:42"
 )
 ```
+
+## Testing Your Code
+
+`NovaNetworkClientTestSupport` is a separate product for testing code that uses
+`NovaNetworkClient`, without a real server.
+
+```swift
+import NovaNetworkClientTestSupport
+
+let router = RoutingTransport()
+await router.register(.method(.get) && .pathPrefix("/users/"), statusCode: 200, body: userJSON)
+await router.register(.method(.post) && .path("/users")) { request in
+    NetworkResponse(statusCode: 201, headers: [:], body: request.body ?? Data())
+}
+
+let client = NetworkClient(transport: router)
+```
+
+`RoutingTransport` dispatches each request to the first registered route whose `RequestMatcher`
+matches (`.method`, `.path`, `.pathPrefix`, `.host`, `.header`, `.bodyContains`, `.url`, combined
+with `&&`/`||`); an unmatched request throws `RoutingTransportError` naming the method and URL,
+rather than hanging or returning a misleading default.
+
+For resilience testing, wrap any transport with randomized failures and latency:
+
+```swift
+let chaos = ChaosTransport(
+    wrapping: router,
+    policy: ChaosPolicy(failureRate: 0.3, delayRange: 0...200_000_000),
+    randomGenerator: TestRetryRandom(value: 0.5) // deterministic for reproducible runs
+)
+```
+
+For deterministic timing assertions, `VirtualClock` (a `RetryClock`) genuinely suspends callers
+until you explicitly advance virtual time:
+
+```swift
+let clock = VirtualClock()
+let client = NetworkClient(transport: transport, retryPolicy: policy, retryClock: clock)
+
+let task = Task { try await client.load(request: request, authScope: nil) }
+await clock.advanceToNextDeadline() // releases the first retry's backoff sleep
+```
+
+`TelemetryRecorder` records every event a client's `NetworkTelemetryHooks` emits, for asserting
+on retries, coalescing, cancellations, and other lifecycle events instead of re-deriving them
+from side effects:
+
+```swift
+let recorder = TelemetryRecorder()
+let client = NetworkClient(transport: transport, telemetryHooks: await recorder.makeHooks())
+
+_ = try await client.load(request: request, authScope: nil)
+await waitUntil { await recorder.requestEndCount() == 1 } // hooks record asynchronously
+```
+
+`MockTransport` and `ScriptedTransport` (a single fixed response, and an ordered sequence of
+responses, regardless of request content) remain available for simpler cases that don't need
+routing.
 
 ## Run Tests
 
