@@ -102,7 +102,40 @@ footer p { margin: 0; text-align: center; }.footer-links { display: flex; gap: 1
   .topbar { height: 60px; padding: 0 16px; }.brand small, .github-link { display: none; }.hero { padding: 56px 20px 60px; }.hero h1 { font-size: 43px; }.hero-lede { font-size: 16px; }.hero-actions { flex-direction: column; }.hero-stats { gap: 18px; justify-content: space-between; }.hero-code pre { padding: 20px; font-size: 11px; }.section-block, .content-main { padding: 60px 20px; }.section-heading { align-items: start; gap: 20px; }.section-heading .text-link { display: none; }.tutorial-grid { grid-template-columns: 1fr; }.tutorial-card { min-height: 260px; }.concept-band { margin: 10px 20px 65px; padding: 31px 25px; }.catalog-item { grid-template-columns: 34px 49px 1fr 19px; gap: 10px; padding: 16px 6px; }.catalog-meta { display: none; }.catalog-copy > span { display: none; }.catalog-copy strong { font-size: 16px; }.tutorial-layout { padding: 32px 20px 70px; gap: 30px; }.lesson-hero h1 { font-size: 41px; }.code-block { margin-left: -4px; margin-right: -4px; }.code-block pre { font-size: 11px; padding: 17px; }.lesson-pagination { grid-template-columns: 1fr; }.lesson-pagination .next { text-align: left; }.article-layout { padding: 50px 20px 80px; }.requirements, .next-cards, .concept-grid { grid-template-columns: 1fr; }.production-cta { padding: 30px 24px; align-items: start; flex-direction: column; } footer { padding: 28px 20px 40px; }
 }
 
-@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { transition: none !important; } }
+.lightbox-scrim { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center; padding: 34px; background: rgba(10, 17, 30, 0); backdrop-filter: blur(0px); transition: background .32s ease, backdrop-filter .32s ease; }
+.lightbox-scrim.phase-open, .lightbox-scrim.phase-opening { background: rgba(10, 17, 30, .55); backdrop-filter: blur(6px); }
+.lightbox-scrim.phase-closing { background: rgba(10, 17, 30, 0); backdrop-filter: blur(0px); }
+.lightbox-frame { position: relative; width: min(1180px, 100%); height: min(84vh, 860px); background: var(--paper); border-radius: 20px; box-shadow: 0 40px 110px rgba(10, 20, 40, .38); overflow: hidden; display: flex; flex-direction: column; will-change: transform, opacity; }
+.lightbox-toolbar { flex: 0 0 auto; display: flex; align-items: center; gap: 14px; height: 54px; padding: 0 18px; border-bottom: 1px solid var(--line); background: rgba(251, 252, 254, .95); }
+.lightbox-close { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; background: #eef2f7; color: var(--ink); font-size: 14px; border: 0; cursor: pointer; }
+.lightbox-close:hover { background: #e2e8f1; }
+.lightbox-count { color: var(--muted); font: 11px ui-monospace, monospace; letter-spacing: .05em; }
+.lightbox-arrows { margin-left: auto; display: flex; gap: 8px; }
+.lightbox-arrows button { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; background: #eef2f7; color: var(--ink); border: 0; font-size: 15px; cursor: pointer; transition: background .15s, transform .15s; }
+.lightbox-arrows button:hover { background: var(--blue); color: white; transform: translateY(-1px); }
+.lightbox-body { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 44px; overflow: hidden; animation: lightbox-content-in .38s ease both; }
+.lightbox-nav { padding: 26px 0 26px 26px; overflow: auto; }
+.lightbox-nav h2 { font-size: 19px; letter-spacing: -.025em; margin: 6px 0 0; }
+.lightbox-nav ol { list-style: none; padding: 8px 0 0; margin: 0; border-left: 1px solid var(--line); }
+.lightbox-nav li a { display: flex; gap: 11px; padding: 9px 0 9px 15px; color: var(--muted); font-size: 12px; line-height: 1.35; }
+.lightbox-nav li a:hover { color: var(--blue-dark); }
+.lightbox-nav li span { flex: 0 0 20px; height: 20px; display: grid; place-items: center; background: #eaf1f8; border-radius: 50%; color: #64758b; font-size: 10px; }
+.lightbox-content { padding: 30px 34px 50px 0; overflow: auto; }
+.lightbox-content .lesson-hero { padding: 0 0 30px; border-bottom: 1px solid var(--line); }
+.lightbox-content .lesson-hero h1 { font-size: clamp(30px, 3.4vw, 42px); }
+.lightbox-content .lesson-step { padding: 38px 0; }
+.lesson-pagination button { all: unset; box-sizing: border-box; display: flex; flex-direction: column; gap: 5px; padding: 18px; background: white; border: 1px solid var(--line); border-radius: 11px; cursor: pointer; }
+.lesson-pagination button:hover { border-color: #a9c9ef; }
+.lesson-pagination button.next { text-align: right; }
+@keyframes lightbox-content-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+@media (max-width: 900px) {
+  .lightbox-body { grid-template-columns: 1fr; }
+  .lightbox-nav { display: none; }
+  .lightbox-content { padding: 24px 22px 40px; }
+}
+
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { transition: none !important; animation: none !important; } .lightbox-frame { transform: none !important; } }
 
 /* Product landing */
 .marketing-home { overflow: hidden; }
