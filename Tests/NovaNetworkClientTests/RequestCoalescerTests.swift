@@ -525,12 +525,18 @@ struct RequestCoalescerTests {
         )
         #expect(stale == Data("v1".utf8))
 
-        let deadline = DispatchTime.now().uptimeNanoseconds + 500_000_000
-        while DispatchTime.now().uptimeNanoseconds < deadline {
-            if await transport.calls() >= 2 {
-                break
-            }
-            try? await Task.sleep(nanoseconds: 5_000_000)
+        // A second transport call proves the revalidation started. It does not prove the refreshed
+        // response reached the cache, and reading the cache in between is what used to fail here.
+        try await waitUntil("the background revalidation ran") {
+            await transport.calls() >= 2
+        }
+        try await waitUntil("the refreshed response replaced the stale one in the cache") {
+            let cached = try? await client.load(
+                request: request,
+                authScope: nil,
+                cachePolicy: .cacheFirst(maxAge: 60)
+            )
+            return cached == Data("v2".utf8)
         }
 
         let refreshed = try await client.load(
