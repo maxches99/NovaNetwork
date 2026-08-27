@@ -13,6 +13,7 @@ When multiple callers ask for the same resource at the same time, only one under
 - [Core Concepts](Sources/NovaNetworkClient/NovaNetworkClient.docc/CoreConcepts.md)
 - [Choosing an API](Sources/NovaNetworkClient/NovaNetworkClient.docc/ChoosingAnAPI.md)
 - [Declarative Endpoints (`@Endpoint` macro and OpenAPI generation)](Sources/NovaNetworkClient/NovaNetworkClient.docc/DeclarativeEndpoints.md)
+- [Record and Replay (cassettes)](Sources/NovaNetworkClient/NovaNetworkClient.docc/RecordAndReplay.md)
 - [Production Checklist](Sources/NovaNetworkClient/NovaNetworkClient.docc/ProductionChecklist.md)
 - [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md)
@@ -25,9 +26,11 @@ When multiple callers ask for the same resource at the same time, only one under
 - [NovaNetwork v2.0 DFR](docs/dfr/NOVA_NETWORK_V2_DFR.md)
 - [NovaNetwork v2.1 DFR](docs/dfr/NOVA_NETWORK_V2_1_DFR.md)
 - [NovaNetwork v2.11 DFR](docs/dfr/NOVA_NETWORK_V2_11_DFR.md)
+- [NovaNetwork v2.12 DFR](docs/dfr/NOVA_NETWORK_V2_12_DFR.md)
 - [v2.0 Traceability Pack](docs/TRACEABILITY_PACK_v2.0.md)
 - [v2.1 Traceability Pack](docs/TRACEABILITY_PACK_v2.1.md)
 - [v2.11 Traceability Pack](docs/TRACEABILITY_PACK_v2.11.md)
+- [v2.12 Traceability Pack](docs/TRACEABILITY_PACK_v2.12.md)
 - [v1.15 Traceability Pack](docs/TRACEABILITY_PACK_v1.15.md)
 - [v1.16 Traceability Pack](docs/TRACEABILITY_PACK_v1.16.md)
 - [v1.19 Traceability Pack](docs/TRACEABILITY_PACK_v1.19.md)
@@ -90,6 +93,9 @@ Generating endpoints from an OpenAPI document needs neither the trait nor the ma
 - Shared declarative runtime (`EndpointDefinition`, `EndpointRequestBuilder`,
   `EndpointParameterConvertible`) so hand-written, macro-generated, and spec-generated endpoints
   build identical requests.
+- Record and replay (`NovaNetworkCassette`): capture real exchanges into a reviewable JSON cassette
+  and replay them deterministically in tests, previews, and offline demo builds, with credentials
+  redacted before anything reaches disk.
 - Linux build gate: `NovaNetworkClient`'s Apple-only APIs (certificate pinning, mTLS, the offline
   queue's optional AES-GCM cipher) are behind explicit availability checks, and fingerprint
   hashing no longer requires `CryptoKit`, so the core client compiles on Linux (see
@@ -413,6 +419,60 @@ guessed at. Credentials from `securitySchemes` never reach generated code.
 
 A complete worked example — spec, checked-in output, and a runnable program — is in
 [`Examples/OpenAPIPetstore`](Examples/OpenAPIPetstore).
+
+## Record and Replay (v2.12)
+
+Capture real traffic once, replay it forever. A cassette is a fixture with the fidelity of the real
+exchange — the header casing, the null field, the error envelope nobody remembered — and the
+determinism of a file.
+
+```swift
+import NovaNetworkCassette
+
+try await withCassette(at: fixtureURL, upstream: Transport()) { transport in
+    let client = NetworkClient(transport: transport)
+    let user: User = try await client.load(request: request, authScope: nil)
+    #expect(user.name == "Ada")
+}
+```
+
+The first run performs the real request and writes the cassette; every run after is offline and
+deterministic. `CassetteTransport` is an ordinary `NetworkTransport`, so coalescing, caching, retry,
+middleware, and telemetry behave exactly as they do against a live server.
+
+| Mode | Upstream contacted | Use it for |
+|---|---|---|
+| `.replay` | never | tests and demo builds that must not touch the network |
+| `.record` | always | capturing a fresh recording |
+| `.recordMissing` | only for unrecorded requests | day-to-day work: record once, replay after |
+
+Matching defaults to **method plus full URL**, with query order ignored. Headers and bodies are
+available but off by default: matching a header that carries a nonce or a trace id makes every
+replay fail for a reason invisible in the file. Use `.methodAndPath`, `.includingBody`, or
+`.matchingHeaders("Accept-Language")` when the identity really is different.
+
+Repeated requests replay as **episodes** — first recording consumed first — so a polling or
+pagination sequence stays a sequence. When they run out, the default errors; `.repeatLast` keeps
+serving the final one.
+
+**Credentials never reach the file.** Redaction runs as the exchange is captured, not as the file is
+written. `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, `X-API-Key`, and
+`X-Auth-Token` are replaced by default; add your own headers, query items, or a body transform:
+
+```swift
+let redaction = CassetteRedaction.default
+    .redacting(headers: "X-Tenant-Signature")
+    .redacting(queryItems: "api_key")
+```
+
+The file is pretty-printed JSON with sorted keys, UTF-8 bodies stored as text, and no timestamps, so
+re-saving an unchanged recording produces identical bytes and a real change shows up as a real diff.
+
+`NovaNetworkCassette` is its own product depending only on `NovaNetworkCore`, so a preview or demo
+build links it without a test-support module. Only completed HTTP exchanges are recorded — a
+throwing transport is not an exchange — and streaming, SSE, and managed transfers are out of scope.
+
+A runnable end-to-end demo is in [`Examples/Cassette`](Examples/Cassette).
 
 ## Preset Quick Start (v1.15)
 

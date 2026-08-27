@@ -20,6 +20,7 @@ If you're new to the package, start with <doc:GettingStarted> or follow the inte
 - <doc:CoreConcepts>
 - <doc:ChoosingAnAPI>
 - <doc:DeclarativeEndpoints>
+- <doc:RecordAndReplay>
 - <doc:ProductionChecklist>
 - <doc:Tutorial-Table-of-Contents>
 

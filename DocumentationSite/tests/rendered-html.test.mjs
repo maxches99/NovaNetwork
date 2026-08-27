@@ -29,6 +29,7 @@ test("renders core static documentation routes", async () => {
     ["/tutorials", "Share concurrent requests"],
     ["/tutorials/offline-writes", "Queue writes offline"],
     ["/tutorials/declarative-endpoints", "Declare endpoints with a macro"],
+    ["/tutorials/record-and-replay", "Record traffic, replay it offline"],
     ["/concepts", "Request identity"],
   ]) {
     const response = await render(path);

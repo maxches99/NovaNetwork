@@ -27,6 +27,7 @@ swift test --filter NetworkingCoverageTests
 | CB-5 | Telemetry onboarding baseline | `NovaNetworkClientDiagnosticsReferenceExample` | `telemetryHooksEmitCoalescerRetryAndCancellationContracts` |
 | CB-6 | Production profile generator (DX 2.0) | `NovaNetworkClientProductionProfileExample` | `cookbookScenarioProductionProfileForOfflineFirstRequiresStore` |
 | CB-7 | Endpoints generated from an OpenAPI document | `NovaNetworkClientOpenAPIPetstoreExample` | `theCheckedInGeneratedFileMatchesWhatTheGeneratorProducesNow` |
+| CB-8 | Record a live exchange, replay it offline | `NovaNetworkClientCassetteExample` | `theFirstRunRecordsAndTheSecondRunIsOffline` |
 
 ## Run Commands
 
@@ -42,7 +43,15 @@ swift run NovaNetworkClientOfflineReplayReferenceExample
 swift run NovaNetworkClientDiagnosticsReferenceExample
 swift run NovaNetworkClientProductionProfileExample
 swift run NovaNetworkClientOpenAPIPetstoreExample
+swift run NovaNetworkClientCassetteExample
 ```
+
+### Record and replay (CB-8)
+
+`Cassette/` records one real request against a public API, prints whether the credential survived
+into the file (it does not), then replays the exchange through a transport that throws if it is ever
+called — so the second result can only have come from the recording. The first pass needs network
+access; every pass after that would work on a plane.
 
 ### OpenAPI generation (CB-7)
 

@@ -142,7 +142,7 @@ jobs:
             exit 1
           fi
 
-          SOURCE_FILES=$(find Sources/NovaNetworkClient Sources/NovaNetworkCore Sources/NovaNetworkOpenAPI -name "*.swift" -print)
+          SOURCE_FILES=$(find Sources/NovaNetworkClient Sources/NovaNetworkCore Sources/NovaNetworkOpenAPI Sources/NovaNetworkCassette -name "*.swift" -print)
           REPORT=$(xcrun llvm-cov report "${TEST_BIN}" \
             -instr-profile="${PROF_DATA}" \
             ${SOURCE_FILES})
@@ -210,12 +210,13 @@ jobs:
           swift --version
           swift --version | grep -Eq 'Swift version 6\.2\.3([.[:space:]]|$)'
 
-      - name: Build NovaNetworkClient, NovaNetworkClientTestSupport, and NovaNetworkOpenAPI
+      - name: Build the Client, Test Support, Generator, and Cassette Targets
         run: |
           swift build \
             --target NovaNetworkClient \
             --target NovaNetworkClientTestSupport \
-            --target NovaNetworkOpenAPI
+            --target NovaNetworkOpenAPI \
+            --target NovaNetworkCassette
 
   endpoint-macros-trait:
     # The @Endpoint macro lives behind the EndpointMacros package trait, so the default build never

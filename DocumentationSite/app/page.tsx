@@ -10,6 +10,7 @@ const capabilities = [
   ["05", "Realtime & transfers", "Use WebSocket, Server-Sent Events, multipart uploads, downloads, and progress APIs from the same package."],
   ["06", "Observable by design", "Inspect lifecycle events, metrics, diagnostics, and deterministic test support without replacing the client."],
   ["07", "Declarative endpoints", "Generate request construction from an annotated Swift type, or generate whole endpoint types from an OpenAPI document."],
+  ["08", "Record and replay", "Capture real traffic into a reviewable cassette and replay it in tests, previews, and offline demo builds."],
 ] as const;
 
 export default function Home() {

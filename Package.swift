@@ -12,6 +12,7 @@ let package = Package(
         .library(name: "NovaNetworkClient", targets: ["NovaNetworkClient"]),
         .library(name: "NovaNetworkClientTestSupport", targets: ["NovaNetworkClientTestSupport"]),
         .library(name: "NovaNetworkMacros", targets: ["NovaNetworkMacros"]),
+        .library(name: "NovaNetworkCassette", targets: ["NovaNetworkCassette"]),
         .library(name: "NovaNetworkOpenAPI", targets: ["NovaNetworkOpenAPI"]),
         .executable(name: "nova-openapi", targets: ["NovaNetworkOpenAPIGenerator"]),
         .plugin(name: "GenerateOpenAPIEndpoints", targets: ["GenerateOpenAPIEndpoints"]),
@@ -27,6 +28,7 @@ let package = Package(
         .executable(name: "NovaNetworkClientDiagnosticsReferenceExample", targets: ["NovaNetworkClientDiagnosticsReferenceExample"]),
         .executable(name: "NovaNetworkClientProductionProfileExample", targets: ["NovaNetworkClientProductionProfileExample"]),
         .executable(name: "NovaNetworkClientOpenAPIPetstoreExample", targets: ["NovaNetworkClientOpenAPIPetstoreExample"]),
+        .executable(name: "NovaNetworkClientCassetteExample", targets: ["NovaNetworkClientCassetteExample"]),
     ],
     traits: [
         .trait(
@@ -95,8 +97,15 @@ let package = Package(
             path: "Plugins/GenerateOpenAPIEndpoints"
         ),
         .target(
+            // Depends on the transport-neutral core alone, so a preview or demo build can link it
+            // without the umbrella client and it still compiles on Linux.
+            name: "NovaNetworkCassette",
+            dependencies: ["NovaNetworkCore"],
+            path: "Sources/NovaNetworkCassette"
+        ),
+        .target(
             name: "NovaNetworkClientTestSupport",
-            dependencies: ["NovaNetworkClient"],
+            dependencies: ["NovaNetworkClient", "NovaNetworkCassette"],
             path: "Sources/NovaNetworkClientTestSupport"
         ),
         .testTarget(
@@ -122,6 +131,11 @@ let package = Package(
                 .product(name: "SwiftSyntaxMacrosGenericTestSupport", package: "swift-syntax", condition: .when(traits: ["EndpointMacros"])),
             ],
             path: "Tests/NovaNetworkMacrosTests"
+        ),
+        .testTarget(
+            name: "NovaNetworkCassetteTests",
+            dependencies: ["NovaNetworkCassette", "NovaNetworkClient"],
+            path: "Tests/NovaNetworkCassetteTests"
         ),
         .testTarget(
             name: "NovaNetworkOpenAPITests",
@@ -189,6 +203,11 @@ let package = Package(
             name: "NovaNetworkPetstoreGenerated",
             dependencies: ["NovaNetworkCore"],
             path: "Examples/OpenAPIPetstore/Generated"
+        ),
+        .executableTarget(
+            name: "NovaNetworkClientCassetteExample",
+            dependencies: ["NovaNetworkClient", "NovaNetworkCassette"],
+            path: "Examples/Cassette"
         ),
         .executableTarget(
             name: "NovaNetworkClientOpenAPIPetstoreExample",
