@@ -30,6 +30,26 @@ final class DiagnosticsPanelUITests: XCTestCase {
         add(shot)
     }
 
+    /// The timeline draws the same snapshot against one clock instead of one row per request.
+    func testTheTimelinePutsEveryRequestOnOneClock() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--autorun"]
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["GET /flaky"].waitForExistence(timeout: 60))
+
+        app.buttons["Timeline"].tap()
+
+        XCTAssertTrue(app.staticTexts["0 ms"].waitForExistence(timeout: 5), "the ruler is missing")
+        XCTAssertTrue(app.staticTexts["GET /flaky"].exists, "the retried request has no lane")
+        XCTAssertTrue(app.staticTexts["GET /slow"].exists, "the in-flight request has no lane")
+
+        let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        shot.name = "timeline"
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
     /// Switching the backend rewrites the paths the scenarios will request. No traffic is produced,
     /// so this stays offline even though the live backend is what it selects.
     func testSwitchingToLiveRewritesTheScenarioPaths() {
