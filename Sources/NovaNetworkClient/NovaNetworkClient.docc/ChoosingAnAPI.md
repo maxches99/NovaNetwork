@@ -20,6 +20,7 @@ Start with the smallest API that matches the shape and lifetime of your operatio
 | Foreground upload or download progress | ``NetworkClient/upload(request:fromFile:authScope:options:)`` or ``NetworkClient/download(request:to:policy:authScope:options:)`` |
 | Durable, resumable transfer | ``ManagedTransferManager`` |
 | Transport-neutral models only | Import `NovaNetworkCore` |
+| Deterministic tests, previews, or an offline demo build | `CassetteTransport` -- see <doc:RecordAndReplay> |
 
 ### Prefer typed endpoints for repeated operations
 
@@ -45,6 +46,7 @@ from an OpenAPI document. Both produce ordinary `Endpoint` conformances, so noth
 ## See Also
 
 - <doc:DeclarativeEndpoints>
+- <doc:RecordAndReplay>
 - <doc:ModelRequestsAsEndpoints>
 - ``NetworkClientConfiguration``
 - ``NetworkClientPreset``

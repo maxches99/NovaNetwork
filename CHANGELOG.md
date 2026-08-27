@@ -9,6 +9,9 @@ convention; not every one is a tagged release — see [Releases](#releases).
 
 ## Unreleased
 
+- [2.12](docs/WHATS_NEW_v2.12.md) — Record and replay: capture real exchanges into a reviewable JSON
+  cassette and replay them deterministically in tests, previews, and offline demo builds, with
+  credentials redacted before anything reaches disk. New standalone `NovaNetworkCassette` product.
 - [2.11](docs/WHATS_NEW_v2.11.md) — Declarative endpoints: the opt-in `@Endpoint` macro (behind the
   `EndpointMacros` SwiftPM trait, so the default package graph still resolves zero dependencies),
   an OpenAPI 3.0/3.1 generator exposed as `swift package nova-openapi`, and the shared

@@ -277,6 +277,58 @@ struct GetPetPhotos: PetstoreAPI {
 )`, note: "Already have an OpenAPI document? swift package nova-openapi generates the same kind of types from it, with no macro and no trait required." },
     ],
   },
+  {
+    slug: "record-and-replay",
+    title: "Record traffic, replay it offline",
+    summary: "Capture a real exchange once and turn it into a deterministic fixture.",
+    eyebrow: "Testing",
+    duration: "10 min",
+    level: "Beginner",
+    symbol: "\u25C9",
+    tone: "mint",
+    outcome: "A committed cassette that replays the real payload with the network taken away.",
+    steps: [
+      { title: "Wrap the scope in a cassette", explanation: "The first run performs the real request and writes the file. Every run after that replays it, so the test is offline and deterministic.", code: `import NovaNetworkCassette
+
+try await withCassette(at: fixtureURL, upstream: Transport()) { transport in
+    let client = NetworkClient(transport: transport)
+    let user: User = try await client.load(
+        request: request,
+        authScope: nil
+    )
+    #expect(user.name == "Ada")
+}` },
+      { title: "Check what was written", explanation: "Bodies are stored as text, keys are sorted, and there are no timestamps, so the file reads like the payload and a real change shows up as a real diff.", code: `{
+  "interactions" : [
+    {
+      "request" : {
+        "headers" : { "Authorization" : "<redacted>" },
+        "method" : "GET",
+        "url" : "https://api.example.com/users/1"
+      },
+      "response" : {
+        "body" : { "text" : "{\\"id\\":1,\\"name\\":\\"Ada\\"}" },
+        "status" : 200
+      }
+    }
+  ],
+  "version" : 1
+}` },
+      { title: "Tighten matching only where it matters", explanation: "Method and full URL match by default, query order ignored. Headers and bodies stay out unless you ask, because a nonce or trace id would break every replay invisibly.", code: `// A cache-busting parameter you do not want to match on:
+CassetteMatchRule.methodAndPath
+
+// A search endpoint that varies by payload:
+CassetteMatchRule.includingBody
+
+// Content negotiation that really is part of the identity:
+CassetteMatchRule.default.matchingHeaders("Accept-Language")` },
+      { title: "Replay a sequence, not a constant", explanation: "Repeated requests replay as episodes, in recorded order, so a polling or pagination flow stays a flow.", code: `let transport = CassetteTransport(
+    mode: .replay,
+    cassette: try Cassette.load(from: url),
+    repeatPolicy: .repeatLast
+)`, note: "Redaction runs as the exchange is captured, not when the file is written, so a token never reaches a value that could be serialized somewhere else." },
+    ],
+  },
 ];
 
 export function tutorialForSlug(slug: string) {
