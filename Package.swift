@@ -13,6 +13,7 @@ let package = Package(
         .library(name: "NovaNetworkClientTestSupport", targets: ["NovaNetworkClientTestSupport"]),
         .library(name: "NovaNetworkMacros", targets: ["NovaNetworkMacros"]),
         .library(name: "NovaNetworkCassette", targets: ["NovaNetworkCassette"]),
+        .library(name: "NovaNetworkAuth", targets: ["NovaNetworkAuth"]),
         .library(name: "NovaNetworkOpenAPI", targets: ["NovaNetworkOpenAPI"]),
         .executable(name: "nova-openapi", targets: ["NovaNetworkOpenAPIGenerator"]),
         .plugin(name: "GenerateOpenAPIEndpoints", targets: ["GenerateOpenAPIEndpoints"]),
@@ -28,6 +29,7 @@ let package = Package(
         .executable(name: "NovaNetworkClientDiagnosticsReferenceExample", targets: ["NovaNetworkClientDiagnosticsReferenceExample"]),
         .executable(name: "NovaNetworkClientProductionProfileExample", targets: ["NovaNetworkClientProductionProfileExample"]),
         .executable(name: "NovaNetworkClientOpenAPIPetstoreExample", targets: ["NovaNetworkClientOpenAPIPetstoreExample"]),
+        .executable(name: "NovaNetworkClientAuthenticationExample", targets: ["NovaNetworkClientAuthenticationExample"]),
         .executable(name: "NovaNetworkClientCassetteExample", targets: ["NovaNetworkClientCassetteExample"]),
         .executable(name: "NovaNetworkClientDiagnosticsExample", targets: ["NovaNetworkClientDiagnosticsExample"]),
     ],
@@ -110,6 +112,11 @@ let package = Package(
             path: "Sources/NovaNetworkDiagnostics"
         ),
         .target(
+            name: "NovaNetworkAuth",
+            dependencies: ["NovaNetworkClient"],
+            path: "Sources/NovaNetworkAuth"
+        ),
+        .target(
             name: "NovaNetworkClientTestSupport",
             dependencies: ["NovaNetworkClient", "NovaNetworkCassette"],
             path: "Sources/NovaNetworkClientTestSupport"
@@ -147,6 +154,11 @@ let package = Package(
             name: "NovaNetworkDiagnosticsTests",
             dependencies: ["NovaNetworkDiagnostics", "NovaNetworkClientTestSupport"],
             path: "Tests/NovaNetworkDiagnosticsTests"
+        ),
+        .testTarget(
+            name: "NovaNetworkAuthTests",
+            dependencies: ["NovaNetworkAuth"],
+            path: "Tests/NovaNetworkAuthTests"
         ),
         .testTarget(
             name: "NovaNetworkOpenAPITests",
@@ -224,6 +236,11 @@ let package = Package(
             name: "NovaNetworkClientDiagnosticsExample",
             dependencies: ["NovaNetworkClient", "NovaNetworkDiagnostics"],
             path: "Examples/Diagnostics"
+        ),
+        .executableTarget(
+            name: "NovaNetworkClientAuthenticationExample",
+            dependencies: ["NovaNetworkClient", "NovaNetworkAuth"],
+            path: "Examples/Authentication"
         ),
         .executableTarget(
             name: "NovaNetworkClientOpenAPIPetstoreExample",
