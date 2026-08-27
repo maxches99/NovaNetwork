@@ -61,6 +61,18 @@ public struct NetworkClientConfiguration: Sendable {
     /// supply its own. `nil` uses `JSONResponseDecoding(decoder: decoder)`.
     public var responseDecoding: (any ResponseDecoding)?
 
+    /// What to do with a request depending on the kind of network path it would go out on.
+    ///
+    /// `nil`, the default, sends everything: the client does not look at the path at all. It needs
+    /// `networkPathMonitor` as well — a policy with nothing reporting the path has nothing to
+    /// decide from.
+    public var networkPathPolicy: NetworkPathPolicy?
+
+    /// Where the current network path comes from.
+    ///
+    /// On Apple platforms `SystemNetworkPathMonitor()` reads it from `Network.framework`.
+    public var networkPathMonitor: (any NetworkPathMonitor)?
+
     /// Creates a configuration with the same defaults as `NetworkClient.init`.
     public init(
         transport: any NetworkTransport = Transport(),
@@ -83,7 +95,9 @@ public struct NetworkClientConfiguration: Sendable {
         httpAuthRefreshProvider: HTTPAuthRefreshProvider? = nil,
         httpAuthRefreshPolicy: HTTPAuthRefreshPolicy = .default,
         decoder: JSONDecoder = JSONDecoder(),
-        responseDecoding: (any ResponseDecoding)? = nil
+        responseDecoding: (any ResponseDecoding)? = nil,
+        networkPathPolicy: NetworkPathPolicy? = nil,
+        networkPathMonitor: (any NetworkPathMonitor)? = nil
     ) {
         self.transport = transport
         self.cancellationPolicy = cancellationPolicy
@@ -106,6 +120,8 @@ public struct NetworkClientConfiguration: Sendable {
         self.httpAuthRefreshPolicy = httpAuthRefreshPolicy
         self.decoder = decoder
         self.responseDecoding = responseDecoding
+        self.networkPathPolicy = networkPathPolicy
+        self.networkPathMonitor = networkPathMonitor
     }
 }
 

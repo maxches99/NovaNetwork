@@ -9,6 +9,11 @@ convention; not every one is a tagged release — see [Releases](#releases).
 
 ## Unreleased
 
+- [3.3](docs/WHATS_NEW_v3.3.md) — Network path policies: decide what to send from the *kind* of path,
+  not only from whether there is one. Interfaces, expense, and Low Data Mode become send, defer, or
+  fail, with an `isEssential` escape hatch so a sign-in is never the thing that gets held back.
+  Deferral reaches the offline queue that already exists rather than a second one beside it. Off by
+  default; `Network.framework` is behind `canImport`.
 - [3.1](docs/WHATS_NEW_v3.1.md) — A trace you can read: every request on one clock with a readable
   ruler and a List/Timeline switch in the panel, a HAR 1.2 reader that accepts files from any
   producer and restores attempts, coalescing, and cache outcome from our own exports,

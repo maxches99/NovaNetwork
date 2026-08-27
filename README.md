@@ -1230,6 +1230,45 @@ let inFlight = await client.inFlightRequests()
 print(inFlight.map(\.key))
 ```
 
+## Network Path Policies (v3.3)
+
+Reachability answers one bit: can we reach anything. That bit cannot tell a metered hotspot from
+home Wi-Fi, so it cannot decide whether to start a 40 MB upload — and a phone with Low Data Mode on
+is still "connected".
+
+```swift
+var configuration = NetworkClientConfiguration()
+configuration.networkPathMonitor = SystemNetworkPathMonitor()   // reads Network.framework
+configuration.networkPathPolicy = .respectMeteredPaths
+```
+
+Off by default: with no policy the client never looks at the path.
+
+Three answers rather than two. `send` goes now, `fail` does not go and is not kept, and
+`deferUntilPathImproves` does not go now but is kept — reaching the **existing** offline queue,
+because a deferral is reported as the `URLError` that queue already recognises. A failure carries
+`NetworkPathRestrictionError`, which it does not, so it propagates.
+
+```swift
+try await client.load(request: signIn, authScope: nil, options: .init(isEssential: true))
+```
+
+Essential requests pass a metered or constrained path — a policy that also blocked the sign-in would
+be a policy nobody could adopt. And Low Data Mode outranks the cost guess: `isConstrained` is the
+user saying "use less data here", `isExpensive` is an inference about the link.
+
+`SystemNetworkPathMonitor` translates `NWPath` and decides nothing, so policies stay testable on a
+machine with no cellular interface:
+
+```swift
+configuration.networkPathMonitor = StaticNetworkPathMonitor(
+    NetworkPath(status: .satisfied, interfaces: [.cellular], isExpensive: true)
+)
+```
+
+The policy is consulted once, when the request starts; see
+[What's New 3.3](docs/WHATS_NEW_v3.3.md) for the rest of the edges.
+
 ## Benchmark Baseline Check
 
 ```bash

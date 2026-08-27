@@ -28,6 +28,12 @@ public struct RequestExecutionOptions: Sendable {
     public let rateLimitPolicy: RateLimitPolicy?
     public let idempotencyPolicy: IdempotencyPolicy?
     public let offlineQueuePolicy: OfflineQueuePolicy
+    /// Whether this request must go out whatever the network path looks like.
+    ///
+    /// A sign-in, a token refresh, a payment confirmation. `NetworkPathPolicy` lets essential
+    /// requests through a metered or constrained path; a policy that also blocked the login would
+    /// be a policy nobody could adopt.
+    public let isEssential: Bool
 
     public init(
         coalescerLimitsOverride: RequestCoalescer<NetworkResponse, NetworkError>.Limits? = nil,
@@ -38,7 +44,8 @@ public struct RequestExecutionOptions: Sendable {
         circuitBreakerPolicy: CircuitBreakerPolicy? = nil,
         rateLimitPolicy: RateLimitPolicy? = nil,
         idempotencyPolicy: IdempotencyPolicy? = nil,
-        offlineQueuePolicy: OfflineQueuePolicy = .disabled
+        offlineQueuePolicy: OfflineQueuePolicy = .disabled,
+        isEssential: Bool = false
     ) {
         self.coalescerLimitsOverride = coalescerLimitsOverride
         self.priority = priority
@@ -49,5 +56,6 @@ public struct RequestExecutionOptions: Sendable {
         self.rateLimitPolicy = rateLimitPolicy
         self.idempotencyPolicy = idempotencyPolicy
         self.offlineQueuePolicy = offlineQueuePolicy
+        self.isEssential = isEssential
     }
 }

@@ -28,6 +28,8 @@ public final class NetworkClient: Sendable {
     let offlineQueueEventHub = OfflineQueueEventHub()
     private let circuitBreakerStore = CircuitBreakerStore()
     private let rateLimiter = KeyRateLimiter()
+    let configuredNetworkPathPolicy: NetworkPathPolicy?
+    let configuredNetworkPathMonitor: (any NetworkPathMonitor)?
     private let runtimePolicyStore = RuntimePolicyStore()
     private let lifetime = NetworkClientLifetime()
 
@@ -148,6 +150,8 @@ public final class NetworkClient: Sendable {
         self.httpAuthRefreshCoordinator = HTTPAuthRefreshCoordinator(
             telemetry: telemetryHooks?.onHTTPAuthRefresh
         )
+        self.configuredNetworkPathPolicy = configuration.networkPathPolicy
+        self.configuredNetworkPathMonitor = configuration.networkPathMonitor
         self.httpExecutionPipeline = DefaultNetworkClientHTTPExecutionPipeline(
             transport: transport,
             retryPolicy: retryPolicy,
@@ -1046,6 +1050,10 @@ public final class NetworkClient: Sendable {
             mode: options.coalescingMode,
             dedupeTTLSeconds: coalescingTTL
         )
+
+        // Before the rate limiter, because the cheapest request is the one that never starts, and
+        // because a path the policy has ruled out should not consume a rate-limit token either.
+        try await enforceNetworkPathPolicy(isEssential: options.isEssential)
 
         if let rateLimitPolicy = options.rateLimitPolicy,
            let retryAfter = await rateLimiter.acquire(key: key, policy: rateLimitPolicy) {
