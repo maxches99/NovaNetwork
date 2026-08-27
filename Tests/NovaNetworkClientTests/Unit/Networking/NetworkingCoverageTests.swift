@@ -773,7 +773,17 @@ struct NetworkingCoverageTests {
             _ = try await transport.execute(APIRequest(method: .get, url: URL(string: "https://example.com/cancel")!))
             Issue.record("Expected cancelled transport")
         } catch let error as NetworkError {
+            // The two Foundations disagree about what reaches the transport, and both answers are
+            // defensible, so both are pinned rather than one of them being skipped. Apple's
+            // URLSession wraps an error thrown by a URLProtocol before handing it back, so the
+            // CancellationError arrives opaque and falls through to `.transport`.
+            // swift-corelibs-foundation propagates it unwrapped, so the transport recognises it for
+            // what it is.
+            #if canImport(Darwin)
             #expect(error.failureReason == .transport)
+            #else
+            #expect(error.failureReason == .cancelled)
+            #endif
         } catch {
             Issue.record("Unexpected error type")
         }

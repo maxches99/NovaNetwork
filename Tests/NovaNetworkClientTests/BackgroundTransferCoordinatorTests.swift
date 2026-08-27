@@ -160,7 +160,7 @@ struct BackgroundTransferCoordinatorTests {
 #endif
     }
 
-    @Test
+    @Test(.enabled(if: PlatformSupport.hasAppleURLSessionBehaviour, PlatformSupport.urlSessionReason))
     func scheduleDownloadRegistersJournalTaskAndReconciles() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -197,7 +197,7 @@ struct BackgroundTransferCoordinatorTests {
         #expect(restored.snapshots.map(\.id) == [id])
     }
 
-    @Test
+    @Test(.enabled(if: PlatformSupport.hasAppleURLSessionBehaviour, PlatformSupport.urlSessionReason))
     func scheduleUploadRegistersJournalAndAttachesTask() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

@@ -20,6 +20,16 @@ convention; not every one is a tagged release — see [Releases](#releases).
 
   Then it earned its keep: the first thing it found once it could run was the `replaceItemAt` bug
   below — a real behavioural difference, in the code that decides whether queued writes survive.
+  Fixing it took four more assertions with it.
+
+  What remains is honest about its own limits. Eleven managed and background transfer tests are
+  **skipped on Linux with a stated reason** rather than deleted, because they depend on Apple's
+  `URLSession` behaviour — ranged and resumed requests reaching a `URLProtocol` double, responses
+  arriving in more than one chunk, and background sessions, which do not exist there at all. They
+  appear as skips in the output, so the gap is visible rather than absent. One test now pins *both*
+  platforms instead of one: an error thrown from a `URLProtocol` reaches the transport wrapped on
+  Apple and unwrapped on Linux, so it maps to `transport` there and `cancelled` here, and both are
+  asserted.
 - **Staged files are published with `rename(2)`, not `FileManager.replaceItemAt`.** On
   swift-corelibs-foundation `replaceItemAt` can remove the destination and leave nothing in its
   place, which is how an offline queue holding one entry came back holding none. The same call sat

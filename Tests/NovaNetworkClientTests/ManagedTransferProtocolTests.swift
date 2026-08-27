@@ -181,7 +181,7 @@ private func terminalSnapshot(from handle: ManagedTransferHandle) async -> Manag
 
 @Suite(.serialized)
 struct ManagedTransferProtocolTests {
-    @Test
+    @Test(.enabled(if: PlatformSupport.hasAppleURLSessionBehaviour, PlatformSupport.urlSessionReason))
     func rangeDownloadAppendsPartialBytesAndUsesIfRange() async throws {
         resetManagedProtocol()
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -227,7 +227,7 @@ struct ManagedTransferProtocolTests {
         #expect(ManagedTransferURLProtocol.requests.first?.value(forHTTPHeaderField: "If-Range") == "v1")
     }
 
-    @Test
+    @Test(.enabled(if: PlatformSupport.hasAppleURLSessionBehaviour, PlatformSupport.urlSessionReason))
     func serverIgnoringRangeReplacesPartialInsteadOfDuplicatingBytes() async throws {
         resetManagedProtocol()
         ManagedTransferURLProtocol.downloadBehavior = .ignoreRange
@@ -252,7 +252,7 @@ struct ManagedTransferProtocolTests {
         #expect(try Data(contentsOf: destination) == ManagedTransferURLProtocol.payload)
     }
 
-    @Test
+    @Test(.enabled(if: PlatformSupport.hasAppleURLSessionBehaviour, PlatformSupport.urlSessionReason))
     func invalidContentRangeFailsWithoutPublishingDestination() async throws {
         resetManagedProtocol()
         ManagedTransferURLProtocol.downloadBehavior = .invalidRange
@@ -279,7 +279,7 @@ struct ManagedTransferProtocolTests {
         #expect(!FileManager.default.fileExists(atPath: destination.path))
     }
 
-    @Test
+    @Test(.enabled(if: PlatformSupport.hasAppleURLSessionBehaviour, PlatformSupport.urlSessionReason))
     func preconditionFailureRetriesOnceFromZero() async throws {
         resetManagedProtocol()
         ManagedTransferURLProtocol.downloadBehavior = .preconditionFailedOnce
@@ -305,7 +305,7 @@ struct ManagedTransferProtocolTests {
         #expect(ManagedTransferURLProtocol.requests.last?.value(forHTTPHeaderField: "Range") == nil)
     }
 
-    @Test
+    @Test(.enabled(if: PlatformSupport.hasAppleURLSessionBehaviour, PlatformSupport.urlSessionReason))
     func checksumMismatchRemovesPartialAndEmitsFailureOnly() async throws {
         resetManagedProtocol()
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

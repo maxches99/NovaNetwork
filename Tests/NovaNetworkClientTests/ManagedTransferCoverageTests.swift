@@ -285,7 +285,7 @@ extension ManagedTransferProtocolTests {
         }
     }
 
-    @Test
+    @Test(.enabled(if: PlatformSupport.hasAppleURLSessionBehaviour, PlatformSupport.urlSessionReason))
     func replacePolicyOverwritesExistingDestination() async throws {
         resetManagedProtocol(payload: Data("replacement-body".utf8))
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -306,7 +306,7 @@ extension ManagedTransferProtocolTests {
         #expect(try Data(contentsOf: destination) == ManagedTransferURLProtocol.payload)
     }
 
-    @Test
+    @Test(.enabled(if: PlatformSupport.hasAppleURLSessionBehaviour, PlatformSupport.urlSessionReason))
     func disabledResumeDiscardsExistingPartialFile() async throws {
         resetManagedProtocol()
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -331,7 +331,7 @@ extension ManagedTransferProtocolTests {
         #expect(try Data(contentsOf: destination) == ManagedTransferURLProtocol.payload)
     }
 
-    @Test
+    @Test(.enabled(if: PlatformSupport.hasAppleURLSessionBehaviour, PlatformSupport.urlSessionReason))
     func resumeDownloadFromSuspendedStateTransitionsThroughResuming() async throws {
         resetManagedProtocol()
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -362,7 +362,7 @@ extension ManagedTransferProtocolTests {
         #expect(try Data(contentsOf: destination) == ManagedTransferURLProtocol.payload)
     }
 
-    @Test
+    @Test(.enabled(if: PlatformSupport.hasAppleURLSessionBehaviour, PlatformSupport.urlSessionReason))
     func largePayloadDownloadFlushesCheckpointsAcrossMultipleBufferedWrites() async throws {
         let payload = Data((0..<200_000).map { UInt8($0 % 251) })
         resetManagedProtocol(payload: payload)
