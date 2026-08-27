@@ -1,4 +1,6 @@
+#if canImport(Darwin)
 import Darwin.Mach
+#endif
 import Foundation
 import NovaNetworkClient
 
@@ -654,6 +656,12 @@ private extension URL {
     }
 }
 
+/// The process's memory footprint, on the platforms that can report it.
+///
+/// `task_info` is Mach, so on Linux this returns `nil` and the benchmark prints
+/// `allocated_delta_bytes=unknown` -- which the allocation budget already treats as absent rather
+/// than as zero.
+#if canImport(Darwin)
 private func currentMemoryFootprintBytes() -> UInt64? {
     var info = task_vm_info_data_t()
     var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
@@ -665,6 +673,9 @@ private func currentMemoryFootprintBytes() -> UInt64? {
     guard result == KERN_SUCCESS else { return nil }
     return info.phys_footprint
 }
+#else
+private func currentMemoryFootprintBytes() -> UInt64? { nil }
+#endif
 
 private func memoryDeltaBytes(before: UInt64?, after: UInt64?) -> UInt64? {
     guard let before, let after, after >= before else { return nil }

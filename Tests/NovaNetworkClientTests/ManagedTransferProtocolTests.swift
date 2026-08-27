@@ -114,6 +114,12 @@ final class ManagedTransferURLProtocol: URLProtocol {
 
 /// Responds after a short delay so a transfer stays genuinely in-flight long enough for a test to
 /// cancel it before the mock response arrives.
+/// Carries a value across a `@Sendable` boundary on the author's word.
+final class UncheckedSendableBox<Value>: @unchecked Sendable {
+    let value: Value
+    init(_ value: Value) { self.value = value }
+}
+
 final class DelayedURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var payload = Data("delayed".utf8)
     nonisolated(unsafe) static var delaySeconds: Double = 0.3
@@ -124,16 +130,22 @@ final class DelayedURLProtocol: URLProtocol, @unchecked Sendable {
     override func startLoading() {
         let payload = Self.payload
         let url = request.url!
-        DispatchQueue.global().asyncAfter(deadline: .now() + Self.delaySeconds) { [self] in
+        // The class is already @unchecked Sendable, but capturing `self` directly in a @Sendable
+        // closure is rejected on Linux. Passing it through a box states the same assumption in a
+        // way both compilers accept.
+        let box = UncheckedSendableBox(self)
+        DispatchQueue.global().asyncAfter(deadline: .now() + Self.delaySeconds) {
+            let protocolInstance = box.value
             let response = HTTPURLResponse(
                 url: url,
                 statusCode: 200,
                 httpVersion: "HTTP/1.1",
                 headerFields: ["Content-Length": "\(payload.count)"]
             )!
-            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: payload)
-            client?.urlProtocolDidFinishLoading(self)
+            let client = protocolInstance.client
+            client?.urlProtocol(protocolInstance, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(protocolInstance, didLoad: payload)
+            client?.urlProtocolDidFinishLoading(protocolInstance)
         }
     }
 

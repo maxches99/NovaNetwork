@@ -201,6 +201,8 @@ struct OfflineQueueCoverageTests {
         #expect(afterReady[0].receipt.queueID == first.queueID)
     }
 
+// AES-GCM encryption at rest is CryptoKit-only, and so are the tests that exercise it.
+#if canImport(CryptoKit)
     @Test
     func diskOfflineWriteStoreEncryptedRoundTripAndLegacyReadCompatibility() async throws {
         let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -237,7 +239,10 @@ struct OfflineQueueCoverageTests {
         let snapshot = await restoredEncrypted.snapshot(now: now.addingTimeInterval(2))
         #expect(snapshot.count == 2)
     }
+#endif
 
+// AES-GCM encryption at rest is CryptoKit-only, and so are the tests that exercise it.
+#if canImport(CryptoKit)
     @Test
     func diskOfflineWriteStoreKeepsEncryptedEntriesWhenKeyUnavailable() async throws {
         let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -263,7 +268,10 @@ struct OfflineQueueCoverageTests {
         #expect(recoveredSnapshot.count == 1)
         #expect(recoveredSnapshot[0].receipt.requestKey == "k-encrypted")
     }
+#endif
 
+// AES-GCM encryption at rest is CryptoKit-only, and so are the tests that exercise it.
+#if canImport(CryptoKit)
     @Test
     func diskOfflineWriteStoreSkipsUnknownEncryptionVersionWithoutDeletingEntry() async throws {
         let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -287,6 +295,7 @@ struct OfflineQueueCoverageTests {
         #expect(snapshot.isEmpty)
         #expect(FileManager.default.fileExists(atPath: fileURL.path))
     }
+#endif
 
     @Test
     func diskOfflineWriteStoreReadsOlderSchemaWithForwardCompatibility() async throws {
@@ -304,6 +313,8 @@ struct OfflineQueueCoverageTests {
         #expect(snapshot[0].receipt.requestKey == "legacy-schema")
     }
 
+// AES-GCM encryption at rest is CryptoKit-only, and so are the tests that exercise it.
+#if canImport(CryptoKit)
     @Test
     func diskOfflineWriteStoreRotateEncryptionRewritesEntriesWithNewVersion() async throws {
         let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -344,6 +355,7 @@ struct OfflineQueueCoverageTests {
         let snapshot = await latestReader.snapshot(now: now.addingTimeInterval(6))
         #expect(snapshot.count == 1)
     }
+#endif
 
     @Test
     func diskOfflineWriteStoreRecoveryReportCapturesPartialCorruption() async throws {

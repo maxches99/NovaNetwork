@@ -323,6 +323,8 @@ extension E2ECoverageTests {
         #expect(await dropClient.offlineQueueDepth() == 0)
     }
 
+// AES-GCM encryption at rest is CryptoKit-only, and so are the tests that exercise it.
+#if canImport(CryptoKit)
     @Test
     func e2eEncryptedOfflineStoreRoundTripAndKeyUnavailableRecovery() async throws {
         guard e2eEnabled() else { return }
@@ -363,6 +365,7 @@ extension E2ECoverageTests {
         )
         #expect(await recoveredClient.offlineQueueDepth() == 1)
     }
+#endif
 
     @Test
     func e2eTelemetryOfflineQueueResultTypesIncludeNewTerminalValues() async throws {

@@ -142,8 +142,11 @@ struct BackgroundTransferCoordinatorTests {
         BackgroundTransferCoordinator.applyNetworkPolicy(policy, to: &request)
 
         #expect(!request.allowsCellularAccess)
+#if canImport(Darwin)
+        // These two are Apple-only properties of URLRequest; swift-corelibs-foundation has neither.
         #expect(!request.allowsExpensiveNetworkAccess)
         #expect(!request.allowsConstrainedNetworkAccess)
+#endif
 
 #if os(iOS) || os(macOS)
         let coordinator = BackgroundTransferCoordinator()
