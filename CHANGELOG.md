@@ -9,6 +9,11 @@ convention; not every one is a tagged release — see [Releases](#releases).
 
 ## Unreleased
 
+- [3.4](docs/WHATS_NEW_v3.4.md) — Sharing the offline queue across processes: App Group container
+  resolution that names the entitlement when it is missing, a non-blocking `flock`-based
+  cross-process lock, and `CoordinatedOfflineWriteStore`, a decorator that takes the lock around any
+  `OfflineWriteStore` so an app and its share extension can use one queue without writing over each
+  other. Opt-in; nothing changes for a client that does not wrap its store.
 - [3.3](docs/WHATS_NEW_v3.3.md) — Network path policies: decide what to send from the *kind* of path,
   not only from whether there is one. Interfaces, expense, and Low Data Mode become send, defer, or
   fail, with an `isEssential` escape hatch so a sign-in is never the thing that gets held back.
