@@ -383,15 +383,25 @@ struct DiagnosticsPanelStateTests {
 
         let segments = DiagnosticsPanelState.timeline(for: retried)
 
+        // 500 ms total: attempt 1 works for 100 ms, 200 ms of backoff follows, attempt 2 starts at
+        // 300 ms. The bars must not overlap -- drawing the wait as part of the work is the one thing
+        // a waterfall must not do.
         #expect(segments.count == 3)
         #expect(segments[0].label == "Attempt 1")
         #expect(segments[0].startFraction == 0)
-        #expect(abs(segments[0].widthFraction - 0.6) < 0.01)
+        #expect(abs(segments[0].widthFraction - 0.2) < 0.01, "attempt 1 ends where the backoff starts")
         #expect(segments[1].label == "Backoff 200 ms")
         #expect(segments[1].isWait)
         #expect(abs(segments[1].startFraction - 0.2) < 0.01)
+        #expect(abs(segments[1].widthFraction - 0.4) < 0.01)
         #expect(segments[2].label == "Attempt 2")
         #expect(abs(segments[2].startFraction - 0.6) < 0.01)
+        #expect(abs(segments[2].widthFraction - 0.4) < 0.01)
+
+        // No segment may start before the one before it ends.
+        for (earlier, later) in zip(segments, segments.dropFirst()) {
+            #expect(later.startFraction + 0.001 >= earlier.startFraction + earlier.widthFraction)
+        }
     }
 
     @Test

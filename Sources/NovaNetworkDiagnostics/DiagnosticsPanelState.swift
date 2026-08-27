@@ -116,33 +116,36 @@ public struct DiagnosticsPanelState: Sendable, Equatable {
 
         for (index, attempt) in ordered.enumerated() {
             let offset = attempt.startedAt.timeIntervalSince(start) * 1000
-            let next = index + 1 < ordered.count
-                ? ordered[index + 1].startedAt.timeIntervalSince(start) * 1000
-                : total
-            let width = max(next - offset, 0)
+            let isLast = index + 1 >= ordered.count
+            let nextStart = isLast ? total : ordered[index + 1].startedAt.timeIntervalSince(start) * 1000
+            let nextDelay = isLast ? 0 : (ordered[index + 1].retryDelayMilliseconds ?? 0)
 
-            if let delay = attempt.retryDelayMilliseconds, delay > 0 {
-                let waitStart = max(offset - delay, 0)
-                segments.append(
-                    TimelineSegment(
-                        id: segments.count,
-                        label: String(format: "Backoff %.0f ms", delay),
-                        startFraction: min(waitStart / total, 1),
-                        widthFraction: min(delay / total, 1),
-                        isWait: true
-                    )
-                )
-            }
+            // An attempt ends where its successor's backoff begins, not where the successor starts.
+            // Running the bar all the way to the next attempt would draw the wait as part of the
+            // work, which is exactly the thing a waterfall exists to tell apart.
+            let attemptEnd = max(min(nextStart - nextDelay, nextStart), offset)
 
             segments.append(
                 TimelineSegment(
                     id: segments.count,
                     label: "Attempt \(attempt.number)",
                     startFraction: min(offset / total, 1),
-                    widthFraction: min(width / total, 1),
+                    widthFraction: min(max(attemptEnd - offset, 0) / total, 1),
                     isWait: false
                 )
             )
+
+            if nextDelay > 0 {
+                segments.append(
+                    TimelineSegment(
+                        id: segments.count,
+                        label: String(format: "Backoff %.0f ms", nextDelay),
+                        startFraction: min(attemptEnd / total, 1),
+                        widthFraction: min(max(nextStart - attemptEnd, 0) / total, 1),
+                        isWait: true
+                    )
+                )
+            }
         }
 
         return segments
