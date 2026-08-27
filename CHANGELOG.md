@@ -9,6 +9,18 @@ convention; not every one is a tagged release — see [Releases](#releases).
 
 ## Unreleased
 
+- **Diagnostics panel: rows are tappable again.** `NetworkDiagnosticsView` declared its list with a
+  selection binding, which turns rows into selection targets — the `NavigationSplitView` sidebar
+  pattern — so a tap set the binding instead of pushing the request's detail. The binding was never
+  read. The detail screen is also titled with the method *and* path now, since several requests
+  share a method. Covered by UI tests in [`DemoApp`](DemoApp), because whether a row is tappable is
+  a property of the rendered hierarchy that no unit test over `DiagnosticsPanelState` can reach.
+- **`NovaNetworkDiagnostics` is a library product.** The target existed and was tested, but was never
+  exposed as a product, so nothing outside the package could depend on it.
+- **[`DemoApp`](DemoApp)** — an iOS app for looking at the diagnostics panel on a device, consuming
+  the repository as a local package. Five scenarios (retry, coalescing, cache, rejection,
+  cancellation) run either against a scripted transport inside the app or as real HTTPS requests to
+  an httpbin-compatible host.
 - [3.0](docs/WHATS_NEW_v3.0.md) — NovaNetworkQuery: server state by key for the screens that render
   it, with stale-while-revalidate reads, shared in-flight fetches, subscriptions, optimistic
   mutations with exact rollback, hierarchical invalidation, paged queries, and an availability-gated

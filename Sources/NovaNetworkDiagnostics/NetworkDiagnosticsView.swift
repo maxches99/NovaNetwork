@@ -18,7 +18,6 @@ public struct NetworkDiagnosticsView: View {
     private let onExportHAR: (@Sendable (Data) -> Void)?
 
     @State private var state = DiagnosticsPanelState(records: [])
-    @State private var selected: UUID?
 
     /// Creates the panel.
     ///
@@ -33,7 +32,7 @@ public struct NetworkDiagnosticsView: View {
 
     public var body: some View {
         NavigationStack {
-            List(selection: $selected) {
+            List {
                 Section {
                     Text(state.summary.shortDescription)
                         .font(.footnote)
@@ -143,7 +142,8 @@ public struct NetworkDiagnosticsView: View {
             headerSection("Request headers", record.requestHeaders)
             headerSection("Response headers", record.responseHeaders)
         }
-        .navigationTitle(record.method)
+        // The method alone does not identify the request when several share it.
+        .navigationTitle("\(record.method) \(URL(string: record.url)?.path ?? record.url)")
     }
 
     @ViewBuilder

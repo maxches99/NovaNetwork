@@ -500,6 +500,7 @@ build links it without a test-support module. Only completed HTTP exchanges are 
 throwing transport is not an exchange — and streaming, SSE, and managed transfers are out of scope.
 
 A runnable end-to-end demo is in [`Examples/Cassette`](Examples/Cassette).
+
 ## Diagnostics (v2.13)
 
 The client already reports everything worth knowing. `DiagnosticsRecorder` is somewhere for it to
@@ -555,7 +556,11 @@ plain Swift and testable anywhere.
 This is a development and support tool, not production monitoring — `OpenTelemetryAdapter` remains
 the path to a backend.
 
-A runnable demo, including the waterfall above, is in [`Examples/Diagnostics`](Examples/Diagnostics).
+A runnable demo, including the waterfall above, is in [`Examples/Diagnostics`](Examples/Diagnostics),
+and [`DemoApp`](DemoApp) is an iOS app that puts the panel on a device: five scenarios covering
+retries, coalescing, cache, rejection, and cancellation, run either against a scripted transport
+inside the app or as real HTTPS requests to an httpbin-compatible host.
+
 ## Authentication (v2.14)
 
 The client already coordinates *when* to refresh. This supplies *what* to refresh with.
