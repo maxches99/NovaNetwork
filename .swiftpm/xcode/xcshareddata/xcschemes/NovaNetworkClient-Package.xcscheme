@@ -259,6 +259,20 @@
                ReferencedContainer = "container:">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "NovaNetworkClientCassetteExample"
+               BuildableName = "NovaNetworkClientCassetteExample"
+               BlueprintName = "NovaNetworkClientCassetteExample"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -329,6 +343,16 @@
                ReferencedContainer = "container:">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "NovaNetworkCassetteTests"
+               BuildableName = "NovaNetworkCassetteTests"
+               BlueprintName = "NovaNetworkCassetteTests"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction
@@ -345,9 +369,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "NovaNetworkClientOpenAPIPetstoreExample"
-            BuildableName = "NovaNetworkClientOpenAPIPetstoreExample"
-            BlueprintName = "NovaNetworkClientOpenAPIPetstoreExample"
+            BlueprintIdentifier = "NovaNetworkClientCassetteExample"
+            BuildableName = "NovaNetworkClientCassetteExample"
+            BlueprintName = "NovaNetworkClientCassetteExample"
             ReferencedContainer = "container:">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -371,9 +395,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "NovaNetworkClientOpenAPIPetstoreExample"
-            BuildableName = "NovaNetworkClientOpenAPIPetstoreExample"
-            BlueprintName = "NovaNetworkClientOpenAPIPetstoreExample"
+            BlueprintIdentifier = "NovaNetworkClientCassetteExample"
+            BuildableName = "NovaNetworkClientCassetteExample"
+            BlueprintName = "NovaNetworkClientCassetteExample"
             ReferencedContainer = "container:">
          </BuildableReference>
       </BuildableProductRunnable>
