@@ -373,18 +373,24 @@ struct AdaptiveConcurrencyLimiterTests {
 
 // MARK: - Helpers
 
-/// Waits on observable limiter state rather than guessing with a sleep.
+/// Waits on observable limiter state rather than guessing with a fixed sleep.
+///
+/// Polling with `Task.yield()` alone is a spin: on a runner with few cores it can starve the very
+/// task being waited for. Sleeping between polls actually suspends, which is what lets the other
+/// task run -- the same shape as `waitUntil` in `RequestCoalescerTests`.
 private func waitUntilLimiter(
     _ limiter: AdaptiveConcurrencyLimiter,
-    timeoutSeconds: Double = 5,
+    timeout: Duration = .seconds(5),
+    pollInterval: Duration = .milliseconds(1),
+    sourceLocation: SourceLocation = #_sourceLocation,
     _ condition: @escaping @Sendable (AdaptiveConcurrencyLimiter.Snapshot) -> Bool
 ) async {
-    let deadline = Date().addingTimeInterval(timeoutSeconds)
-    while Date() < deadline {
+    let deadline = ContinuousClock.now + timeout
+    while ContinuousClock.now < deadline {
         if condition(await limiter.snapshot()) { return }
-        await Task.yield()
+        try? await Task.sleep(for: pollInterval)
     }
-    Issue.record("the limiter never reached the expected state")
+    Issue.record("the limiter never reached the expected state", sourceLocation: sourceLocation)
 }
 
 /// A thread-safe sink for the change callback, which is `@Sendable` and non-isolated.
