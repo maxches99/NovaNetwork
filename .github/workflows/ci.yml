@@ -344,17 +344,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          UDID=$(xcrun simctl list devices available --json | python3 -c '
-import json, sys
-devices = json.load(sys.stdin)["devices"]
-runtimes = sorted(r for r in devices if "iOS" in r)
-for runtime in reversed(runtimes):
-    for device in devices[runtime]:
-        if device["name"].startswith("iPhone"):
-            print(device["udid"])
-            sys.exit(0)
-sys.exit("no iPhone simulator is available")
-')
+          # Runtimes are listed oldest first, so the last iPhone line belongs to the newest one.
+          UDID=$(xcrun simctl list devices available \
+            | grep -E '^[[:space:]]+iPhone' \
+            | tail -1 \
+            | sed -E 's/.*\(([0-9A-Fa-f-]{36})\).*/\1/' || true)
+          if [[ -z "${UDID}" ]]; then
+            echo "No iPhone simulator is available on this runner."
+            xcrun simctl list devices available
+            exit 1
+          fi
           echo "udid=${UDID}" >> "${GITHUB_OUTPUT}"
           echo "Using simulator ${UDID}."
 
