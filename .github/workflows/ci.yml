@@ -363,3 +363,26 @@ jobs:
             -project DemoApp/NovaDiagnosticsDemo.xcodeproj \
             -scheme NovaDiagnosticsDemo \
             -destination "id=${{ steps.simulator.outputs.udid }}"
+
+  macos-inspector:
+    # The inspector is thin on purpose -- a model that opens a file into a recorder, and the
+    # package's own panel for everything else -- but it is the only consumer of `HARImporter` and
+    # `DiagnosticsRecorder.load(_:)` outside the tests, so a build here catches an API change that
+    # unit tests would not.
+    name: macOS Inspector Build
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Select Xcode 26.2 (Swift 6.2)
+        run: sudo xcode-select --switch /Applications/Xcode_26.2.app/Contents/Developer
+
+      - name: Build the Inspector
+        run: |
+          xcodebuild build \
+            -project Inspector/NovaNetworkInspector.xcodeproj \
+            -scheme NovaNetworkInspector \
+            -destination 'platform=macOS'

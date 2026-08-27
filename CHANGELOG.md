@@ -9,6 +9,11 @@ convention; not every one is a tagged release — see [Releases](#releases).
 
 ## Unreleased
 
+- [3.1](docs/WHATS_NEW_v3.1.md) — A trace you can read: every request on one clock with a readable
+  ruler and a List/Timeline switch in the panel, a HAR 1.2 reader that accepts files from any
+  producer and restores attempts, coalescing, and cache outcome from our own exports,
+  `DiagnosticsRecorder.load(_:)`, and [`Inspector`](Inspector), a macOS app that opens a HAR and
+  shows it with the same panel a live app embeds.
 - **Diagnostics panel: rows are tappable again.** `NetworkDiagnosticsView` declared its list with a
   selection binding, which turns rows into selection targets — the `NavigationSplitView` sidebar
   pattern — so a tap set the binding instead of pushing the request's detail. The binding was never
