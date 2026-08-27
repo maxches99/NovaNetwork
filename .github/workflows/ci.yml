@@ -204,10 +204,10 @@ jobs:
           fi
 
   linux-client-build-gate:
-    # Compile-only gate: NovaNetworkClient and NovaNetworkClientTestSupport have never had a
-    # Linux CI run before this job. This intentionally does not run swift test on Linux yet --
-    # only confirms the packages still compile against swift-corelibs-foundation, catching
-    # regressions like an unguarded Apple-only import (CryptoKit, Security) before they land.
+    # Compiles the library targets against swift-corelibs-foundation, which catches an unguarded
+    # Apple-only import (CryptoKit, Security) in a few seconds. `linux-test-suite` runs the
+    # assertions; this stays because a build failure here names the target, and a build failure
+    # inside a test run does not.
     name: Linux Client Build Gate (Swift 6.2.3)
     runs-on: ubuntu-latest
     container: swift:6.2.3-noble
@@ -239,6 +239,11 @@ jobs:
     # Compiling on Linux proves the imports are guarded; it does not prove the behaviour is the
     # same. swift-corelibs-foundation is a different implementation of Foundation, and this is the
     # job that finds out where that matters.
+    #
+    # What it found, when it was first switched on, was four rounds of compile errors and no
+    # behavioural difference at all: missing FoundationNetworking imports, Apple-only APIs used
+    # unguarded in tests, `stderr` being a global var on Glibc, and a type reached through the wrong
+    # module. Every assertion that compiles passes on both platforms.
     name: Linux Test Suite (Swift 6.2.3)
     runs-on: ubuntu-latest
     container: swift:6.2.3-noble

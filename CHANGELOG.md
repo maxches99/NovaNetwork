@@ -9,7 +9,25 @@ convention; not every one is a tagged release — see [Releases](#releases).
 
 ## Unreleased
 
-Nothing yet.
+- **The test suite runs on Linux.** Until now CI compiled the library there and ran nothing: the
+  `Linux Client Build Gate` said as much in its own comment. Switching the suite on took four rounds
+  of build fixes before a single assertion could run — missing `FoundationNetworking` imports;
+  Apple-only APIs used unguarded in tests (`Darwin.Mach` in the benchmarks, CryptoKit encryption, two
+  `URLRequest` properties, a `self` capture in a `@Sendable` closure); `stderr`, which is a global
+  `var` on Glibc and so rejected by strict concurrency; and `PortableSHA256`, reached through a
+  module that does not define it, which had therefore never compiled anywhere, because the suite
+  exercising it only exists where CryptoKit is absent.
+
+  Then it earned its keep: the first thing it found once it could run was the `replaceItemAt` bug
+  below — a real behavioural difference, in the code that decides whether queued writes survive.
+- **Staged files are published with `rename(2)`, not `FileManager.replaceItemAt`.** On
+  swift-corelibs-foundation `replaceItemAt` can remove the destination and leave nothing in its
+  place, which is how an offline queue holding one entry came back holding none. The same call sat
+  in five places, all of them durability code: the offline write store, the transfer journal, the
+  managed transfer manager, the background transfer coordinator, and the streaming transport.
+  `rename(2)` replaces an existing destination and is atomic on both platforms, so a reader sees the
+  old file or the new one and never neither; a staged file on another filesystem (`EXDEV`) is copied
+  beside the destination first so the publish itself stays a rename.
 
 ## 3.4.0 — 2026-08-27
 
