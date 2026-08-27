@@ -111,43 +111,67 @@ public struct DiagnosticsPanelState: Sendable, Equatable {
             return []
         }
 
-        var segments: [TimelineSegment] = []
-        let ordered = record.attempts.sorted { $0.number < $1.number }
+        let end = start.addingTimeInterval(total / 1000)
+        return intervals(for: record, endingAt: end).enumerated().map { index, interval in
+            let offset = interval.start.timeIntervalSince(start) * 1000
+            let width = interval.end.timeIntervalSince(interval.start) * 1000
+            return TimelineSegment(
+                id: index,
+                label: interval.label,
+                startFraction: min(offset / total, 1),
+                widthFraction: min(max(width, 0) / total, 1),
+                isWait: interval.isWait
+            )
+        }
+    }
 
+    /// One span of a request placed on a real clock rather than on a fraction.
+    ///
+    /// The waterfall and the shared timeline draw the same spans against different axes, so the rule
+    /// for where an attempt ends and its successor's backoff begins lives here once.
+    struct Interval: Sendable, Equatable {
+        let label: String
+        let start: Date
+        let end: Date
+        let isWait: Bool
+    }
+
+    /// Every attempt and backoff of a request, as absolute intervals.
+    ///
+    /// - Parameters:
+    ///   - record: The request to lay out.
+    ///   - end: When the request finished, or the present moment while it is still in flight.
+    static func intervals(for record: RequestDiagnostic, endingAt end: Date) -> [Interval] {
+        let ordered = record.attempts.sorted { $0.number < $1.number }
+        guard !ordered.isEmpty else { return [] }
+
+        var intervals: [Interval] = []
         for (index, attempt) in ordered.enumerated() {
-            let offset = attempt.startedAt.timeIntervalSince(start) * 1000
             let isLast = index + 1 >= ordered.count
-            let nextStart = isLast ? total : ordered[index + 1].startedAt.timeIntervalSince(start) * 1000
+            let nextStart = isLast ? end : ordered[index + 1].startedAt
             let nextDelay = isLast ? 0 : (ordered[index + 1].retryDelayMilliseconds ?? 0)
 
             // An attempt ends where its successor's backoff begins, not where the successor starts.
             // Running the bar all the way to the next attempt would draw the wait as part of the
             // work, which is exactly the thing a waterfall exists to tell apart.
-            let attemptEnd = max(min(nextStart - nextDelay, nextStart), offset)
+            let attemptEnd = max(min(nextStart.addingTimeInterval(-nextDelay / 1000), nextStart), attempt.startedAt)
 
-            segments.append(
-                TimelineSegment(
-                    id: segments.count,
-                    label: "Attempt \(attempt.number)",
-                    startFraction: min(offset / total, 1),
-                    widthFraction: min(max(attemptEnd - offset, 0) / total, 1),
-                    isWait: false
-                )
+            intervals.append(
+                Interval(label: "Attempt \(attempt.number)", start: attempt.startedAt, end: attemptEnd, isWait: false)
             )
 
             if nextDelay > 0 {
-                segments.append(
-                    TimelineSegment(
-                        id: segments.count,
+                intervals.append(
+                    Interval(
                         label: String(format: "Backoff %.0f ms", nextDelay),
-                        startFraction: min(attemptEnd / total, 1),
-                        widthFraction: min(max(nextStart - attemptEnd, 0) / total, 1),
+                        start: attemptEnd,
+                        end: max(nextStart, attemptEnd),
                         isWait: true
                     )
                 )
             }
         }
 
-        return segments
+        return intervals
     }
 }
