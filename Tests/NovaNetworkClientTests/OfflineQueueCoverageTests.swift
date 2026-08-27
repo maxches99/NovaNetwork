@@ -197,8 +197,19 @@ struct OfflineQueueCoverageTests {
 
         await store.markSucceeded(queueID: second.queueID)
         let afterReady = await store.nextBatch(limit: 10, now: now.addingTimeInterval(120))
+
+        // Indexing after a failed count expectation traps and takes the whole test process with it,
+        // so one regression here used to be reported as a crashed suite. `#require` fails this test
+        // and lets the rest run. The recovery report goes in the message because the store answers
+        // "no entries" both when there are none and when it decided what it found was corrupt, and
+        // those are very different bugs.
+        let report = await store.consumeRecoveryReport()
+        let ready = try #require(
+            afterReady.first,
+            "expected the retry-waiting entry to be ready; recovery report: \(String(describing: report))"
+        )
         #expect(afterReady.count == 1)
-        #expect(afterReady[0].receipt.queueID == first.queueID)
+        #expect(ready.receipt.queueID == first.queueID)
     }
 
 // AES-GCM encryption at rest is CryptoKit-only, and so are the tests that exercise it.
