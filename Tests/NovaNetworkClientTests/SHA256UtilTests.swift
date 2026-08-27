@@ -1,6 +1,10 @@
 import Foundation
 import Testing
 @testable import NovaNetworkClient
+// PortableSHA256 is internal to NovaNetworkCore, and @testable on the client does not reach it.
+// The suite exercising it directly only compiles where CryptoKit is absent, which is why this was
+// invisible until the tests ran on Linux.
+@testable import NovaNetworkCore
 
 // Requirements: FR-LINUX-1 (SHA256Util produces identical digests regardless of which
 // implementation branch -- CryptoKit or the Linux-only PortableSHA256 -- is compiled in).
