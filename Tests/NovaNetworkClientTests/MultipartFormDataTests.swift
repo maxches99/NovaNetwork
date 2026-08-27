@@ -359,8 +359,11 @@ struct NetworkClientMultipartTests {
         #expect(body.map { String(data: $0, encoding: .utf8) ?? "" }?.contains("name=\"field\"") == true)
         #expect(body.map { String(data: $0, encoding: .utf8) ?? "" }?.contains("value") == true)
 
-        // The temporary encoded body file is removed once the upload stream finishes.
+        // The temporary encoded body file is removed once the upload stream finishes. Removal
+        // happens after the final event rather than before it, so wait for the file to go instead
+        // of assuming it is already gone -- the latter fails whenever the machine is busy.
         if let capturedURL = transport.fileURL() {
+            await waitForFileToDisappear(at: capturedURL)
             #expect(!FileManager.default.fileExists(atPath: capturedURL.path))
         }
     }
@@ -428,5 +431,17 @@ struct NetworkClientMultipartTests {
 
         let leftoverFiles = try FileManager.default.contentsOfDirectory(atPath: tempDirectory.path)
         #expect(leftoverFiles.isEmpty)
+    }
+}
+
+/// Waits for a file to be removed, up to a deadline.
+///
+/// The multipart upload deletes its temporary body file after the stream's final event, so a test
+/// that checks immediately is racing the cleanup rather than testing it.
+private func waitForFileToDisappear(at url: URL, timeout: Duration = .seconds(5)) async {
+    let deadline = ContinuousClock.now + timeout
+    while ContinuousClock.now < deadline {
+        if !FileManager.default.fileExists(atPath: url.path) { return }
+        try? await Task.sleep(for: .milliseconds(1))
     }
 }

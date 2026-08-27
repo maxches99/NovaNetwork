@@ -2269,7 +2269,17 @@ struct WebSocketClientTests {
         }
     }
 
-    @Test
+    /// Whether latency-budget tests should run.
+    ///
+    /// Off by default. A wall-clock budget measured on a shared CI runner under coverage
+    /// instrumentation is not a property of the code: the same store passes on an idle machine and
+    /// fails when a neighbouring job is busy, which makes every pull request a coin toss. Run it
+    /// deliberately with `RUN_PERFORMANCE_TESTS=1 swift test --filter LatencyBudget`.
+    static var performanceTestsEnabled: Bool {
+        ProcessInfo.processInfo.environment["RUN_PERFORMANCE_TESTS"] == "1"
+    }
+
+    @Test(.enabled(if: WebSocketClientTests.performanceTestsEnabled))
     func diskWebSocketOutboundQueueStoreMeetsP95LatencyBudget() async throws {
         let baseURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("ws-queue-latency-\(UUID().uuidString)", isDirectory: true)
