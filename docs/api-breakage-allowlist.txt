@@ -2,3 +2,4 @@ API breakage: constructor NetworkClient.init(transport:cancellationPolicy:coales
 API breakage: constructor NetworkTelemetryHooks.init(onRequestStart:onRequestEnd:onCoalescerEvent:onRetryScheduled:onRetryExhausted:onRetrySkipped:onRequestCancelled:onQueueMetrics:onOfflineQueueEvent:onWebSocketEvent:onCircuitBreakerTransition:onPolicyUpdated:onBatchCompleted:onTransferEvent:onHTTPAuthRefresh:) has been removed
 API breakage: func DownloadDestinationPolicy.hash(into:) has been removed
 API breakage: var DownloadDestinationPolicy.hashValue has been removed
+API breakage: constructor RequestExecutionOptions.init(coalescerLimitsOverride:priority:capacityScheduling:coalescingMode:deadlineBudgetSeconds:circuitBreakerPolicy:rateLimitPolicy:idempotencyPolicy:offlineQueuePolicy:) has been removed
