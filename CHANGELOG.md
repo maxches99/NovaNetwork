@@ -19,6 +19,11 @@ convention; not every one is a tagged release — see [Releases](#releases).
   fail, with an `isEssential` escape hatch so a sign-in is never the thing that gets held back.
   Deferral reaches the offline queue that already exists rather than a second one beside it. Off by
   default; `Network.framework` is behind `canImport`.
+- [3.2](docs/WHATS_NEW_v3.2.md) — Adaptive concurrency: how many requests may be in flight at once,
+  decided from what the server is doing rather than picked. Additive increase while requests are
+  waiting for slots, multiplicative decrease on refusals *and* on responses slower than the best
+  seen, arrival-ordered queueing with cancellation and an optional queue timeout, and a telemetry
+  hook for every movement. Off by default; coalesced callers share one slot.
 - [3.1](docs/WHATS_NEW_v3.1.md) — A trace you can read: every request on one clock with a readable
   ruler and a List/Timeline switch in the panel, a HAR 1.2 reader that accepts files from any
   producer and restores attempts, coalescing, and cache outcome from our own exports,

@@ -1299,6 +1299,55 @@ configuration.networkPathMonitor = StaticNetworkPathMonitor(
 
 The policy is consulted once, when the request starts; see
 [What's New 3.3](docs/WHATS_NEW_v3.3.md) for the rest of the edges.
+## Adaptive Concurrency (v3.2)
+
+The package already decides *whether* to send a request — coalescing, caching, retry, circuit
+breaking, rate limiting. This decides *how many at once*, from what the server is actually doing:
+
+```swift
+var configuration = NetworkClientConfiguration()
+configuration.adaptiveConcurrency = AdaptiveConcurrencyPolicy(
+    minimumLimit: 1,
+    maximumLimit: 16,
+    initialLimit: 6
+)
+let client = NetworkClient(configuration: configuration)
+```
+
+That is the whole installation, and it is off by default: with no policy the client admits requests
+exactly as it always has.
+
+**Additive up, multiplicative down.** The limit grows by one and shrinks by a factor, never the
+other way round — backing off slowly from an overloaded server is how a client turns a slowdown into
+an outage. It grows only when a request actually waited for a slot and then succeeded; raising it
+while slots sit idle would let it drift to the maximum without evidence.
+
+**Slower counts before refused does.** A server gets slower before it starts refusing, so each
+response is compared against the fastest one seen:
+
+```swift
+AdaptiveConcurrencyPolicy(latencyDegradationFactor: 2.0)        // twice the best seen is congestion
+AdaptiveConcurrencyPolicy(latencyDegradationFactor: .infinity)  // react only to refusals
+```
+
+Only failures that mean "too much at once" count — 429, 503, timeouts, connection loss. A 404 is a
+fact about a URL and a cancellation is a fact about the caller; neither shrinks the limit.
+
+**It queues rather than refuses.** `RateLimitPolicy` says "too many, come back later"; this says
+"not yet, you are next". Callers wait in arrival order, a cancelled one leaves the queue intact, and
+`queueTimeoutSeconds` lets a caller give up. Coalesced callers share one slot, because the limiter
+sits inside the coalescer and bounds requests that reach the transport rather than callers.
+
+```swift
+configuration.telemetryHooks = NetworkTelemetryHooks(
+    onConcurrencyLimitChanged: { print("limit \($0.previousLimit) → \($0.limit): \($0.reason)") }
+)
+let snapshot = await client.concurrencySnapshot()   // limit, in flight, waiting, best latency
+```
+
+One limiter per client, not per host; a retrying request holds its slot while it waits out backoff;
+and every launch starts at `initialLimit`. Those are the known edges, listed in
+[What's New 3.2](docs/WHATS_NEW_v3.2.md).
 
 ## Benchmark Baseline Check
 
