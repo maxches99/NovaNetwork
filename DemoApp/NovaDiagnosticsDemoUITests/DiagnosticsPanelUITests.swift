@@ -43,13 +43,14 @@ final class DiagnosticsPanelUITests: XCTestCase {
 
         app.buttons["Live"].tap()
 
-        // Only the rows above the fold are in the accessibility snapshot, so this asserts on those.
+        // A List renders lazily, so only rows above the fold are in the accessibility snapshot and
+        // which ones those are depends on the device. The first row is enough: the paths either got
+        // rewritten or they did not.
         XCTAssertTrue(
             app.staticTexts["/status/200,503"].waitForExistence(timeout: 5),
             "the scenario rows still point at the scripted paths"
         )
-        XCTAssertTrue(app.staticTexts["/json"].exists)
-        XCTAssertFalse(app.staticTexts["/flaky"].exists)
+        XCTAssertFalse(app.staticTexts["/flaky"].exists, "a scripted path survived the switch")
     }
 
     func testTheListSummarisesEveryScenario() {
