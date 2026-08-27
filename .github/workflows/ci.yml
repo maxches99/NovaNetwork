@@ -322,3 +322,45 @@ jobs:
         run: |
           swift package diagnose-api-breaking-changes 2.0.0 \
             --breakage-allowlist-path docs/api-breakage-allowlist.txt
+
+  demo-app-ui-tests:
+    # `NetworkDiagnosticsView` is excluded from the coverage gate because whether a list row is
+    # tappable is a property of the rendered view hierarchy, not of the state behind it -- and that
+    # is exactly the bug that once shipped. The demo app's UI tests are the gate for it. They run
+    # entirely offline; the app's scripted backend is the default.
+    name: Demo App UI Tests (iOS Simulator)
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Select Xcode 26.2 (Swift 6.2)
+        run: sudo xcode-select --switch /Applications/Xcode_26.2.app/Contents/Developer
+
+      - name: Pick the Newest Available iPhone Simulator
+        id: simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          UDID=$(xcrun simctl list devices available --json | python3 -c '
+import json, sys
+devices = json.load(sys.stdin)["devices"]
+runtimes = sorted(r for r in devices if "iOS" in r)
+for runtime in reversed(runtimes):
+    for device in devices[runtime]:
+        if device["name"].startswith("iPhone"):
+            print(device["udid"])
+            sys.exit(0)
+sys.exit("no iPhone simulator is available")
+')
+          echo "udid=${UDID}" >> "${GITHUB_OUTPUT}"
+          echo "Using simulator ${UDID}."
+
+      - name: Run the Demo App's UI Tests
+        run: |
+          xcodebuild test \
+            -project DemoApp/NovaDiagnosticsDemo.xcodeproj \
+            -scheme NovaDiagnosticsDemo \
+            -destination "id=${{ steps.simulator.outputs.udid }}"
