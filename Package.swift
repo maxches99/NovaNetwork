@@ -16,6 +16,7 @@ let package = Package(
         .library(name: "NovaNetworkAuth", targets: ["NovaNetworkAuth"]),
         .library(name: "NovaNetworkQuery", targets: ["NovaNetworkQuery"]),
         .library(name: "NovaNetworkOpenAPI", targets: ["NovaNetworkOpenAPI"]),
+        .library(name: "NovaNetworkDiagnostics", targets: ["NovaNetworkDiagnostics"]),
         .executable(name: "nova-openapi", targets: ["NovaNetworkOpenAPIGenerator"]),
         .plugin(name: "GenerateOpenAPIEndpoints", targets: ["GenerateOpenAPIEndpoints"]),
         .executable(name: "NovaNetworkClientBenchmarks", targets: ["NovaNetworkClientBenchmarks"]),
