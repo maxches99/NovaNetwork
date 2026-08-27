@@ -170,7 +170,7 @@ struct BenchmarksMain {
                 // Asking for the check and not being able to perform it is a failure, not a pass.
                 // The path is relative to the working directory, so a job run from the wrong place
                 // would otherwise report success without having compared anything.
-                fputs("baseline_check=failed reason=missing_or_invalid_baseline path=\(baselineURL.path)\n", stderr)
+                reportToStandardError("baseline_check=failed reason=missing_or_invalid_baseline path=\(baselineURL.path)\n")
                 Foundation.exit(1)
             }
 
@@ -186,10 +186,7 @@ struct BenchmarksMain {
             // neighbouring job was busy teaches a team to ignore the gate.
             let timingIsAdvisory = !strictTiming
             if !callsOK {
-                fputs(
-                    "baseline_check=failed reason=transport_calls transport_calls=\(calls) max_transport_calls=\(baseline.maxTransportCalls)\n",
-                    stderr
-                )
+                reportToStandardError("baseline_check=failed reason=transport_calls transport_calls=\(calls) max_transport_calls=\(baseline.maxTransportCalls)\n")
                 Foundation.exit(1)
             }
 
@@ -200,10 +197,10 @@ struct BenchmarksMain {
 
             let detail = "elapsed_ms=\(elapsedMs) max_elapsed_ms=\(baseline.maxElapsedMilliseconds) p95_latency_ms=\(p95Latency) max_p95_latency_ms=\(baseline.maxP95LatencyMilliseconds) allocated_delta_bytes=\(allocatedDelta ?? 0) max_allocated_delta_bytes=\(baseline.maxAllocatedBytesDelta)"
             guard timingIsAdvisory else {
-                fputs("baseline_check=failed reason=timing \(detail)\n", stderr)
+                reportToStandardError("baseline_check=failed reason=timing \(detail)\n")
                 Foundation.exit(1)
             }
-            fputs("baseline_check=advisory reason=timing \(detail)\n", stderr)
+            reportToStandardError("baseline_check=advisory reason=timing \(detail)\n")
             print("baseline_check=passed_with_advisory")
         }
     }
@@ -243,7 +240,7 @@ struct BenchmarksMain {
             let data = try? Data(contentsOf: baselineURL),
             let baseline = try? JSONDecoder().decode(StressBaseline.self, from: data)
         else {
-            fputs("stress_baseline_check=failed reason=missing_or_invalid_baseline path=\(baselineURL.path)\n", stderr)
+            reportToStandardError("stress_baseline_check=failed reason=missing_or_invalid_baseline path=\(baselineURL.path)\n")
             Foundation.exit(1)
         }
 
@@ -278,21 +275,15 @@ struct BenchmarksMain {
             if latencyOK {
                 print("stress_baseline_check=passed")
             } else {
-                fputs(
-                    "stress_baseline_check=advisory reason=timing mixed_priority_p99_ms=\(mixedPriority.p99LatencyMilliseconds) offline_realtime_p99_ms=\(offlineRealtime.realtimeP99LatencyMilliseconds)\n",
-                    stderr
-                )
+                reportToStandardError("stress_baseline_check=advisory reason=timing mixed_priority_p99_ms=\(mixedPriority.p99LatencyMilliseconds) offline_realtime_p99_ms=\(offlineRealtime.realtimeP99LatencyMilliseconds)\n")
                 print("stress_baseline_check=passed_with_advisory")
             }
             return
         }
 
-        fputs(
-            """
+        reportToStandardError("""
             stress_baseline_check=failed retry_calls=\(retryStorm.transportCalls) expected_retry_calls=\(baseline.retryStormExpectedTransportCalls) retry_successes=\(retryStorm.successes) expected_retry_successes=\(baseline.retryStormExpectedSuccesses) breaker_transitions=\(breakerFlapping.breakerTransitions) min_breaker_transitions=\(baseline.breakerFlappingMinimumTransitions) runtime_successes=\(runtimeUpdates.successes) min_runtime_successes=\(baseline.runtimeUpdateMinimumSuccesses) mixed_priority_successes=\(mixedPriority.successes) min_mixed_priority_successes=\(baseline.mixedPriorityMinimumSuccesses) mixed_priority_p99_ms=\(mixedPriority.p99LatencyMilliseconds) max_mixed_priority_p99_ms=\(baseline.mixedPriorityMaximumP99LatencyMilliseconds) cancellation_cancelled=\(cancellationBurst.cancelled) min_cancellation_cancelled=\(baseline.cancellationBurstMinimumCancelled) cancellation_successes=\(cancellationBurst.successes) min_cancellation_successes=\(baseline.cancellationBurstMinimumSuccesses) offline_realtime_replayed=\(offlineRealtime.replayed) min_offline_realtime_replayed=\(baseline.offlineRealtimeMinimumReplayed) offline_realtime_successes=\(offlineRealtime.realtimeSuccesses) min_offline_realtime_successes=\(baseline.offlineRealtimeMinimumRealtimeSuccesses) offline_realtime_p99_ms=\(offlineRealtime.realtimeP99LatencyMilliseconds) max_offline_realtime_p99_ms=\(baseline.offlineRealtimeMaximumP99LatencyMilliseconds) offline_realtime_transport_calls=\(offlineRealtime.transportCalls) max_offline_realtime_transport_calls=\(baseline.offlineRealtimeMaximumTransportCalls)\n
-            """,
-            stderr
-        )
+            """)
         Foundation.exit(1)
     }
 
@@ -680,4 +671,13 @@ private func currentMemoryFootprintBytes() -> UInt64? { nil }
 private func memoryDeltaBytes(before: UInt64?, after: UInt64?) -> UInt64? {
     guard let before, let after, after >= before else { return nil }
     return after - before
+}
+
+/// Writes a diagnostic line to standard error.
+///
+/// `fputs(_:stderr)` is not usable here: on Glibc `stderr` is a global `var`, which strict
+/// concurrency rejects as shared mutable state. `FileHandle.standardError` says the same thing in a
+/// way both platforms accept.
+private func reportToStandardError(_ message: String) {
+    FileHandle.standardError.write(Data(message.utf8))
 }
