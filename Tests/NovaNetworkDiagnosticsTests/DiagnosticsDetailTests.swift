@@ -416,6 +416,20 @@ struct DiagnosticsOrderIndependenceTests {
     }
 
     @Test
+    func aStartArrivingAfterACancellationDoesNotReopenTheRequest() async throws {
+        let recorder = DiagnosticsRecorder(now: TestClock().now)
+
+        // The cancellation wins the race and creates the record; the start lands afterwards.
+        await recorder.recordCancellation(
+            TelemetryCancellationContext(key: "k", attempt: 1, reason: "caller-cancelled", request: sampleRequest())
+        )
+        await recorder.recordStart(startContext(attempt: 1))
+
+        let record = try #require(await recorder.snapshot().first)
+        #expect(record.outcome == .cancelled(reason: "caller-cancelled"), "a late start must not resurrect a cancelled request")
+    }
+
+    @Test
     func aRetriedRequestStaysOneRecordWhateverTheOrder() async throws {
         let recorder = DiagnosticsRecorder(now: TestClock().now)
 
