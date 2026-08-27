@@ -1,0 +1,396 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		AA00000000000000000000B1 /* NovaDiagnosticsDemoApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000A1 /* NovaDiagnosticsDemoApp.swift */; };
+		AA00000000000000000000B2 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000A2 /* ContentView.swift */; };
+		AA00000000000000000000B3 /* DemoSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000A3 /* DemoSession.swift */; };
+		AA00000000000000000000B4 /* DemoAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000A4 /* DemoAPI.swift */; };
+		AA00000000000000000000E1 /* NovaNetworkClient in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000000D1 /* NovaNetworkClient */; };
+		AA00000000000000000000E2 /* NovaNetworkDiagnostics in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000000D2 /* NovaNetworkDiagnostics */; };
+		AA00000000000000000000B5 /* DiagnosticsPanelUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000A5 /* DiagnosticsPanelUITests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		AA0000000000000000000055 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA0000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AA0000000000000000000010;
+			remoteInfo = NovaDiagnosticsDemo;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		AA0000000000000000000011 /* NovaDiagnosticsDemo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NovaDiagnosticsDemo.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA00000000000000000000A1 /* NovaDiagnosticsDemoApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NovaDiagnosticsDemoApp.swift; sourceTree = "<group>"; };
+		AA00000000000000000000A2 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		AA00000000000000000000A3 /* DemoSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoSession.swift; sourceTree = "<group>"; };
+		AA00000000000000000000A4 /* DemoAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoAPI.swift; sourceTree = "<group>"; };
+		AA0000000000000000000012 /* NovaDiagnosticsDemoUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NovaDiagnosticsDemoUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA00000000000000000000A5 /* DiagnosticsPanelUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsPanelUITests.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		AA0000000000000000000021 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA00000000000000000000E1 /* NovaNetworkClient in Frameworks */,
+				AA00000000000000000000E2 /* NovaNetworkDiagnostics in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA0000000000000000000052 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		AA0000000000000000000002 = {
+			isa = PBXGroup;
+			children = (
+				AA0000000000000000000004 /* NovaDiagnosticsDemo */,
+				AA0000000000000000000005 /* NovaDiagnosticsDemoUITests */,
+				AA0000000000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000000000000000000011 /* NovaDiagnosticsDemo.app */,
+				AA0000000000000000000012 /* NovaDiagnosticsDemoUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000004 /* NovaDiagnosticsDemo */ = {
+			isa = PBXGroup;
+			children = (
+				AA00000000000000000000A1 /* NovaDiagnosticsDemoApp.swift */,
+				AA00000000000000000000A2 /* ContentView.swift */,
+				AA00000000000000000000A3 /* DemoSession.swift */,
+				AA00000000000000000000A4 /* DemoAPI.swift */,
+			);
+			path = NovaDiagnosticsDemo;
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000005 /* NovaDiagnosticsDemoUITests */ = {
+			isa = PBXGroup;
+			children = (
+				AA00000000000000000000A5 /* DiagnosticsPanelUITests.swift */,
+			);
+			path = NovaDiagnosticsDemoUITests;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		AA0000000000000000000010 /* NovaDiagnosticsDemo */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA0000000000000000000031 /* Build configuration list for PBXNativeTarget "NovaDiagnosticsDemo" */;
+			buildPhases = (
+				AA0000000000000000000020 /* Sources */,
+				AA0000000000000000000021 /* Frameworks */,
+				AA0000000000000000000022 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = NovaDiagnosticsDemo;
+			packageProductDependencies = (
+				AA00000000000000000000D1 /* NovaNetworkClient */,
+				AA00000000000000000000D2 /* NovaNetworkDiagnostics */,
+			);
+			productName = NovaDiagnosticsDemo;
+			productReference = AA0000000000000000000011 /* NovaDiagnosticsDemo.app */;
+			productType = "com.apple.product-type.application";
+		};
+		AA0000000000000000000050 /* NovaDiagnosticsDemoUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA0000000000000000000056 /* Build configuration list for PBXNativeTarget "NovaDiagnosticsDemoUITests" */;
+			buildPhases = (
+				AA0000000000000000000051 /* Sources */,
+				AA0000000000000000000052 /* Frameworks */,
+				AA0000000000000000000053 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AA0000000000000000000054 /* PBXTargetDependency */,
+			);
+			name = NovaDiagnosticsDemoUITests;
+			productName = NovaDiagnosticsDemoUITests;
+			productReference = AA0000000000000000000012 /* NovaDiagnosticsDemoUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		AA0000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					AA0000000000000000000010 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					AA0000000000000000000050 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = AA0000000000000000000010;
+					};
+				};
+			};
+			buildConfigurationList = AA0000000000000000000030 /* Build configuration list for PBXProject "NovaDiagnosticsDemo" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = AA0000000000000000000002;
+			packageReferences = (
+				AA00000000000000000000C1 /* XCLocalSwiftPackageReference ".." */,
+			);
+			productRefGroup = AA0000000000000000000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				AA0000000000000000000010 /* NovaDiagnosticsDemo */,
+				AA0000000000000000000050 /* NovaDiagnosticsDemoUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		AA0000000000000000000022 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA0000000000000000000053 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		AA0000000000000000000020 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA00000000000000000000B2 /* ContentView.swift in Sources */,
+				AA00000000000000000000B4 /* DemoAPI.swift in Sources */,
+				AA00000000000000000000B3 /* DemoSession.swift in Sources */,
+				AA00000000000000000000B1 /* NovaDiagnosticsDemoApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA0000000000000000000051 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA00000000000000000000B5 /* DiagnosticsPanelUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		AA0000000000000000000054 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AA0000000000000000000010 /* NovaDiagnosticsDemo */;
+			targetProxy = AA0000000000000000000055 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		AA0000000000000000000040 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		AA0000000000000000000041 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 6.0;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		AA0000000000000000000042 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = "";
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "";
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.novanetwork.diagnosticsdemo;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		AA0000000000000000000043 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = "";
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "";
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.novanetwork.diagnosticsdemo;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		AA0000000000000000000057 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.novanetwork.diagnosticsdemo.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = NovaDiagnosticsDemo;
+			};
+			name = Debug;
+		};
+		AA0000000000000000000058 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.novanetwork.diagnosticsdemo.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = NovaDiagnosticsDemo;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		AA0000000000000000000030 /* Build configuration list for PBXProject "NovaDiagnosticsDemo" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0000000000000000000040 /* Debug */,
+				AA0000000000000000000041 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA0000000000000000000031 /* Build configuration list for PBXNativeTarget "NovaDiagnosticsDemo" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0000000000000000000042 /* Debug */,
+				AA0000000000000000000043 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA0000000000000000000056 /* Build configuration list for PBXNativeTarget "NovaDiagnosticsDemoUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0000000000000000000057 /* Debug */,
+				AA0000000000000000000058 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		AA00000000000000000000C1 /* XCLocalSwiftPackageReference ".." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ..;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		AA00000000000000000000D1 /* NovaNetworkClient */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NovaNetworkClient;
+		};
+		AA00000000000000000000D2 /* NovaNetworkDiagnostics */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NovaNetworkDiagnostics;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = AA0000000000000000000001 /* Project object */;
+}
