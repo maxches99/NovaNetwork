@@ -167,7 +167,7 @@ struct TransferTests {
         #expect(try Data(contentsOf: destination) == expected)
     }
 
-    @Test
+    @Test(.enabled(if: PlatformSupport.hasAppleURLSessionBehaviour, PlatformSupport.urlSessionReason))
     func existingDownloadDestinationFailsWithoutNetworkMutation() async throws {
         let transport = Transport(session: makeTransferSession())
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -186,7 +186,7 @@ struct TransferTests {
         #expect(try Data(contentsOf: destination) == Data("existing".utf8))
     }
 
-    @Test(arguments: [DownloadDestinationPolicy.replace, .keepExisting])
+    @Test(.enabled(if: PlatformSupport.hasAppleURLSessionBehaviour, PlatformSupport.urlSessionReason), arguments: [DownloadDestinationPolicy.replace, .keepExisting])
     func existingDownloadDestinationHonorsNonFailingPolicies(
         policy: DownloadDestinationPolicy
     ) async throws {
