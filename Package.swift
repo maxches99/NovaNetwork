@@ -14,6 +14,7 @@ let package = Package(
         .library(name: "NovaNetworkMacros", targets: ["NovaNetworkMacros"]),
         .library(name: "NovaNetworkCassette", targets: ["NovaNetworkCassette"]),
         .library(name: "NovaNetworkAuth", targets: ["NovaNetworkAuth"]),
+        .library(name: "NovaNetworkQuery", targets: ["NovaNetworkQuery"]),
         .library(name: "NovaNetworkOpenAPI", targets: ["NovaNetworkOpenAPI"]),
         .executable(name: "nova-openapi", targets: ["NovaNetworkOpenAPIGenerator"]),
         .plugin(name: "GenerateOpenAPIEndpoints", targets: ["GenerateOpenAPIEndpoints"]),
@@ -30,6 +31,7 @@ let package = Package(
         .executable(name: "NovaNetworkClientProductionProfileExample", targets: ["NovaNetworkClientProductionProfileExample"]),
         .executable(name: "NovaNetworkClientOpenAPIPetstoreExample", targets: ["NovaNetworkClientOpenAPIPetstoreExample"]),
         .executable(name: "NovaNetworkClientAuthenticationExample", targets: ["NovaNetworkClientAuthenticationExample"]),
+        .executable(name: "NovaNetworkClientQueryExample", targets: ["NovaNetworkClientQueryExample"]),
         .executable(name: "NovaNetworkClientCassetteExample", targets: ["NovaNetworkClientCassetteExample"]),
         .executable(name: "NovaNetworkClientDiagnosticsExample", targets: ["NovaNetworkClientDiagnosticsExample"]),
     ],
@@ -117,6 +119,12 @@ let package = Package(
             path: "Sources/NovaNetworkAuth"
         ),
         .target(
+            // Depends on Foundation alone: a query wraps any async work, so the layer has no reason
+            // to require the HTTP client.
+            name: "NovaNetworkQuery",
+            path: "Sources/NovaNetworkQuery"
+        ),
+        .target(
             name: "NovaNetworkClientTestSupport",
             dependencies: ["NovaNetworkClient", "NovaNetworkCassette"],
             path: "Sources/NovaNetworkClientTestSupport"
@@ -159,6 +167,11 @@ let package = Package(
             name: "NovaNetworkAuthTests",
             dependencies: ["NovaNetworkAuth"],
             path: "Tests/NovaNetworkAuthTests"
+        ),
+        .testTarget(
+            name: "NovaNetworkQueryTests",
+            dependencies: ["NovaNetworkQuery", "NovaNetworkClient"],
+            path: "Tests/NovaNetworkQueryTests"
         ),
         .testTarget(
             name: "NovaNetworkOpenAPITests",
@@ -241,6 +254,11 @@ let package = Package(
             name: "NovaNetworkClientAuthenticationExample",
             dependencies: ["NovaNetworkClient", "NovaNetworkAuth"],
             path: "Examples/Authentication"
+        ),
+        .executableTarget(
+            name: "NovaNetworkClientQueryExample",
+            dependencies: ["NovaNetworkClient", "NovaNetworkQuery"],
+            path: "Examples/Query"
         ),
         .executableTarget(
             name: "NovaNetworkClientOpenAPIPetstoreExample",

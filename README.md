@@ -16,6 +16,7 @@ When multiple callers ask for the same resource at the same time, only one under
 - [Record and Replay (cassettes)](Sources/NovaNetworkClient/NovaNetworkClient.docc/RecordAndReplay.md)
 - [Diagnostics (recorder, HAR export, Instruments, SwiftUI panel)](Sources/NovaNetworkClient/NovaNetworkClient.docc/Diagnostics.md)
 - [Authentication (OAuth 2.0, PKCE, token storage, request signing)](Sources/NovaNetworkClient/NovaNetworkClient.docc/Authentication.md)
+- [Query Layer (server state for screens)](Sources/NovaNetworkClient/NovaNetworkClient.docc/QueryLayer.md)
 - [Production Checklist](Sources/NovaNetworkClient/NovaNetworkClient.docc/ProductionChecklist.md)
 - [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md)
@@ -43,6 +44,11 @@ When multiple callers ask for the same resource at the same time, only one under
 - [v2.1 Traceability Pack](docs/TRACEABILITY_PACK_v2.1.md)
 - [v2.11 Traceability Pack](docs/TRACEABILITY_PACK_v2.11.md)
 - [v2.14 Traceability Pack](docs/TRACEABILITY_PACK_v2.14.md)
+- [NovaNetwork v3.0 DFR](docs/dfr/NOVA_NETWORK_V3_0_DFR.md)
+- [v2.0 Traceability Pack](docs/TRACEABILITY_PACK_v2.0.md)
+- [v2.1 Traceability Pack](docs/TRACEABILITY_PACK_v2.1.md)
+- [v2.11 Traceability Pack](docs/TRACEABILITY_PACK_v2.11.md)
+- [v3.0 Traceability Pack](docs/TRACEABILITY_PACK_v3.0.md)
 - [v1.15 Traceability Pack](docs/TRACEABILITY_PACK_v1.15.md)
 - [v1.16 Traceability Pack](docs/TRACEABILITY_PACK_v1.16.md)
 - [v1.19 Traceability Pack](docs/TRACEABILITY_PACK_v1.19.md)
@@ -136,6 +142,9 @@ Generating endpoints from an OpenAPI document needs neither the trait nor the ma
 - Standalone cross-platform `NovaNetworkCore` product for request/response/error/endpoint models.
 - HTTP Cache 2.0 with ETag and Last-Modified revalidation, corrected age, request directives,
   `stale-if-error`, and safe `Vary: *` handling.
+- Query layer (`NovaNetworkQuery`): server state by key for the screens that render it, with
+  stale-while-revalidate reads, shared in-flight fetches, subscriptions, optimistic mutations with
+  rollback, hierarchical invalidation, and paged queries.
 - Coalesces concurrent requests by stable fingerprint key.
 - Optional short-lived in-memory response cache (`cacheFirst`, `staleWhileRevalidate`).
 - Optional pluggable response cache (`MemoryResponseCache`, `DiskResponseCache`, custom `ResponseCache`).
@@ -619,6 +628,76 @@ Version 4 (its correctness needs reference vectors; an unverified signer would l
 dangerous). Both are stated rather than quietly missing.
 
 A runnable walkthrough is in [`Examples/Authentication`](Examples/Authentication).
+## Query Layer (v3.0)
+
+`NetworkClient` answers "perform this request". A screen asks something else: *what is the current
+state of this resource, and tell me when it changes.*
+
+```swift
+import NovaNetworkQuery
+
+let queries = QueryClient()
+
+let user: User = try await queries.value(for: QueryKey("users", 1)) {
+    try await client.load(request: request, authScope: nil)
+}
+```
+
+| Without | With |
+|---|---|
+| Two screens fetch the same list twice | One entry per key, one in-flight fetch per key |
+| Pull-to-refresh blanks the list to a spinner | The old value stays visible, marked stale, while the refresh runs |
+| A delete leaves the row on screen | The mutation invalidates the key and every screen updates |
+| A failed optimistic edit stays applied | The exact previous value is restored |
+
+### Rendering
+
+```swift
+for await state in await queries.states(for: QueryKey("users", 1), as: User.self) {
+    switch state {
+    case .idle, .loading(nil):            showSpinner()
+    case let .loading(.some(user)),
+         let .success(user, _):           show(user, stale: state.isStale)
+    case let .failure(error, previous):   show(error, keeping: previous)
+    }
+}
+```
+
+Subscribers receive the current state first, so a screen arriving late is never blank. Errors are
+part of the state rather than only thrown, so a view can render the problem beside the value it
+already had. On iOS 17+, `ObservableQuery` wraps the same stream for SwiftUI — the only
+availability-gated piece, because the package's floor stays at iOS 13.
+
+### Mutating
+
+```swift
+try await queries.mutate(
+    optimistic: [QueryKey("users", 1): editedUser],
+    invalidating: [QueryKey("users", 1), "users"]
+) {
+    try await client.load(request: saveRequest, authScope: nil)
+}
+```
+
+A failure restores the **exact captured snapshot**, not a reversed diff — the only approach that
+stays correct when two mutations race. Keys are hierarchical, so `invalidate(prefix: "users")` marks
+the whole family stale; entries with subscribers refetch immediately, and entries nobody is watching
+are marked and left alone rather than spending the user's battery.
+
+### Paging
+
+```swift
+let feed = PagedQuery<Post, String>(key: "feed", client: queries) { cursor in
+    let page: FeedPage = try await client.load(request: feedRequest(after: cursor), authScope: nil)
+    return QueryPage(elements: page.posts, nextCursor: page.next)
+}
+let posts = try await feed.loadNextPage()   // everything so far, not just the new page
+```
+
+**Not included:** a normalized entity cache (values are stored by key, not merged into a graph) and
+persistence (the offline queue remains the durable path for writes).
+
+A runnable demo is in [`Examples/Query`](Examples/Query).
 
 ## Preset Quick Start (v1.15)
 

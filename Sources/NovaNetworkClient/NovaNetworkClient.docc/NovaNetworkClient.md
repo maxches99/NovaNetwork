@@ -23,6 +23,7 @@ If you're new to the package, start with <doc:GettingStarted> or follow the inte
 - <doc:RecordAndReplay>
 - <doc:Diagnostics>
 - <doc:Authentication>
+- <doc:QueryLayer>
 - <doc:ProductionChecklist>
 - <doc:Tutorial-Table-of-Contents>
 

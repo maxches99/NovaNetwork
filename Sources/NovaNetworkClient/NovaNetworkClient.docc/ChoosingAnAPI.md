@@ -23,6 +23,7 @@ Start with the smallest API that matches the shape and lifetime of your operatio
 | Deterministic tests, previews, or an offline demo build | `CassetteTransport` -- see <doc:RecordAndReplay> |
 | Seeing what the client did, or a HAR for a bug report | `DiagnosticsRecorder` -- see <doc:Diagnostics> |
 | OAuth 2.0, PKCE, token storage, or request signing | `NovaNetworkAuth` -- see <doc:Authentication> |
+| Server state a screen renders, shared between screens | `QueryClient` -- see <doc:QueryLayer> |
 
 ### Prefer typed endpoints for repeated operations
 
@@ -51,6 +52,7 @@ from an OpenAPI document. Both produce ordinary `Endpoint` conformances, so noth
 - <doc:RecordAndReplay>
 - <doc:Diagnostics>
 - <doc:Authentication>
+- <doc:QueryLayer>
 - <doc:ModelRequestsAsEndpoints>
 - ``NetworkClientConfiguration``
 - ``NetworkClientPreset``

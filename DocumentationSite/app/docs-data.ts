@@ -394,6 +394,45 @@ let client = NetworkClient(configuration: configuration)` },
 // The provider saw exactly one refresh.`, note: "A refresh response usually omits refresh_token, meaning keep the one you have. Dropping it there is how a session ends an hour later for no visible reason." },
     ],
   },
+  {
+    slug: "query-layer",
+    title: "Share server state between screens",
+    summary: "One entry per key, stale values that stay visible, and optimistic edits that roll back.",
+    eyebrow: "Query layer",
+    duration: "15 min",
+    level: "Intermediate",
+    symbol: "\u25F4",
+    tone: "blue",
+    outcome: "Two screens rendering the same resource from one request, with mutations that update both.",
+    steps: [
+      { title: "Ask by key", explanation: "A fresh value comes back without touching the network; a stale one comes back immediately and refreshes behind it. Two screens asking at the same moment share one fetch.", code: `let queries = QueryClient()
+
+let user: User = try await queries.value(for: QueryKey("users", 1)) {
+    try await client.load(request: request, authScope: nil)
+}` },
+      { title: "Render four states", explanation: "Errors are part of the state, not only thrown, so a view can show the problem beside the value it already had.", code: `for await state in await queries.states(for: QueryKey("users", 1), as: User.self) {
+    switch state {
+    case .idle, .loading(nil):          showSpinner()
+    case let .loading(.some(user)),
+         let .success(user, _):         show(user, stale: state.isStale)
+    case let .failure(error, previous): show(error, keeping: previous)
+    }
+}` },
+      { title: "Mutate optimistically", explanation: "A failure restores the exact snapshot captured before the change — not a reversed diff, which stops being correct as soon as two mutations race.", code: `try await queries.mutate(
+    optimistic: [QueryKey("users", 1): editedUser],
+    invalidating: [QueryKey("users", 1), "users"]
+) {
+    try await client.load(request: saveRequest, authScope: nil)
+}` },
+      { title: "Page a list", explanation: "Accumulated pages land in the cache under the query key, so the screen subscribes the way it subscribes to anything else.", code: `let feed = PagedQuery<Post, String>(key: "feed", client: queries) { cursor in
+    let page: FeedPage = try await client.load(
+        request: feedRequest(after: cursor), authScope: nil
+    )
+    return QueryPage(elements: page.posts, nextCursor: page.next)
+}
+let posts = try await feed.loadNextPage()`, note: "Invalidating a key nobody is watching marks it stale without refetching: filling a cache no screen reads spends the user's battery for nothing." },
+    ],
+  },
 ];
 
 export function tutorialForSlug(slug: string) {

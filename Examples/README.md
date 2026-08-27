@@ -30,6 +30,7 @@ swift test --filter NetworkingCoverageTests
 | CB-8 | Record a live exchange, replay it offline | `NovaNetworkClientCassetteExample` | `theFirstRunRecordsAndTheSecondRunIsOffline` |
 | CB-9 | Retry waterfall, coalescing, and a HAR export | `NovaNetworkClientDiagnosticsExample` | `theHooksProperyFeedsEveryLifecycleCallbackIntoTheRecorder` |
 | CB-10 | OAuth 2.0 with PKCE, shared refresh, and signing | `NovaNetworkClientAuthenticationExample` | `concurrentCallersShareOneRefresh` |
+| CB-11 | Shared server state, optimistic rollback, paging | `NovaNetworkClientQueryExample` | `aFailedMutationRestoresExactlyWhatWasThere` |
 
 ## Run Commands
 
@@ -71,6 +72,15 @@ swift run NovaNetworkClientAuthenticationExample
 `Authentication/` walks the authorization code flow against a scripted provider: it builds the PKCE
 authorization URL, rejects a tampered callback, exchanges the code, then has eight callers need a
 token at once and reports how many refreshes the provider actually saw. The answer is one.
+swift run NovaNetworkClientQueryExample
+```
+
+### Query layer (CB-11)
+
+`Query/` has two screens ask for the same user at the same moment and reports how many requests the
+server saw (one), applies an optimistic edit the server rejects and shows it rolling back, then pages
+through a list. The subscriber prints every state it renders, including the stale one during a
+refresh.
 
 ### OpenAPI generation (CB-7)
 
