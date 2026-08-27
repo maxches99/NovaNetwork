@@ -21,6 +21,7 @@ If you're new to the package, start with <doc:GettingStarted> or follow the inte
 - <doc:ChoosingAnAPI>
 - <doc:DeclarativeEndpoints>
 - <doc:RecordAndReplay>
+- <doc:Diagnostics>
 - <doc:ProductionChecklist>
 - <doc:Tutorial-Table-of-Contents>
 

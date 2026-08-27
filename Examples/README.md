@@ -28,6 +28,7 @@ swift test --filter NetworkingCoverageTests
 | CB-6 | Production profile generator (DX 2.0) | `NovaNetworkClientProductionProfileExample` | `cookbookScenarioProductionProfileForOfflineFirstRequiresStore` |
 | CB-7 | Endpoints generated from an OpenAPI document | `NovaNetworkClientOpenAPIPetstoreExample` | `theCheckedInGeneratedFileMatchesWhatTheGeneratorProducesNow` |
 | CB-8 | Record a live exchange, replay it offline | `NovaNetworkClientCassetteExample` | `theFirstRunRecordsAndTheSecondRunIsOffline` |
+| CB-9 | Retry waterfall, coalescing, and a HAR export | `NovaNetworkClientDiagnosticsExample` | `theHooksProperyFeedsEveryLifecycleCallbackIntoTheRecorder` |
 
 ## Run Commands
 
@@ -52,6 +53,15 @@ swift run NovaNetworkClientCassetteExample
 into the file (it does not), then replays the exchange through a transport that throws if it is ever
 called — so the second result can only have come from the recording. The first pass needs network
 access; every pass after that would work on a plane.
+swift run NovaNetworkClientDiagnosticsExample
+```
+
+### Diagnostics (CB-9)
+
+`Diagnostics/` runs a scripted transport that fails twice before succeeding, plus two callers
+sharing one request, then prints the retry waterfall and the summary and writes a HAR file. The
+transport is scripted rather than live so the interesting cases happen every time instead of only on
+a bad day.
 
 ### OpenAPI generation (CB-7)
 

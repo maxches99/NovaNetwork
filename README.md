@@ -14,6 +14,7 @@ When multiple callers ask for the same resource at the same time, only one under
 - [Choosing an API](Sources/NovaNetworkClient/NovaNetworkClient.docc/ChoosingAnAPI.md)
 - [Declarative Endpoints (`@Endpoint` macro and OpenAPI generation)](Sources/NovaNetworkClient/NovaNetworkClient.docc/DeclarativeEndpoints.md)
 - [Record and Replay (cassettes)](Sources/NovaNetworkClient/NovaNetworkClient.docc/RecordAndReplay.md)
+- [Diagnostics (recorder, HAR export, Instruments, SwiftUI panel)](Sources/NovaNetworkClient/NovaNetworkClient.docc/Diagnostics.md)
 - [Production Checklist](Sources/NovaNetworkClient/NovaNetworkClient.docc/ProductionChecklist.md)
 - [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md)
@@ -31,6 +32,11 @@ When multiple callers ask for the same resource at the same time, only one under
 - [v2.1 Traceability Pack](docs/TRACEABILITY_PACK_v2.1.md)
 - [v2.11 Traceability Pack](docs/TRACEABILITY_PACK_v2.11.md)
 - [v2.12 Traceability Pack](docs/TRACEABILITY_PACK_v2.12.md)
+- [NovaNetwork v2.13 DFR](docs/dfr/NOVA_NETWORK_V2_13_DFR.md)
+- [v2.0 Traceability Pack](docs/TRACEABILITY_PACK_v2.0.md)
+- [v2.1 Traceability Pack](docs/TRACEABILITY_PACK_v2.1.md)
+- [v2.11 Traceability Pack](docs/TRACEABILITY_PACK_v2.11.md)
+- [v2.13 Traceability Pack](docs/TRACEABILITY_PACK_v2.13.md)
 - [v1.15 Traceability Pack](docs/TRACEABILITY_PACK_v1.15.md)
 - [v1.16 Traceability Pack](docs/TRACEABILITY_PACK_v1.16.md)
 - [v1.19 Traceability Pack](docs/TRACEABILITY_PACK_v1.19.md)
@@ -96,6 +102,9 @@ Generating endpoints from an OpenAPI document needs neither the trait nor the ma
 - Record and replay (`NovaNetworkCassette`): capture real exchanges into a reviewable JSON cassette
   and replay them deterministically in tests, previews, and offline demo builds, with credentials
   redacted before anything reaches disk.
+- Diagnostics (`NovaNetworkDiagnostics`): a bounded recorder over the existing telemetry, retry
+  waterfalls, HAR 1.2 export for bug reports, `os_signpost` intervals for Instruments, and a SwiftUI
+  panel — with credentials redacted before anything is retained.
 - Linux build gate: `NovaNetworkClient`'s Apple-only APIs (certificate pinning, mTLS, the offline
   queue's optional AES-GCM cipher) are behind explicit availability checks, and fingerprint
   hashing no longer requires `CryptoKit`, so the core client compiles on Linux (see
@@ -473,6 +482,62 @@ build links it without a test-support module. Only completed HTTP exchanges are 
 throwing transport is not an exchange — and streaming, SSE, and managed transfers are out of scope.
 
 A runnable end-to-end demo is in [`Examples/Cassette`](Examples/Cassette).
+## Diagnostics (v2.13)
+
+The client already reports everything worth knowing. `DiagnosticsRecorder` is somewhere for it to
+land:
+
+```swift
+import NovaNetworkDiagnostics
+
+let recorder = DiagnosticsRecorder()
+var configuration = NetworkClientConfiguration()
+configuration.telemetryHooks = recorder.hooks
+let client = NetworkClient(configuration: configuration)
+recorder.startConsuming(client.events())
+```
+
+That is the whole installation — diagnostics is a consumer of the existing telemetry contract, so
+nothing about the client changes.
+
+One record per **logical request**, not per attempt. The client reports a start and an end for every
+attempt and announces a retry only after the failed attempt ended; the recorder stitches those back
+into the request a person actually made:
+
+```
+GET /flaky — 200 in 598 ms
+  █████████████ Attempt 1
+  ············ Backoff 185 ms
+               ██████████████████████████ Attempt 2
+               ·························· Backoff 399 ms
+                                         █ Attempt 3
+```
+
+A record also carries the status or error, whether the request was coalesced, how the cache
+answered, redacted headers, and body sizes.
+
+**Failure means failure.** A transport that returns a 500 as a response has completed the exchange —
+so the outcome case is `completed(status:)`, and `isFailure` covers any status from 400 up, a
+transport error, or a cancellation. `failureRate` counts HTTP errors; a summary reading "0% failed"
+next to a list of 500s would be worse than no summary.
+
+**Bounded by construction.** 200 records by default, oldest dropped first, bodies capped at 64 KB
+and flagged when truncated. Credentials are redacted as a record is built, not as it is exported.
+
+```swift
+let har = try await recorder.exportHAR()   // HAR 1.2 — opens in any browser's inspector
+let summary = await recorder.summary()     // 4 requests · 50% failed · 25% coalesced
+```
+
+With `emitsSignposts` enabled, requests become `os_signpost` intervals with retries as point events,
+so Instruments shows request spans next to CPU and allocations. `NetworkDiagnosticsView` presents the
+same data on Apple platforms; everything it shows is computed by `DiagnosticsPanelState`, which is
+plain Swift and testable anywhere.
+
+This is a development and support tool, not production monitoring — `OpenTelemetryAdapter` remains
+the path to a backend.
+
+A runnable demo, including the waterfall above, is in [`Examples/Diagnostics`](Examples/Diagnostics).
 
 ## Preset Quick Start (v1.15)
 
