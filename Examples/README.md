@@ -29,6 +29,7 @@ swift test --filter NetworkingCoverageTests
 | CB-7 | Endpoints generated from an OpenAPI document | `NovaNetworkClientOpenAPIPetstoreExample` | `theCheckedInGeneratedFileMatchesWhatTheGeneratorProducesNow` |
 | CB-8 | Record a live exchange, replay it offline | `NovaNetworkClientCassetteExample` | `theFirstRunRecordsAndTheSecondRunIsOffline` |
 | CB-9 | Retry waterfall, coalescing, and a HAR export | `NovaNetworkClientDiagnosticsExample` | `theHooksProperyFeedsEveryLifecycleCallbackIntoTheRecorder` |
+| CB-10 | OAuth 2.0 with PKCE, shared refresh, and signing | `NovaNetworkClientAuthenticationExample` | `concurrentCallersShareOneRefresh` |
 
 ## Run Commands
 
@@ -62,6 +63,14 @@ swift run NovaNetworkClientDiagnosticsExample
 sharing one request, then prints the retry waterfall and the summary and writes a HAR file. The
 transport is scripted rather than live so the interesting cases happen every time instead of only on
 a bad day.
+swift run NovaNetworkClientAuthenticationExample
+```
+
+### Authentication (CB-10)
+
+`Authentication/` walks the authorization code flow against a scripted provider: it builds the PKCE
+authorization URL, rejects a tampered callback, exchanges the code, then has eight callers need a
+token at once and reports how many refreshes the provider actually saw. The answer is one.
 
 ### OpenAPI generation (CB-7)
 

@@ -15,6 +15,7 @@ When multiple callers ask for the same resource at the same time, only one under
 - [Declarative Endpoints (`@Endpoint` macro and OpenAPI generation)](Sources/NovaNetworkClient/NovaNetworkClient.docc/DeclarativeEndpoints.md)
 - [Record and Replay (cassettes)](Sources/NovaNetworkClient/NovaNetworkClient.docc/RecordAndReplay.md)
 - [Diagnostics (recorder, HAR export, Instruments, SwiftUI panel)](Sources/NovaNetworkClient/NovaNetworkClient.docc/Diagnostics.md)
+- [Authentication (OAuth 2.0, PKCE, token storage, request signing)](Sources/NovaNetworkClient/NovaNetworkClient.docc/Authentication.md)
 - [Production Checklist](Sources/NovaNetworkClient/NovaNetworkClient.docc/ProductionChecklist.md)
 - [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md)
@@ -37,6 +38,11 @@ When multiple callers ask for the same resource at the same time, only one under
 - [v2.1 Traceability Pack](docs/TRACEABILITY_PACK_v2.1.md)
 - [v2.11 Traceability Pack](docs/TRACEABILITY_PACK_v2.11.md)
 - [v2.13 Traceability Pack](docs/TRACEABILITY_PACK_v2.13.md)
+- [NovaNetwork v2.14 DFR](docs/dfr/NOVA_NETWORK_V2_14_DFR.md)
+- [v2.0 Traceability Pack](docs/TRACEABILITY_PACK_v2.0.md)
+- [v2.1 Traceability Pack](docs/TRACEABILITY_PACK_v2.1.md)
+- [v2.11 Traceability Pack](docs/TRACEABILITY_PACK_v2.11.md)
+- [v2.14 Traceability Pack](docs/TRACEABILITY_PACK_v2.14.md)
 - [v1.15 Traceability Pack](docs/TRACEABILITY_PACK_v1.15.md)
 - [v1.16 Traceability Pack](docs/TRACEABILITY_PACK_v1.16.md)
 - [v1.19 Traceability Pack](docs/TRACEABILITY_PACK_v1.19.md)
@@ -124,6 +130,9 @@ Generating endpoints from an OpenAPI document needs neither the trait nor the ma
 - Durable managed transfers with stable IDs, resumable HTTP Range downloads, TUS uploads,
   integrity checks, restoration, and Apple background URLSession coordination.
 - Single-flight HTTP authentication refresh, isolated by authentication scope.
+- Authentication (`NovaNetworkAuth`): OAuth 2.0 authorization code with PKCE, refresh, client
+  credentials, and device grants; typed error envelopes; in-memory and Keychain token stores; and
+  HMAC-SHA256 request signing, wired into the client's existing single-flight refresh.
 - Standalone cross-platform `NovaNetworkCore` product for request/response/error/endpoint models.
 - HTTP Cache 2.0 with ETag and Last-Modified revalidation, corrected age, request directives,
   `stale-if-error`, and safe `Vary: *` handling.
@@ -538,6 +547,78 @@ This is a development and support tool, not production monitoring — `OpenTelem
 the path to a backend.
 
 A runnable demo, including the waterfall above, is in [`Examples/Diagnostics`](Examples/Diagnostics).
+## Authentication (v2.14)
+
+The client already coordinates *when* to refresh. This supplies *what* to refresh with.
+
+```swift
+import NovaNetworkAuth
+
+let oauth = OAuth2Client(configuration: OAuth2Configuration(
+    clientID: "your-client-id",
+    authorizationEndpoint: URL(string: "https://auth.example.com/authorize")!,
+    tokenEndpoint: URL(string: "https://auth.example.com/token")!,
+    redirectURI: URL(string: "yourapp://callback")!,
+    scopes: ["profile", "email"]
+))
+let authenticator = OAuth2Authenticator(client: oauth)
+
+var configuration = NetworkClientConfiguration()
+configuration.authRefreshProvider = authenticator.refreshProvider
+configuration.middleware = [authenticator.middleware]
+```
+
+### The authorization code flow
+
+```swift
+let pkce = PKCEChallenge.generate()
+let state = UUID().uuidString
+let url = try oauth.authorizationURL(state: state, challenge: pkce)
+// The app opens `url` and receives the callback.
+let code = try oauth.authorizationCode(from: callbackURL, expectedState: state)
+let token = try await oauth.exchange(code: code, verifier: pkce.verifier)
+try await authenticator.setToken(token)
+```
+
+PKCE is always used: the verifier is 32 random bytes as base64url, the challenge its SHA-256, so an
+intercepted code is useless without the secret that never left the device. The `state` check runs
+**before** anything else is read and throws without returning the code — that check is what stops an
+attacker's authorization code being redeemed in your user's session.
+
+### Refresh once, not per caller
+
+An actor alone is not enough: it suspends at the network call, so a second caller arriving mid-refresh
+would start another. The authenticator shares the in-flight task, so eight simultaneous callers
+produce **one** request to the provider.
+
+Two details that are wrong more often than they are right, and are handled here:
+
+- a refresh response usually omits `refresh_token`, meaning "keep the one you have" — dropping it is
+  how a session dies an hour later for no visible reason;
+- a token with no `expires_in` is never treated as expired, because guessing would refresh working
+  credentials on a timer.
+
+A refresh rejected with `invalid_grant` clears the stored token, so the app can ask for a sign-in
+instead of failing identically forever.
+
+### Device flow, storage, signing
+
+```swift
+let authorization = try await oauth.requestDeviceAuthorization()
+print("Go to \(authorization.verificationURI) and enter \(authorization.userCode)")
+let token = try await oauth.pollForToken(authorization)   // honors slow_down and authorization_pending
+```
+
+Tokens live in memory by default; `KeychainTokenStore` files them as generic passwords with
+`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, so they are reachable from a background refresh
+and never sync to another device. For APIs that authenticate with a shared secret,
+`HMACRequestSigner` signs over a documented canonical form and ships as middleware.
+
+**Not included:** presenting a browser (it needs a window anchor the app owns) and AWS Signature
+Version 4 (its correctness needs reference vectors; an unverified signer would look finished and be
+dangerous). Both are stated rather than quietly missing.
+
+A runnable walkthrough is in [`Examples/Authentication`](Examples/Authentication).
 
 ## Preset Quick Start (v1.15)
 

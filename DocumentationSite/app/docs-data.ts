@@ -360,6 +360,40 @@ print(summary.shortDescription)
 try har.write(to: url)`, note: "Credentials are redacted as a record is built, not when it is exported: a buffer holding a live token is one screenshot away from leaking it." },
     ],
   },
+  {
+    slug: "authentication",
+    title: "Sign in with OAuth 2.0",
+    summary: "PKCE, the token exchange, and one refresh shared by every caller.",
+    eyebrow: "Authentication",
+    duration: "14 min",
+    level: "Intermediate",
+    symbol: "\u26BF",
+    tone: "purple",
+    outcome: "A client that attaches a token, refreshes it once, and asks for a sign-in when the session really is over.",
+    steps: [
+      { title: "Start the flow", explanation: "Keep the verifier and the state. The callback is worthless without them, and the state check is what stops someone else's authorization code being redeemed in your user's session.", code: `let pkce = PKCEChallenge.generate()
+let state = UUID().uuidString
+let url = try oauth.authorizationURL(state: state, challenge: pkce)
+// The app opens \`url\`: presenting a browser needs a window
+// anchor, which is the app's job, not the library's.` },
+      { title: "Validate what comes back", explanation: "The state is checked before anything else is read, and a mismatch throws without returning the code.", code: `let code = try oauth.authorizationCode(
+    from: callbackURL,
+    expectedState: state
+)
+let token = try await oauth.exchange(code: code, verifier: pkce.verifier)
+try await authenticator.setToken(token)` },
+      { title: "Wire it into the client", explanation: "The client already coordinates a single refresh across a burst of 401s and replays them. This fills in the closure it takes.", code: `var configuration = NetworkClientConfiguration()
+configuration.authRefreshProvider = authenticator.refreshProvider
+configuration.middleware = [authenticator.middleware]
+let client = NetworkClient(configuration: configuration)` },
+      { title: "Let eight callers need a token at once", explanation: "An actor is not enough on its own: it suspends at the network call, so a second caller would start a second refresh. Sharing the in-flight task means the provider sees one request.", code: `await withTaskGroup(of: Void.self) { group in
+    for _ in 0..<8 {
+        group.addTask { _ = try? await authenticator.validToken() }
+    }
+}
+// The provider saw exactly one refresh.`, note: "A refresh response usually omits refresh_token, meaning keep the one you have. Dropping it there is how a session ends an hour later for no visible reason." },
+    ],
+  },
 ];
 
 export function tutorialForSlug(slug: string) {
