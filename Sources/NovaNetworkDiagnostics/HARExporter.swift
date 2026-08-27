@@ -1,4 +1,5 @@
 import Foundation
+import NovaNetworkCore
 
 /// Writes records as a HAR 1.2 log.
 ///
@@ -11,7 +12,15 @@ public struct HARExporter: Sendable {
     public let creatorVersion: String
 
     /// Creates an exporter.
-    public init(creatorName: String = "NovaNetworkDiagnostics", creatorVersion: String = "2.13") {
+    ///
+    /// - Parameters:
+    ///   - creatorName: What the HAR reports as the producing tool.
+    ///   - creatorVersion: What it reports as that tool's version. Defaults to the package's, so a
+    ///     trace says which version wrote it rather than which version introduced the exporter.
+    public init(
+        creatorName: String = "NovaNetworkDiagnostics",
+        creatorVersion: String = NovaNetworkVersion.current
+    ) {
         self.creatorName = creatorName
         self.creatorVersion = creatorVersion
     }
