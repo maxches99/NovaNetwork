@@ -86,6 +86,18 @@ source-compatible differences are allowlisted in `docs/api-breakage-allowlist.tx
 documents why each entry is there. If your change is intentionally breaking, discuss it in the PR
 first; if CI flags something you didn't intend to change, that's the gate doing its job.
 
+## Cutting a release
+
+1. Move the `## Unreleased` section of `CHANGELOG.md` under a `## <version> — <date>` heading, add a
+   line for it under `## Releases`, and leave `## Unreleased` empty.
+2. Bump `NovaNetworkVersion.current`. It is what a HAR reports as the tool that wrote it, and the
+   only thing that keeps that field honest.
+3. Tag the merge commit on `main` and push the tag.
+4. Point the API-breakage gate at the new tag: update `treeish` in the
+   `api-breaking-changes-gate` job in `.github/workflows/ci.yml`, and clear the entries in
+   `docs/api-breakage-allowlist.txt` that the new baseline already reflects. Do this *after* the tag
+   exists, or the job fails looking for it.
+
 ## Git hygiene
 
 - Don't revert unrelated local changes.

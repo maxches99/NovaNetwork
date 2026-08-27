@@ -9,6 +9,12 @@ convention; not every one is a tagged release — see [Releases](#releases).
 
 ## Unreleased
 
+Nothing yet.
+
+## 3.4.0 — 2026-08-27
+
+The first tagged release since 2.0.0. Everything below shipped in it.
+
 - [3.4](docs/WHATS_NEW_v3.4.md) — Sharing the offline queue across processes: App Group container
   resolution that names the entitlement when it is missing, a non-blocking `flock`-based
   cross-process lock, and `CoordinatedOfflineWriteStore`, a decorator that takes the lock around any
@@ -96,6 +102,12 @@ convention; not every one is a tagged release — see [Releases](#releases).
 
 ## Releases
 
+- [3.4.0](#340--2026-08-27) — everything from 2.2 to 3.4 in one tag: SSE, multipart, resumable and
+  background transfers, WebSocket hardening, the `@Endpoint` macro and OpenAPI generator, record and
+  replay cassettes, diagnostics with a timeline and a macOS inspector, a full auth module,
+  NovaNetworkQuery, adaptive concurrency, network path policies, and a queue an app can share with
+  its extensions. Relicensed to Apache 2.0. The platform floor and the zero-dependency default
+  package graph are unchanged.
 - [2.0.0](docs/WHATS_NEW_v2.0.md) — Typed `Endpoint`/`execute` API, `NovaNetworkCore` as a
   standalone cross-platform product, native streaming/upload/download, single-flight HTTP auth
   refresh.
