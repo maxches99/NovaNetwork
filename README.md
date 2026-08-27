@@ -561,6 +561,37 @@ and [`DemoApp`](DemoApp) is an iOS app that puts the panel on a device: five sce
 retries, coalescing, cache, rejection, and cancellation, run either against a scripted transport
 inside the app or as real HTTPS requests to an httpbin-compatible host.
 
+### One clock, not one row at a time (v3.1)
+
+A waterfall says where one request's time went. It cannot say what else was running — and
+concurrency, coalescing, and queueing are properties of requests together. `DiagnosticsTimeline`
+places every retained record on one window with a readable ruler, and the panel switches to it:
+
+```
+2.1 s total    0 ms      500 ms     1 s       1.5 s
+GET /flaky     ▐█▌──▐█▌────▐█▌
+GET /profile              ▐██▌
+GET /settings                   ▐██▌
+POST /orders                          ▐█▌
+GET /slow                                  ▐████████   in flight
+```
+
+Two callers coalesced onto one request start on the same vertical line, a cache hit is a sliver, and
+a retry storm is a row of bars with the backoff visible between them. A request still running is
+drawn up to the moment the snapshot was read.
+
+### Reading a HAR back (v3.1)
+
+`HARImporter` is the other half of the export: it reads HAR 1.2 from any producer, and restores what
+HAR has no field for — attempts, coalescing, cache outcome — when the file came from `HARExporter`.
+
+```swift
+await recorder.load(try HARImporter().import(Data(contentsOf: url)))
+```
+
+[`Inspector`](Inspector) is a macOS app built on those two lines: drop a HAR on it and read it with
+the same panel a live app embeds.
+
 ## Authentication (v2.14)
 
 The client already coordinates *when* to refresh. This supplies *what* to refresh with.

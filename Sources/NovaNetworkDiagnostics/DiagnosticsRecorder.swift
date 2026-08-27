@@ -119,6 +119,19 @@ public actor DiagnosticsRecorder {
         try HARExporter().export(records)
     }
 
+    /// Replaces everything retained with records read from somewhere else.
+    ///
+    /// This is how a HAR someone attached to a bug report becomes something the panel can show: read
+    /// the file with ``HARImporter``, load it here, and the same view that reads a live session
+    /// reads the file. Live recording keeps working afterwards; loaded records are ordinary records.
+    ///
+    /// The capacity still applies, so a file larger than the recorder keeps its most recent records.
+    public func load(_ records: [RequestDiagnostic]) {
+        clear()
+        guard options.capacity > 0 else { return }
+        self.records = records.suffix(options.capacity)
+    }
+
     /// Drops every record.
     public func clear() {
         records.removeAll()
