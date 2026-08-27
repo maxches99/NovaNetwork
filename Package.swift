@@ -29,6 +29,7 @@ let package = Package(
         .executable(name: "NovaNetworkClientProductionProfileExample", targets: ["NovaNetworkClientProductionProfileExample"]),
         .executable(name: "NovaNetworkClientOpenAPIPetstoreExample", targets: ["NovaNetworkClientOpenAPIPetstoreExample"]),
         .executable(name: "NovaNetworkClientCassetteExample", targets: ["NovaNetworkClientCassetteExample"]),
+        .executable(name: "NovaNetworkClientDiagnosticsExample", targets: ["NovaNetworkClientDiagnosticsExample"]),
     ],
     traits: [
         .trait(
@@ -104,6 +105,11 @@ let package = Package(
             path: "Sources/NovaNetworkCassette"
         ),
         .target(
+            name: "NovaNetworkDiagnostics",
+            dependencies: ["NovaNetworkClient"],
+            path: "Sources/NovaNetworkDiagnostics"
+        ),
+        .target(
             name: "NovaNetworkClientTestSupport",
             dependencies: ["NovaNetworkClient", "NovaNetworkCassette"],
             path: "Sources/NovaNetworkClientTestSupport"
@@ -136,6 +142,11 @@ let package = Package(
             name: "NovaNetworkCassetteTests",
             dependencies: ["NovaNetworkCassette", "NovaNetworkClient"],
             path: "Tests/NovaNetworkCassetteTests"
+        ),
+        .testTarget(
+            name: "NovaNetworkDiagnosticsTests",
+            dependencies: ["NovaNetworkDiagnostics", "NovaNetworkClientTestSupport"],
+            path: "Tests/NovaNetworkDiagnosticsTests"
         ),
         .testTarget(
             name: "NovaNetworkOpenAPITests",
@@ -208,6 +219,11 @@ let package = Package(
             name: "NovaNetworkClientCassetteExample",
             dependencies: ["NovaNetworkClient", "NovaNetworkCassette"],
             path: "Examples/Cassette"
+        ),
+        .executableTarget(
+            name: "NovaNetworkClientDiagnosticsExample",
+            dependencies: ["NovaNetworkClient", "NovaNetworkDiagnostics"],
+            path: "Examples/Diagnostics"
         ),
         .executableTarget(
             name: "NovaNetworkClientOpenAPIPetstoreExample",
