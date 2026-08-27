@@ -2147,6 +2147,8 @@ struct WebSocketClientTests {
             Issue.record("Expected receive() to throw when disconnected.")
         } catch let error as WebSocketError {
             #expect(error == .disconnected)
+        } catch {
+            Issue.record("receive() threw \(error) instead of a WebSocketError")
         }
 
         do {
@@ -2154,6 +2156,8 @@ struct WebSocketClientTests {
             Issue.record("Expected send() to throw when disconnected.")
         } catch let error as WebSocketError {
             #expect(error == .disconnected)
+        } catch {
+            Issue.record("send() threw \(error) instead of a WebSocketError")
         }
 
         do {
@@ -2161,6 +2165,8 @@ struct WebSocketClientTests {
             Issue.record("Expected ping() to throw when disconnected.")
         } catch let error as WebSocketError {
             #expect(error == .disconnected)
+        } catch {
+            Issue.record("ping() threw \(error) instead of a WebSocketError")
         }
 
         try await transport.connect(url: URL(string: "wss://example.com/ws")!, headers: ["X-Test": "1"])
@@ -2211,7 +2217,21 @@ struct WebSocketClientTests {
     @Test
     func urlSessionWebSocketTransportDefaultSessionInitializerIsCallable() async throws {
         let transport = URLSessionWebSocketTransport(session: URLSession(configuration: .ephemeral))
-        try await transport.connect(url: URL(string: "ws://127.0.0.1:9/ws")!, headers: [:])
+
+        // Deliberately no connect. Resuming a real task starts a live connection attempt that
+        // outlives this test -- the only network operation in the suite, and the most plausible
+        // source of the NSURLErrorNetworkConnectionLost that surfaced in a neighbouring, fully
+        // mocked test on CI. What this test is for is that the session initializer produces a
+        // usable transport, and its guards answer before anything is connected.
+        do {
+            _ = try await transport.receive()
+            Issue.record("Expected receive() to throw before connecting.")
+        } catch let error as WebSocketError {
+            #expect(error == .disconnected)
+        } catch {
+            Issue.record("receive() threw \(error) instead of a WebSocketError")
+        }
+
         await transport.disconnect(reason: nil)
     }
 
