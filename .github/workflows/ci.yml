@@ -386,3 +386,45 @@ jobs:
             -project Inspector/NovaNetworkInspector.xcodeproj \
             -scheme NovaNetworkInspector \
             -destination 'platform=macOS'
+
+  benchmark-baselines:
+    # The benchmark executable existed and nothing ran it, so a regression in how many transport
+    # calls a coalesced workload makes would have landed without anyone noticing.
+    #
+    # What is enforced here is only what the code decides: transport-call counts, retry-storm
+    # outcomes, breaker transitions, replay counts. Those hold on any machine. Elapsed time, p95/p99
+    # latency, and allocation deltas are as much a property of a shared runner as of the code, so
+    # they are printed and advised rather than enforced -- a budget that fails because a neighbouring
+    # job was busy teaches a team to ignore the gate. Pass `--strict-timing` on dedicated hardware to
+    # enforce those too.
+    name: Benchmark Baselines
+    runs-on: macos-15
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Select Xcode 26.2 (Swift 6.2)
+        run: sudo xcode-select --switch /Applications/Xcode_26.2.app/Contents/Developer
+
+      - name: Build the Benchmarks
+        run: swift build -c release --product NovaNetworkClientBenchmarks
+
+      - name: Check the Request Baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="$(swift build -c release --product NovaNetworkClientBenchmarks --show-bin-path)/NovaNetworkClientBenchmarks"
+          OUTPUT=$("${BIN}" --check-baseline 2>&1 | tee /dev/stderr)
+          # The marker is asserted as well as the exit code, so a future early return cannot pass
+          # by printing nothing.
+          grep -Eq '^baseline_check=(passed|passed_with_advisory)$' <<< "${OUTPUT}"
+
+      - name: Check the Stress Baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="$(swift build -c release --product NovaNetworkClientBenchmarks --show-bin-path)/NovaNetworkClientBenchmarks"
+          OUTPUT=$("${BIN}" --check-stress-baseline 2>&1 | tee /dev/stderr)
+          grep -Eq '^stress_baseline_check=(passed|passed_with_advisory)$' <<< "${OUTPUT}"

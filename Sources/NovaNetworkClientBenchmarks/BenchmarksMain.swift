@@ -111,10 +111,12 @@ struct BenchmarksMain {
         let args = Set(CommandLine.arguments.dropFirst())
         let shouldRunStressSuite = args.contains("--stress-suite") || args.contains("--check-stress-baseline")
         let shouldCheckBaseline = args.contains("--check-baseline")
+        // Timing budgets are enforced only when asked for, because CI runners are shared.
+        let strictTiming = args.contains("--strict-timing")
         let shouldCheckStressBaseline = args.contains("--check-stress-baseline")
 
         if shouldRunStressSuite {
-            await runStressSuite(checkBaseline: shouldCheckStressBaseline)
+            await runStressSuite(checkBaseline: shouldCheckStressBaseline, strictTiming: strictTiming)
             return
         }
 
@@ -163,28 +165,48 @@ struct BenchmarksMain {
                 let data = try? Data(contentsOf: baselineURL),
                 let baseline = try? JSONDecoder().decode(BenchmarkBaseline.self, from: data)
             else {
-                fputs("baseline_check=skipped missing_or_invalid_baseline\n", stderr)
-                return
+                // Asking for the check and not being able to perform it is a failure, not a pass.
+                // The path is relative to the working directory, so a job run from the wrong place
+                // would otherwise report success without having compared anything.
+                fputs("baseline_check=failed reason=missing_or_invalid_baseline path=\(baselineURL.path)\n", stderr)
+                Foundation.exit(1)
             }
 
             let elapsedOK = elapsedMs <= baseline.maxElapsedMilliseconds
             let callsOK = calls <= baseline.maxTransportCalls
             let latencyOK = p95Latency <= baseline.maxP95LatencyMilliseconds
             let allocationOK = (allocatedDelta ?? 0) <= baseline.maxAllocatedBytesDelta
-            if elapsedOK && callsOK && latencyOK && allocationOK {
+
+            // How many calls the transport saw is a property of the code: coalescing, retry, and
+            // caching decide it, and the answer is the same on any machine. Elapsed time, latency,
+            // and allocations are properties of the machine as much as the code, so on a shared
+            // runner they are reported and not enforced -- a budget that fails because a
+            // neighbouring job was busy teaches a team to ignore the gate.
+            let timingIsAdvisory = !strictTiming
+            if !callsOK {
+                fputs(
+                    "baseline_check=failed reason=transport_calls transport_calls=\(calls) max_transport_calls=\(baseline.maxTransportCalls)\n",
+                    stderr
+                )
+                Foundation.exit(1)
+            }
+
+            if elapsedOK && latencyOK && allocationOK {
                 print("baseline_check=passed")
                 return
             }
 
-            fputs(
-                "baseline_check=failed elapsed_ms=\(elapsedMs) max_elapsed_ms=\(baseline.maxElapsedMilliseconds) transport_calls=\(calls) max_transport_calls=\(baseline.maxTransportCalls) p95_latency_ms=\(p95Latency) max_p95_latency_ms=\(baseline.maxP95LatencyMilliseconds) allocated_delta_bytes=\(allocatedDelta ?? 0) max_allocated_delta_bytes=\(baseline.maxAllocatedBytesDelta)\n",
-                stderr
-            )
-            Foundation.exit(1)
+            let detail = "elapsed_ms=\(elapsedMs) max_elapsed_ms=\(baseline.maxElapsedMilliseconds) p95_latency_ms=\(p95Latency) max_p95_latency_ms=\(baseline.maxP95LatencyMilliseconds) allocated_delta_bytes=\(allocatedDelta ?? 0) max_allocated_delta_bytes=\(baseline.maxAllocatedBytesDelta)"
+            guard timingIsAdvisory else {
+                fputs("baseline_check=failed reason=timing \(detail)\n", stderr)
+                Foundation.exit(1)
+            }
+            fputs("baseline_check=advisory reason=timing \(detail)\n", stderr)
+            print("baseline_check=passed_with_advisory")
         }
     }
 
-    private static func runStressSuite(checkBaseline: Bool) async {
+    private static func runStressSuite(checkBaseline: Bool, strictTiming: Bool) async {
         let retryStorm = await runRetryStormScenario()
         let breakerFlapping = await runBreakerFlappingScenario()
         let runtimeUpdates = await runRuntimePolicyUpdateScenario()
@@ -219,8 +241,8 @@ struct BenchmarksMain {
             let data = try? Data(contentsOf: baselineURL),
             let baseline = try? JSONDecoder().decode(StressBaseline.self, from: data)
         else {
-            fputs("stress_baseline_check=skipped missing_or_invalid_baseline\n", stderr)
-            return
+            fputs("stress_baseline_check=failed reason=missing_or_invalid_baseline path=\(baselineURL.path)\n", stderr)
+            Foundation.exit(1)
         }
 
         let retryCallsOK = retryStorm.transportCalls == baseline.retryStormExpectedTransportCalls
@@ -236,19 +258,30 @@ struct BenchmarksMain {
         let offlineRealtimeLatencyOK = offlineRealtime.realtimeP99LatencyMilliseconds <= baseline.offlineRealtimeMaximumP99LatencyMilliseconds
         let offlineRealtimeCallsOK = offlineRealtime.transportCalls <= baseline.offlineRealtimeMaximumTransportCalls
 
-        if retryCallsOK,
-           retrySuccessOK,
-           breakerOK,
-           runtimeOK,
-           mixedPriorityOK,
-           mixedPriorityLatencyOK,
-           cancellationCancelledOK,
-           cancellationSuccessOK,
-           offlineRealtimeReplayedOK,
-           offlineRealtimeRealtimeSuccessOK,
-           offlineRealtimeLatencyOK,
-           offlineRealtimeCallsOK {
-            print("stress_baseline_check=passed")
+        // Counts and outcomes are decided by the code and hold on any machine; the two p99 budgets
+        // are decided partly by the runner, so they advise unless timing is explicitly enforced.
+        let behaviorOK = retryCallsOK
+            && retrySuccessOK
+            && breakerOK
+            && runtimeOK
+            && mixedPriorityOK
+            && cancellationCancelledOK
+            && cancellationSuccessOK
+            && offlineRealtimeReplayedOK
+            && offlineRealtimeRealtimeSuccessOK
+            && offlineRealtimeCallsOK
+        let latencyOK = mixedPriorityLatencyOK && offlineRealtimeLatencyOK
+
+        if behaviorOK, latencyOK || !strictTiming {
+            if latencyOK {
+                print("stress_baseline_check=passed")
+            } else {
+                fputs(
+                    "stress_baseline_check=advisory reason=timing mixed_priority_p99_ms=\(mixedPriority.p99LatencyMilliseconds) offline_realtime_p99_ms=\(offlineRealtime.realtimeP99LatencyMilliseconds)\n",
+                    stderr
+                )
+                print("stress_baseline_check=passed_with_advisory")
+            }
             return
         }
 
