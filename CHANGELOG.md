@@ -26,6 +26,13 @@ convention; not every one is a tagged release — see [Releases](#releases).
   the repository as a local package. Five scenarios (retry, coalescing, cache, rejection,
   cancellation) run either against a scripted transport inside the app or as real HTTPS requests to
   an httpbin-compatible host.
+- **Benchmark baselines are gated in CI.** The benchmark executable existed and nothing ran it, so
+  a regression in how many transport calls a coalesced workload makes would have landed silently.
+  The checks now split what the code decides — transport-call counts, retry-storm outcomes, breaker
+  transitions, replay counts, enforced — from what a shared runner decides as much as the code —
+  elapsed time, latency, allocations, reported as an advisory unless `--strict-timing` is passed.
+  A missing or unreadable baseline file is now a failure rather than a silent pass, which it was
+  whenever the benchmark ran from outside the repository root.
 - [3.0](docs/WHATS_NEW_v3.0.md) — NovaNetworkQuery: server state by key for the screens that render
   it, with stale-while-revalidate reads, shared in-flight fetches, subscriptions, optimistic
   mutations with exact rollback, hierarchical invalidation, paged queries, and an availability-gated

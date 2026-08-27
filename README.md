@@ -1243,7 +1243,30 @@ swift run NovaNetworkClientBenchmarks --stress-suite
 swift run NovaNetworkClientBenchmarks --check-stress-baseline
 ```
 
-Stress baseline now includes a combined offline-replay + realtime request pressure scenario.
+The stress baseline includes a combined offline-replay + realtime request pressure scenario.
+
+### What the baselines enforce, and what they only report
+
+Both checks run in CI, and they draw a line through the numbers they print:
+
+- **Enforced** — everything the code decides and that holds on any machine: how many calls the
+  transport saw, retry-storm outcomes, breaker transitions, replay counts. A change to coalescing,
+  retry, or caching moves these, and moving them fails the build.
+- **Advisory** — elapsed time, p95/p99 latency, and allocation deltas. On a shared CI runner these
+  are as much a property of the machine as of the code, so they are printed and reported as
+  `baseline_check=passed_with_advisory` rather than failing. A budget that fails because a
+  neighbouring job was busy teaches a team to ignore the gate.
+
+Pass `--strict-timing` to enforce the timing budgets too, which is what you want on dedicated
+hardware:
+
+```bash
+swift run NovaNetworkClientBenchmarks --check-baseline --strict-timing
+```
+
+Asking for a check and not being able to perform it is a failure: if `Benchmarks/baseline.json`
+cannot be read — which is what happens when the benchmark is run from outside the repository root —
+the check exits non-zero rather than reporting success without having compared anything.
 
 ## Deterministic Chaos Suite
 
