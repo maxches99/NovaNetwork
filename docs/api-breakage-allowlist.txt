@@ -1,5 +1,6 @@
-API breakage: constructor NetworkClient.init(transport:cancellationPolicy:coalescerLimits:fingerprintPolicy:retryPolicy:retryClock:retryRandomGenerator:defaultCachePolicy:cacheMaxEntries:cache:offlineWriteStore:offlineConnectivityMonitor:offlineConflictResolver:observer:networkObserver:middlewares:telemetryHooks:httpAuthRefreshProvider:httpAuthRefreshPolicy:decoder:) has been removed
-API breakage: constructor NetworkTelemetryHooks.init(onRequestStart:onRequestEnd:onCoalescerEvent:onRetryScheduled:onRetryExhausted:onRetrySkipped:onRequestCancelled:onQueueMetrics:onOfflineQueueEvent:onWebSocketEvent:onCircuitBreakerTransition:onPolicyUpdated:onBatchCompleted:onTransferEvent:onHTTPAuthRefresh:) has been removed
-API breakage: func DownloadDestinationPolicy.hash(into:) has been removed
-API breakage: var DownloadDestinationPolicy.hashValue has been removed
-API breakage: constructor RequestExecutionOptions.init(coalescerLimitsOverride:priority:capacityScheduling:coalescingMode:deadlineBudgetSeconds:circuitBreakerPolicy:rateLimitPolicy:idempotencyPolicy:offlineQueuePolicy:) has been removed
+# Deliberate, source-compatible differences the API-breakage gate should ignore.
+#
+# Empty as of the 3.4.0 baseline: every entry that used to be here described an initializer whose
+# signature grew a defaulted parameter between 2.0.0 and 3.4.0, and 3.4.0 records those signatures
+# as they now are. Add a line only for a difference that is genuinely source-compatible, and say in
+# the commit why it is.
