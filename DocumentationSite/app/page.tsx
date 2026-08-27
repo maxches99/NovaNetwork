@@ -13,6 +13,7 @@ const capabilities = [
   ["08", "Record and replay", "Capture real traffic into a reviewable cassette and replay it in tests, previews, and offline demo builds."],
   ["09", "Diagnostics you can see", "Record what the client did, read retry waterfalls, and export a HAR that opens in any network inspector."],
   ["10", "Authentication", "OAuth 2.0 with PKCE, every grant, safe token storage, and one refresh shared by every caller."],
+  ["11", "Query layer", "Server state by key for the screens that render it, with stale reads, shared fetches, and optimistic mutations."],
 ] as const;
 
 export default function Home() {

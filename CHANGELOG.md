@@ -9,6 +9,10 @@ convention; not every one is a tagged release — see [Releases](#releases).
 
 ## Unreleased
 
+- [3.0](docs/WHATS_NEW_v3.0.md) — NovaNetworkQuery: server state by key for the screens that render
+  it, with stale-while-revalidate reads, shared in-flight fetches, subscriptions, optimistic
+  mutations with exact rollback, hierarchical invalidation, paged queries, and an availability-gated
+  observable model. New standalone `NovaNetworkQuery` product; the platform floor is unchanged.
 - [2.14](docs/WHATS_NEW_v2.14.md) — Authentication: OAuth 2.0 authorization code with PKCE, refresh,
   client credentials, and device grants, typed error envelopes, in-memory and Keychain token stores,
   single-flight refresh wired into the client, and HMAC-SHA256 request signing. New standalone
