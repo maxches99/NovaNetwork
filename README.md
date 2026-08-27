@@ -1230,6 +1230,37 @@ let inFlight = await client.inFlightRequests()
 print(inFlight.map(\.key))
 ```
 
+## Sharing the Offline Queue with Extensions (v3.4)
+
+A share extension is a separate process with its own container: a write queued there is invisible to
+the app. The only directory both can see is the App Group container — and the moment they both use
+it, the actor protecting the queue stops being enough, because an actor serialises one process and
+these are two.
+
+```swift
+let directory = try AppGroupContainer.directory(
+    forAppGroup: "group.com.example.app",
+    subdirectory: "offline-queue"
+)
+configuration.offlineWriteStore = CoordinatedOfflineWriteStore(
+    wrapping: DiskOfflineWriteStore(directoryURL: directory),
+    lock: CrossProcessFileLock(url: directory.appendingPathComponent(".lock"))
+)
+```
+
+`CrossProcessFileLock` is `flock` on a lock file, taken **without blocking** and retried — the
+blocking form would park the cooperative thread it runs on and stall every other request in the
+process while a different process worked. It is a value type rather than an actor because it holds
+no mutable state: the mutual exclusion lives in the filesystem.
+
+`CoordinatedOfflineWriteStore` is a decorator, so the existing store keeps behaving exactly as it did
+and anything conforming to `OfflineWriteStore` can be wrapped the same way.
+
+Two things worth knowing before adopting. The lock is **advisory**: a process that writes the
+directory without taking it is not stopped. And the platforms disagree about a missing entitlement —
+iOS reports it, macOS hands back a container path regardless, so there the mistake only surfaces
+when something tries to write. See [What's New 3.4](docs/WHATS_NEW_v3.4.md).
+
 ## Network Path Policies (v3.3)
 
 Reachability answers one bit: can we reach anything. That bit cannot tell a metered hotspot from
