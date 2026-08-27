@@ -143,7 +143,9 @@ struct TransferTests {
         #expect(completed?.body == Data("accepted".utf8))
     }
 
-    @Test
+    // Crashes inside libFoundationNetworking on Linux (URLSession.download ->
+    // _ProtocolClient.urlProtocolDidFinishLoading), taking the whole test process with it.
+    @Test(.enabled(if: PlatformSupport.hasAppleURLSessionBehaviour, PlatformSupport.urlSessionReason))
     func defaultTransportDownloadsAndFinalizesDestination() async throws {
         let expected = Data("downloaded-file".utf8)
         TransferURLProtocol.responseData = expected

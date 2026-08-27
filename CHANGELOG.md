@@ -27,8 +27,11 @@ convention; not every one is a tagged release — see [Releases](#releases).
   **skipped on Linux with a stated reason** rather than deleted, because they depend on Apple's
   `URLSession` behaviour — ranged and resumed requests reaching a `URLProtocol` double, responses
   arriving in more than one chunk, and background sessions, which do not exist there at all. They
-  appear as skips in the output, so the gap is visible rather than absent. With those set aside the
-  suite passes on Linux. One test now pins *both*
+  appear as skips in the output, so the gap is visible rather than absent. One of them is skipped for
+  a blunter reason: `URLSession.download` **crashes inside `libFoundationNetworking`** there, in
+  `_ProtocolClient.urlProtocolDidFinishLoading`, taking the whole test process with it. That is a bug
+  in swift-corelibs-foundation, not in this package, and nothing here can fix it. With those set
+  aside the suite passes on Linux. One test now pins *both*
   platforms instead of one: an error thrown from a `URLProtocol` reaches the transport wrapped on
   Apple and unwrapped on Linux, so it maps to `transport` there and `cancelled` here, and both are
   asserted.
