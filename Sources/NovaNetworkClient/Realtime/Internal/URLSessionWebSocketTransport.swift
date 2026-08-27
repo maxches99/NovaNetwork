@@ -22,7 +22,15 @@ protocol URLSessionWebSocketTasking: Sendable {
 
 extension URLSessionWebSocketTask: URLSessionWebSocketTasking {}
 
-private actor WebSocketPingContinuationGate {
+/// Resumes a ping's continuation exactly once, on whichever pong result arrives first.
+///
+/// A lock rather than an actor, so that resuming is synchronous. An actor would make `resume`
+/// async, which means hopping through a task per callback -- and two callbacks would then race,
+/// letting a later result win over an earlier one. URLSession calls a pong handler once, but the
+/// contract here is "the first result wins", and a contract that holds only when the scheduler
+/// cooperates is not one.
+private final class WebSocketPingContinuationGate: @unchecked Sendable {
+    private let lock = NSLock()
     private var continuation: CheckedContinuation<Void, any Error>?
 
     init(continuation: CheckedContinuation<Void, any Error>) {
@@ -30,12 +38,16 @@ private actor WebSocketPingContinuationGate {
     }
 
     func resume(with error: (any Error)?) {
-        guard let continuation else { return }
-        self.continuation = nil
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+
+        guard let pending else { return }
         if let error {
-            continuation.resume(throwing: error)
+            pending.resume(throwing: error)
         } else {
-            continuation.resume()
+            pending.resume()
         }
     }
 }
@@ -103,7 +115,7 @@ actor URLSessionWebSocketTransport: WebSocketTransport {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
             let gate = WebSocketPingContinuationGate(continuation: continuation)
             task.sendPing(pongReceiveHandler: { error in
-                Task { await gate.resume(with: error) }
+                gate.resume(with: error)
             })
         }
     }

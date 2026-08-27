@@ -4,6 +4,10 @@ import NovaNetworkClient
 import NovaNetworkClientTestSupport
 
 // Requirements: FR-TEST-4 (deterministic virtual clock).
+//
+// A fixed real-time sleep is a guess that a task has reached `clock.sleep`, not a guarantee, and it
+// is the reason this suite failed intermittently on CI. Every wait here is on observable state --
+// `pendingSleepCount()` -- with a deadline.
 
 @Suite
 struct VirtualClockTests {
@@ -12,11 +16,9 @@ struct VirtualClockTests {
         let clock = VirtualClock()
         let task = Task { try await clock.sleep(nanoseconds: 5_000_000_000) }
 
-        try await Task.sleep(nanoseconds: 20_000_000) // let the task start sleeping
-        #expect(await clock.pendingSleepCount() == 1)
+        await waitUntil { await clock.pendingSleepCount() == 1 }
 
         await clock.advance(by: 3_000_000_000)
-        try await Task.sleep(nanoseconds: 20_000_000)
         #expect(await clock.pendingSleepCount() == 1) // still short of the 5s deadline
 
         await clock.advance(by: 2_000_000_000)
@@ -28,7 +30,7 @@ struct VirtualClockTests {
     func advanceToNextDeadlineJumpsDirectlyToTheEarliestPendingSleep() async throws {
         let clock = VirtualClock()
         let task = Task { try await clock.sleep(nanoseconds: 10_000_000_000) }
-        try await Task.sleep(nanoseconds: 20_000_000)
+        await waitUntil { await clock.pendingSleepCount() == 1 }
 
         let advanced = await clock.advanceToNextDeadline()
         #expect(advanced == 10_000_000_000)
@@ -53,22 +55,27 @@ struct VirtualClockTests {
             try await clock.sleep(nanoseconds: 1_000_000_000)
             await order.record("short")
         }
-        try await Task.sleep(nanoseconds: 20_000_000)
+        // Both sleepers must be registered before the clock moves.
+        await waitUntil { await clock.pendingSleepCount() == 2 }
 
-        await clock.advance(by: 5_000_000_000)
-        try await long.value
+        // Advancing to each deadline in turn asserts the property under test -- the shorter deadline
+        // wakes first and the longer one does not wake early -- without depending on how the
+        // scheduler happens to interleave two tasks that were resumed together.
+        await clock.advance(by: 1_000_000_000)
         try await short.value
+        #expect(await order.resumed == ["short"])
 
-        let resumed = await order.resumed
-        #expect(resumed == ["short", "long"])
+        await clock.advance(by: 4_000_000_000)
+        try await long.value
+
+        #expect(await order.resumed == ["short", "long"])
     }
 
     @Test
     func cancellingTheSleepingTaskThrowsCancellationErrorAndRemovesTheWaiter() async throws {
         let clock = VirtualClock()
         let task = Task { try await clock.sleep(nanoseconds: 5_000_000_000) }
-        try await Task.sleep(nanoseconds: 20_000_000)
-        #expect(await clock.pendingSleepCount() == 1)
+        await waitUntil { await clock.pendingSleepCount() == 1 }
 
         task.cancel()
         do {
