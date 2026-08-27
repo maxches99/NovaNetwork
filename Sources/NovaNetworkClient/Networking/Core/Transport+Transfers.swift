@@ -293,11 +293,7 @@ public extension Transport {
                     let parent = destinationURL.deletingLastPathComponent()
                     try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
                     do {
-                        if FileManager.default.fileExists(atPath: destinationURL.path) {
-                            _ = try FileManager.default.replaceItemAt(destinationURL, withItemAt: temporaryURL)
-                        } else {
-                            try FileManager.default.moveItem(at: temporaryURL, to: destinationURL)
-                        }
+                        try AtomicFileReplacement.replaceItem(at: destinationURL, with: temporaryURL)
                     } catch {
                         throw NetworkTransferError.destinationFinalizationFailed(destinationURL)
                     }

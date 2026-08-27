@@ -123,15 +123,11 @@ public actor DiskTransferJournal: TransferJournal {
             // Stage through an explicitly named `.partial` file rather than
             // `Data.write(options: .atomic)`'s own hidden temp file, whose name Foundation picks
             // unpredictably (e.g. `.dat.nosync<hex>.<random>`) and which `load()`'s orphan cleanup
-            // would never recognize. Publishing this known path with `replaceItemAt`/`moveItem`
+            // would never recognize. Publishing this known path with `AtomicFileReplacement`
             // keeps the final write atomic while ensuring a crash between staging and publish
             // leaves a `<record>.transfer.json.partial` file the next `load()` will find and remove.
             try data.write(to: temporaryURL)
-            if fileManager.fileExists(atPath: finalURL.path) {
-                _ = try fileManager.replaceItemAt(finalURL, withItemAt: temporaryURL)
-            } else {
-                try fileManager.moveItem(at: temporaryURL, to: finalURL)
-            }
+            try AtomicFileReplacement.replaceItem(at: finalURL, with: temporaryURL, fileManager: fileManager)
         } catch {
             throw TransferJournalError.persistenceFailure
         }

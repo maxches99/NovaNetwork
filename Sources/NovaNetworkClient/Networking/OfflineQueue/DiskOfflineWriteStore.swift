@@ -536,11 +536,7 @@ public actor DiskOfflineWriteStore: OfflineWriteStore {
         }
 
         let destinationURL = fileURL(forQueueID: queueID)
-        if fileManager.fileExists(atPath: destinationURL.path) {
-            _ = try fileManager.replaceItemAt(destinationURL, withItemAt: temporaryURL)
-        } else {
-            try fileManager.moveItem(at: temporaryURL, to: destinationURL)
-        }
+        try AtomicFileReplacement.replaceItem(at: destinationURL, with: temporaryURL, fileManager: fileManager)
         try? fileManager.removeItem(at: temporaryURL)
     }
 

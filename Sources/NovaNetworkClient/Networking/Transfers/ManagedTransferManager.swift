@@ -769,10 +769,10 @@ extension ManagedTransferManager {
                     try? FileManager.default.removeItem(at: partialURL)
                     return
                 case .replace:
-                    _ = try FileManager.default.replaceItemAt(destinationURL, withItemAt: partialURL)
+                    try AtomicFileReplacement.replaceItem(at: destinationURL, with: partialURL)
                 }
             } else {
-                try FileManager.default.moveItem(at: partialURL, to: destinationURL)
+                try AtomicFileReplacement.replaceItem(at: destinationURL, with: partialURL)
             }
         } catch let error as NetworkTransferError {
             throw error
