@@ -142,7 +142,15 @@ jobs:
             exit 1
           fi
 
-          SOURCE_FILES=$(find Sources/NovaNetworkClient Sources/NovaNetworkCore Sources/NovaNetworkOpenAPI Sources/NovaNetworkCassette -name "*.swift" -print)
+          # NetworkDiagnosticsView is excluded: a SwiftUI view is not executed by unit tests, and
+          # its logic lives in DiagnosticsPanelState, which is covered.
+          SOURCE_FILES=$(find \
+            Sources/NovaNetworkClient \
+            Sources/NovaNetworkCore \
+            Sources/NovaNetworkOpenAPI \
+            Sources/NovaNetworkCassette \
+            Sources/NovaNetworkDiagnostics \
+            -name "*.swift" ! -name "NetworkDiagnosticsView.swift" -print)
           REPORT=$(xcrun llvm-cov report "${TEST_BIN}" \
             -instr-profile="${PROF_DATA}" \
             ${SOURCE_FILES})
@@ -210,13 +218,14 @@ jobs:
           swift --version
           swift --version | grep -Eq 'Swift version 6\.2\.3([.[:space:]]|$)'
 
-      - name: Build the Client, Test Support, Generator, and Cassette Targets
+      - name: Build the Client, Test Support, and Feature Targets
         run: |
           swift build \
             --target NovaNetworkClient \
             --target NovaNetworkClientTestSupport \
             --target NovaNetworkOpenAPI \
-            --target NovaNetworkCassette
+            --target NovaNetworkCassette \
+            --target NovaNetworkDiagnostics
 
   endpoint-macros-trait:
     # The @Endpoint macro lives behind the EndpointMacros package trait, so the default build never

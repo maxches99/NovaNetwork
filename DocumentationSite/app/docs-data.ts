@@ -329,6 +329,37 @@ CassetteMatchRule.default.matchingHeaders("Accept-Language")` },
 )`, note: "Redaction runs as the exchange is captured, not when the file is written, so a token never reaches a value that could be serialized somewhere else." },
     ],
   },
+  {
+    slug: "diagnostics",
+    title: "See what the client did",
+    summary: "Record requests, read the retry waterfall, export a HAR for the bug report.",
+    eyebrow: "Diagnostics",
+    duration: "8 min",
+    level: "Beginner",
+    symbol: "\u2318",
+    tone: "orange",
+    outcome: "A live request list, a retry timeline, and a HAR file you can attach to a ticket.",
+    steps: [
+      { title: "Install the recorder", explanation: "Diagnostics consumes the telemetry the client already emits, so nothing about the client changes.", code: `import NovaNetworkDiagnostics
+
+let recorder = DiagnosticsRecorder()
+var configuration = NetworkClientConfiguration()
+configuration.telemetryHooks = recorder.hooks
+let client = NetworkClient(configuration: configuration)
+recorder.startConsuming(client.events())` },
+      { title: "Read one request, not three", explanation: "The client reports a start and an end per attempt and announces a retry only after the attempt failed. The recorder stitches them into the request a person actually made.", code: `GET /flaky — 200 in 598 ms
+  █████████████ Attempt 1
+  ············ Backoff 185 ms
+               ██████████████████████████ Attempt 2
+               ·························· Backoff 399 ms
+                                         █ Attempt 3` },
+      { title: "Trust the summary", explanation: "A transport that returns a 500 completed the exchange — nothing threw. failureRate counts HTTP errors anyway, because 0% failed beside a list of 500s would be worse than no summary.", code: `let summary = await recorder.summary()
+print(summary.shortDescription)
+// 4 requests · 50% failed · 25% coalesced · 66% cache hits` },
+      { title: "Export it", explanation: "HAR 1.2 opens in any browser's network inspector, so a support artifact needs no new viewer.", code: `let har = try await recorder.exportHAR()
+try har.write(to: url)`, note: "Credentials are redacted as a record is built, not when it is exported: a buffer holding a live token is one screenshot away from leaking it." },
+    ],
+  },
 ];
 
 export function tutorialForSlug(slug: string) {

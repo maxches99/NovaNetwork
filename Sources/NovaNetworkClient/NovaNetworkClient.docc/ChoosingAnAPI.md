@@ -21,6 +21,7 @@ Start with the smallest API that matches the shape and lifetime of your operatio
 | Durable, resumable transfer | ``ManagedTransferManager`` |
 | Transport-neutral models only | Import `NovaNetworkCore` |
 | Deterministic tests, previews, or an offline demo build | `CassetteTransport` -- see <doc:RecordAndReplay> |
+| Seeing what the client did, or a HAR for a bug report | `DiagnosticsRecorder` -- see <doc:Diagnostics> |
 
 ### Prefer typed endpoints for repeated operations
 
@@ -47,6 +48,7 @@ from an OpenAPI document. Both produce ordinary `Endpoint` conformances, so noth
 
 - <doc:DeclarativeEndpoints>
 - <doc:RecordAndReplay>
+- <doc:Diagnostics>
 - <doc:ModelRequestsAsEndpoints>
 - ``NetworkClientConfiguration``
 - ``NetworkClientPreset``

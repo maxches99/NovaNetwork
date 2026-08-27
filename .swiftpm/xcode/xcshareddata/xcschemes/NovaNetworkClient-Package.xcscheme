@@ -273,6 +273,20 @@
                ReferencedContainer = "container:">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "NovaNetworkClientDiagnosticsExample"
+               BuildableName = "NovaNetworkClientDiagnosticsExample"
+               BlueprintName = "NovaNetworkClientDiagnosticsExample"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -353,6 +367,16 @@
                ReferencedContainer = "container:">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "NovaNetworkDiagnosticsTests"
+               BuildableName = "NovaNetworkDiagnosticsTests"
+               BlueprintName = "NovaNetworkDiagnosticsTests"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction
@@ -372,6 +396,9 @@
             BlueprintIdentifier = "NovaNetworkClientCassetteExample"
             BuildableName = "NovaNetworkClientCassetteExample"
             BlueprintName = "NovaNetworkClientCassetteExample"
+            BlueprintIdentifier = "NovaNetworkClientDiagnosticsExample"
+            BuildableName = "NovaNetworkClientDiagnosticsExample"
+            BlueprintName = "NovaNetworkClientDiagnosticsExample"
             ReferencedContainer = "container:">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -398,6 +425,9 @@
             BlueprintIdentifier = "NovaNetworkClientCassetteExample"
             BuildableName = "NovaNetworkClientCassetteExample"
             BlueprintName = "NovaNetworkClientCassetteExample"
+            BlueprintIdentifier = "NovaNetworkClientDiagnosticsExample"
+            BuildableName = "NovaNetworkClientDiagnosticsExample"
+            BlueprintName = "NovaNetworkClientDiagnosticsExample"
             ReferencedContainer = "container:">
          </BuildableReference>
       </BuildableProductRunnable>

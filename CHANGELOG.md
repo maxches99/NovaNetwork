@@ -9,6 +9,9 @@ convention; not every one is a tagged release — see [Releases](#releases).
 
 ## Unreleased
 
+- [2.13](docs/WHATS_NEW_v2.13.md) — Diagnostics: a bounded recorder over the existing telemetry with
+  retry waterfalls, HAR 1.2 export, `os_signpost` intervals for Instruments, and a SwiftUI panel.
+  New standalone `NovaNetworkDiagnostics` product.
 - [2.12](docs/WHATS_NEW_v2.12.md) — Record and replay: capture real exchanges into a reviewable JSON
   cassette and replay them deterministically in tests, previews, and offline demo builds, with
   credentials redacted before anything reaches disk. New standalone `NovaNetworkCassette` product.
