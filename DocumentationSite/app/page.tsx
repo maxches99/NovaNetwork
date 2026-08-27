@@ -12,6 +12,7 @@ const capabilities = [
   ["07", "Declarative endpoints", "Generate request construction from an annotated Swift type, or generate whole endpoint types from an OpenAPI document."],
   ["08", "Record and replay", "Capture real traffic into a reviewable cassette and replay it in tests, previews, and offline demo builds."],
   ["09", "Diagnostics you can see", "Record what the client did, read retry waterfalls, and export a HAR that opens in any network inspector."],
+  ["10", "Authentication", "OAuth 2.0 with PKCE, every grant, safe token storage, and one refresh shared by every caller."],
 ] as const;
 
 export default function Home() {

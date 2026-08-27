@@ -287,6 +287,62 @@
                ReferencedContainer = "container:">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "NovaNetworkClientAuthenticationExample"
+               BuildableName = "NovaNetworkClientAuthenticationExample"
+               BlueprintName = "NovaNetworkClientAuthenticationExample"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "NovaNetworkQuery"
+               BuildableName = "NovaNetworkQuery"
+               BlueprintName = "NovaNetworkQuery"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "NovaNetworkClientQueryExample"
+               BuildableName = "NovaNetworkClientQueryExample"
+               BlueprintName = "NovaNetworkClientQueryExample"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "NovaNetworkCassette"
+               BuildableName = "NovaNetworkCassette"
+               BlueprintName = "NovaNetworkCassette"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -377,6 +433,26 @@
                ReferencedContainer = "container:">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "NovaNetworkAuthTests"
+               BuildableName = "NovaNetworkAuthTests"
+               BlueprintName = "NovaNetworkAuthTests"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "NovaNetworkQueryTests"
+               BuildableName = "NovaNetworkQueryTests"
+               BlueprintName = "NovaNetworkQueryTests"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction
@@ -393,12 +469,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "NovaNetworkClientCassetteExample"
-            BuildableName = "NovaNetworkClientCassetteExample"
-            BlueprintName = "NovaNetworkClientCassetteExample"
-            BlueprintIdentifier = "NovaNetworkClientDiagnosticsExample"
-            BuildableName = "NovaNetworkClientDiagnosticsExample"
-            BlueprintName = "NovaNetworkClientDiagnosticsExample"
+            BlueprintIdentifier = "NovaNetworkClientQueryExample"
+            BuildableName = "NovaNetworkClientQueryExample"
+            BlueprintName = "NovaNetworkClientQueryExample"
             ReferencedContainer = "container:">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -422,15 +495,21 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "NovaNetworkClientCassetteExample"
-            BuildableName = "NovaNetworkClientCassetteExample"
-            BlueprintName = "NovaNetworkClientCassetteExample"
-            BlueprintIdentifier = "NovaNetworkClientDiagnosticsExample"
-            BuildableName = "NovaNetworkClientDiagnosticsExample"
-            BlueprintName = "NovaNetworkClientDiagnosticsExample"
+            BlueprintIdentifier = "NovaNetworkClientQueryExample"
+            BuildableName = "NovaNetworkClientQueryExample"
+            BlueprintName = "NovaNetworkClientQueryExample"
             ReferencedContainer = "container:">
          </BuildableReference>
       </BuildableProductRunnable>
+      <MacroExpansion>
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "NovaNetworkClientQueryExample"
+            BuildableName = "NovaNetworkClientQueryExample"
+            BlueprintName = "NovaNetworkClientQueryExample"
+            ReferencedContainer = "container:">
+         </BuildableReference>
+      </MacroExpansion>
    </ProfileAction>
    <AnalyzeAction
       buildConfiguration = "Debug">

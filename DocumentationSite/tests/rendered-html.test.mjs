@@ -31,6 +31,7 @@ test("renders core static documentation routes", async () => {
     ["/tutorials/declarative-endpoints", "Declare endpoints with a macro"],
     ["/tutorials/record-and-replay", "Record traffic, replay it offline"],
     ["/tutorials/diagnostics", "See what the client did"],
+    ["/tutorials/authentication", "Sign in with OAuth 2.0"],
     ["/concepts", "Request identity"],
   ]) {
     const response = await render(path);

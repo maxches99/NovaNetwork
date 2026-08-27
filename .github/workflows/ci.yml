@@ -142,15 +142,20 @@ jobs:
             exit 1
           fi
 
-          # NetworkDiagnosticsView is excluded: a SwiftUI view is not executed by unit tests, and
-          # its logic lives in DiagnosticsPanelState, which is covered.
+          # Two files are excluded, each for a reason a unit test cannot work around:
+          # NetworkDiagnosticsView is a SwiftUI view, never executed by tests, whose logic lives in
+          # the covered DiagnosticsPanelState; KeychainTokenStore's read and write paths need a real
+          # Keychain, which a headless CI process cannot use reliably.
           SOURCE_FILES=$(find \
             Sources/NovaNetworkClient \
             Sources/NovaNetworkCore \
             Sources/NovaNetworkOpenAPI \
             Sources/NovaNetworkCassette \
             Sources/NovaNetworkDiagnostics \
-            -name "*.swift" ! -name "NetworkDiagnosticsView.swift" -print)
+            Sources/NovaNetworkAuth \
+            -name "*.swift" \
+            ! -name "NetworkDiagnosticsView.swift" \
+            ! -name "KeychainTokenStore.swift" -print)
           REPORT=$(xcrun llvm-cov report "${TEST_BIN}" \
             -instr-profile="${PROF_DATA}" \
             ${SOURCE_FILES})
@@ -225,7 +230,8 @@ jobs:
             --target NovaNetworkClientTestSupport \
             --target NovaNetworkOpenAPI \
             --target NovaNetworkCassette \
-            --target NovaNetworkDiagnostics
+            --target NovaNetworkDiagnostics \
+            --target NovaNetworkAuth
 
   endpoint-macros-trait:
     # The @Endpoint macro lives behind the EndpointMacros package trait, so the default build never

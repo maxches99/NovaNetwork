@@ -46,6 +46,11 @@ struct PortableSHA256 {
 
     /// Pads and processes the final block, returning the lowercase hex digest. Consumes `self`.
     mutating func finalizeHex() -> String {
+        finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Pads and processes the final block, returning the raw 32-byte digest. Consumes `self`.
+    mutating func finalize() -> Data {
         let bitLength = totalLength &* 8
         var padded = buffer
         padded.append(0x80)
@@ -63,7 +68,14 @@ struct PortableSHA256 {
             offset = end
         }
 
-        return state.map { String(format: "%08x", $0) }.joined()
+        var digest = Data(capacity: 32)
+        for word in state {
+            digest.append(UInt8((word >> 24) & 0xff))
+            digest.append(UInt8((word >> 16) & 0xff))
+            digest.append(UInt8((word >> 8) & 0xff))
+            digest.append(UInt8(word & 0xff))
+        }
+        return digest
     }
 
     private mutating func processChunk(_ chunk: Data.SubSequence) {

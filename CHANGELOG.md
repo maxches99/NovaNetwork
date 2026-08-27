@@ -9,6 +9,10 @@ convention; not every one is a tagged release — see [Releases](#releases).
 
 ## Unreleased
 
+- [2.14](docs/WHATS_NEW_v2.14.md) — Authentication: OAuth 2.0 authorization code with PKCE, refresh,
+  client credentials, and device grants, typed error envelopes, in-memory and Keychain token stores,
+  single-flight refresh wired into the client, and HMAC-SHA256 request signing. New standalone
+  `NovaNetworkAuth` product; SHA-256 promoted to public `NovaNetworkCore` API.
 - [2.13](docs/WHATS_NEW_v2.13.md) — Diagnostics: a bounded recorder over the existing telemetry with
   retry waterfalls, HAR 1.2 export, `os_signpost` intervals for Instruments, and a SwiftUI panel.
   New standalone `NovaNetworkDiagnostics` product.
