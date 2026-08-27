@@ -113,8 +113,8 @@ public struct DiagnosticsPanelState: Sendable, Equatable {
 
         let end = start.addingTimeInterval(total / 1000)
         return intervals(for: record, endingAt: end).enumerated().map { index, interval in
-            let offset = interval.start.timeIntervalSince(start) * 1000
-            let width = interval.end.timeIntervalSince(interval.start) * 1000
+            let offset = milliseconds(from: start, to: interval.start)
+            let width = milliseconds(from: interval.start, to: interval.end)
             return TimelineSegment(
                 id: index,
                 label: interval.label,
@@ -123,6 +123,16 @@ public struct DiagnosticsPanelState: Sendable, Equatable {
                 isWait: interval.isWait
             )
         }
+    }
+
+    /// Milliseconds between two instants, with the noise of `Date` arithmetic rounded away.
+    ///
+    /// `Date` counts seconds from 2001 as a `Double`, so a 600 ms difference comes back as
+    /// 600.0000238. That is invisible on screen but not in arithmetic: a ruler asking whether a
+    /// window divides into six 100 ms steps got seven, and every fraction carried the noise into
+    /// public API. Nanosecond precision is far finer than anything measured here.
+    static func milliseconds(from start: Date, to end: Date) -> Double {
+        (end.timeIntervalSince(start) * 1_000 * 10_000).rounded() / 10_000
     }
 
     /// One span of a request placed on a real clock rather than on a fraction.
