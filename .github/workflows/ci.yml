@@ -357,12 +357,44 @@ jobs:
           echo "udid=${UDID}" >> "${GITHUB_OUTPUT}"
           echo "Using simulator ${UDID}."
 
-      - name: Run the Demo App's UI Tests
+      - name: Boot the Simulator
+        # Letting xcodebuild boot it lazily is where most of the launch failures came from. Booting
+        # first, and waiting for the device to actually be ready, removes that race from the test
+        # run itself.
         run: |
-          xcodebuild test \
-            -project DemoApp/NovaDiagnosticsDemo.xcodeproj \
-            -scheme NovaDiagnosticsDemo \
-            -destination "id=${{ steps.simulator.outputs.udid }}"
+          set -euo pipefail
+          xcrun simctl boot "${{ steps.simulator.outputs.udid }}" || true
+          xcrun simctl bootstatus "${{ steps.simulator.outputs.udid }}" -b
+
+      - name: Run the Demo App's UI Tests
+        # Retried once, and only once, because the failure being retried is not a test failure: the
+        # runner intermittently cannot launch the app at all ("Failed to get launch", a failure to
+        # deliver a signal to the app process), which took out unrelated pull requests all evening.
+        # A gate that fails at random teaches a team to ignore it.
+        #
+        # An assertion failure is deterministic and fails both attempts, so this does not hide one --
+        # it costs a second run of an already-failing suite and nothing else.
+        shell: bash
+        run: |
+          set -uo pipefail
+          for attempt in 1 2; do
+            echo "::group::UI tests, attempt ${attempt}"
+            xcodebuild test \
+              -project DemoApp/NovaDiagnosticsDemo.xcodeproj \
+              -scheme NovaDiagnosticsDemo \
+              -destination "id=${{ steps.simulator.outputs.udid }}" && status=0 || status=$?
+            echo "::endgroup::"
+            if [[ ${status} -eq 0 ]]; then
+              exit 0
+            fi
+            echo "Attempt ${attempt} failed with status ${status}."
+            if [[ ${attempt} -eq 1 ]]; then
+              xcrun simctl shutdown "${{ steps.simulator.outputs.udid }}" || true
+              xcrun simctl boot "${{ steps.simulator.outputs.udid }}" || true
+              xcrun simctl bootstatus "${{ steps.simulator.outputs.udid }}" -b || true
+            fi
+          done
+          exit 1
 
   macos-inspector:
     # The inspector is thin on purpose -- a model that opens a file into a recorder, and the
