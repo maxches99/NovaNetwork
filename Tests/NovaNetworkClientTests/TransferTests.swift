@@ -108,7 +108,7 @@ private actor TransferTelemetryProbe {
 
 @Suite(.serialized)
 struct TransferTests {
-    @Test
+    @Test(.enabled(if: PlatformSupport.hasAppleURLSessionBehaviour, PlatformSupport.urlSessionReason))
     func defaultTransportStreamsLargeResponseIncrementally() async throws {
         let expected = Data((0..<180_000).map { UInt8($0 % 251) })
         TransferURLProtocol.responseData = expected
