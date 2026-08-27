@@ -525,10 +525,10 @@ extension BackgroundTransferCoordinator {
             case .keepExisting:
                 try FileManager.default.removeItem(at: stagedURL)
             case .replace:
-                _ = try FileManager.default.replaceItemAt(destinationURL, withItemAt: stagedURL)
+                try AtomicFileReplacement.replaceItem(at: destinationURL, with: stagedURL)
             }
         } else {
-            try FileManager.default.moveItem(at: stagedURL, to: destinationURL)
+            try AtomicFileReplacement.replaceItem(at: destinationURL, with: stagedURL)
         }
     }
 
