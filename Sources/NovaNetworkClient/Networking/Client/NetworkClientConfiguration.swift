@@ -72,6 +72,11 @@ public struct NetworkClientConfiguration: Sendable {
     ///
     /// On Apple platforms `SystemNetworkPathMonitor()` reads it from `Network.framework`.
     public var networkPathMonitor: (any NetworkPathMonitor)?
+    /// How many requests may be in flight at once, decided from what the server is doing.
+    ///
+    /// `nil`, the default, admits requests exactly as the client always has: the limit is whatever
+    /// the caller's own concurrency happens to be.
+    public var adaptiveConcurrency: AdaptiveConcurrencyPolicy?
 
     /// Creates a configuration with the same defaults as `NetworkClient.init`.
     public init(
@@ -97,7 +102,8 @@ public struct NetworkClientConfiguration: Sendable {
         decoder: JSONDecoder = JSONDecoder(),
         responseDecoding: (any ResponseDecoding)? = nil,
         networkPathPolicy: NetworkPathPolicy? = nil,
-        networkPathMonitor: (any NetworkPathMonitor)? = nil
+        networkPathMonitor: (any NetworkPathMonitor)? = nil,
+        adaptiveConcurrency: AdaptiveConcurrencyPolicy? = nil
     ) {
         self.transport = transport
         self.cancellationPolicy = cancellationPolicy
@@ -122,6 +128,7 @@ public struct NetworkClientConfiguration: Sendable {
         self.responseDecoding = responseDecoding
         self.networkPathPolicy = networkPathPolicy
         self.networkPathMonitor = networkPathMonitor
+        self.adaptiveConcurrency = adaptiveConcurrency
     }
 }
 

@@ -379,6 +379,23 @@ public struct TelemetryCircuitBreakerTransitionContext: Sendable {
 }
 
 /// Optional synchronous hooks for exporting network lifecycle telemetry.
+/// One movement of the adaptive concurrency limit.
+public struct TelemetryConcurrencyLimitContext: Sendable, Equatable {
+    /// The limit before the change.
+    public let previousLimit: Int
+    /// The limit after it.
+    public let limit: Int
+    /// Why it moved: `congestion`, `latency`, or `headroom`.
+    public let reason: String
+
+    /// Creates a context.
+    public init(previousLimit: Int, limit: Int, reason: String) {
+        self.previousLimit = previousLimit
+        self.limit = limit
+        self.reason = reason
+    }
+}
+
 public struct NetworkTelemetryHooks: Sendable {
     public typealias OnRequestStart = @Sendable (TelemetryRequestContext) -> Void
     public typealias OnRequestEnd = @Sendable (TelemetryResponseContext) -> Void
@@ -400,6 +417,8 @@ public struct NetworkTelemetryHooks: Sendable {
     public typealias OnManagedTransferEvent = @Sendable (TelemetryManagedTransferContext) -> Void
     /// Receives one lifecycle event per actual single-flight HTTP auth refresh.
     public typealias OnHTTPAuthRefresh = @Sendable (TelemetryHTTPAuthRefreshContext) -> Void
+    /// Receives one event each time the adaptive concurrency limit moves.
+    public typealias OnConcurrencyLimitChanged = @Sendable (TelemetryConcurrencyLimitContext) -> Void
 
     public let onRequestStart: OnRequestStart?
     public let onRequestEnd: OnRequestEnd?
@@ -421,6 +440,9 @@ public struct NetworkTelemetryHooks: Sendable {
     public let onManagedTransferEvent: OnManagedTransferEvent?
     /// HTTP authentication refresh lifecycle hook.
     public let onHTTPAuthRefresh: OnHTTPAuthRefresh?
+    /// Adaptive concurrency limit hook. A limit that moves without being observable is a limit
+    /// nobody can trust.
+    public let onConcurrencyLimitChanged: OnConcurrencyLimitChanged?
 
     /// Creates a set of optional telemetry hooks.
     public init(
@@ -439,7 +461,8 @@ public struct NetworkTelemetryHooks: Sendable {
         onBatchCompleted: OnBatchCompleted? = nil,
         onTransferEvent: OnTransferEvent? = nil,
         onManagedTransferEvent: OnManagedTransferEvent? = nil,
-        onHTTPAuthRefresh: OnHTTPAuthRefresh? = nil
+        onHTTPAuthRefresh: OnHTTPAuthRefresh? = nil,
+        onConcurrencyLimitChanged: OnConcurrencyLimitChanged? = nil
     ) {
         self.onRequestStart = onRequestStart
         self.onRequestEnd = onRequestEnd
@@ -457,5 +480,6 @@ public struct NetworkTelemetryHooks: Sendable {
         self.onTransferEvent = onTransferEvent
         self.onManagedTransferEvent = onManagedTransferEvent
         self.onHTTPAuthRefresh = onHTTPAuthRefresh
+        self.onConcurrencyLimitChanged = onConcurrencyLimitChanged
     }
 }

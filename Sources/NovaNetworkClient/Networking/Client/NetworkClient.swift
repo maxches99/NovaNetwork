@@ -30,6 +30,9 @@ public final class NetworkClient: Sendable {
     private let rateLimiter = KeyRateLimiter()
     let configuredNetworkPathPolicy: NetworkPathPolicy?
     let configuredNetworkPathMonitor: (any NetworkPathMonitor)?
+    /// `nil` unless `configuration.adaptiveConcurrency` asked for one, in which case every request
+    /// that reaches the transport takes a slot from it.
+    let adaptiveConcurrencyLimiter: AdaptiveConcurrencyLimiter?
     private let runtimePolicyStore = RuntimePolicyStore()
     private let lifetime = NetworkClientLifetime()
 
@@ -152,6 +155,17 @@ public final class NetworkClient: Sendable {
         )
         self.configuredNetworkPathPolicy = configuration.networkPathPolicy
         self.configuredNetworkPathMonitor = configuration.networkPathMonitor
+        self.adaptiveConcurrencyLimiter = configuration.adaptiveConcurrency.map { policy in
+            AdaptiveConcurrencyLimiter(policy: policy) { change in
+                telemetryHooks?.onConcurrencyLimitChanged?(
+                    TelemetryConcurrencyLimitContext(
+                        previousLimit: change.from,
+                        limit: change.to,
+                        reason: change.reason.rawValue
+                    )
+                )
+            }
+        }
         self.httpExecutionPipeline = DefaultNetworkClientHTTPExecutionPipeline(
             transport: transport,
             retryPolicy: retryPolicy,
@@ -1093,17 +1107,21 @@ public final class NetworkClient: Sendable {
                 key: coalescingKey,
                 options: coalescerRunOptions(from: options)
             ) {
-                await self.executeWithHTTPAuthRefresh(
-                    .init(
-                        key: key,
-                        request: preparedRequest,
-                        authScope: authScope,
-                        retryPolicy: resolvedRetryPolicy,
-                        deadline: requestDeadline,
-                        coalescingMode: telemetryCoalescingMode,
-                        policyScope: policyScope.rawValue
+                // Inside the coalescer, not around it: the limit bounds requests that reach the
+                // transport, and callers that were merged into an existing one never do.
+                await self.holdingConcurrencyPermit {
+                    await self.executeWithHTTPAuthRefresh(
+                        .init(
+                            key: key,
+                            request: preparedRequest,
+                            authScope: authScope,
+                            retryPolicy: resolvedRetryPolicy,
+                            deadline: requestDeadline,
+                            coalescingMode: telemetryCoalescingMode,
+                            policyScope: policyScope.rawValue
+                        )
                     )
-                )
+                }
             }
         } catch is CancellationError {
             throw NetworkError.cancelled
