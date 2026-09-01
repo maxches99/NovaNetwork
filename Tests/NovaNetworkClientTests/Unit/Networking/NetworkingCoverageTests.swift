@@ -789,7 +789,12 @@ struct NetworkingCoverageTests {
         }
     }
 
-    @Test
+    // This one is skipped on Linux rather than pinned like its neighbour above, because
+    // swift-corelibs-foundation does not answer differently here: it deadlocks. The sleep below is
+    // what makes it reliable, holding the session's work queue inside `startLoading` while the
+    // cancellation lands. See `PlatformSupport.urlSessionCancellationDeadlockReason` for the two
+    // locks involved.
+    @Test(.enabled(if: PlatformSupport.hasAppleURLSessionBehaviour, PlatformSupport.urlSessionCancellationDeadlockReason))
     func transportTaskCancellationMayMapToCancelled() async {
         let transport = Transport(session: makeURLSession())
         URLProtocolStub.requestHandler = { request in

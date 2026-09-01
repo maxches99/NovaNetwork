@@ -30,8 +30,17 @@ convention; not every one is a tagged release — see [Releases](#releases).
   appear as skips in the output, so the gap is visible rather than absent. One of them is skipped for
   a blunter reason: `URLSession.download` **crashes inside `libFoundationNetworking`** there, in
   `_ProtocolClient.urlProtocolDidFinishLoading`, taking the whole test process with it. That is a bug
-  in swift-corelibs-foundation, not in this package, and nothing here can fix it. With those set
-  aside the suite passes on Linux. One test now pins *both*
+  in swift-corelibs-foundation, not in this package, and nothing here can fix it. One more is
+  skipped for a reason blunter still: cancelling a `URLSessionTask` from Swift concurrency while its
+  `URLProtocol` is still inside `startLoading` **deadlocks** there, and a deadlock does not fail a
+  suite, it stops one — this is what CI was reporting as a thirty-minute timeout. The two locks are
+  taken in opposite orders: the session's work queue, completing the task, enqueues the awaiting
+  `AsyncTask` and blocks on that task's status-record lock, while `swift_task_cancel` holds the
+  status-record lock and, from inside it, calls `URLSessionTask.cancel()`, which blocks on the work
+  queue with `DispatchQueue.sync`. Apple's URLSession does not take the work queue synchronously
+  from the cancellation path. The test is the only thing skipped here, but the inversion is not
+  test-only: it sits in the Linux `URLSession`, under any caller who cancels a request while a
+  response is being delivered. With those set aside the suite passes on Linux. One test now pins *both*
   platforms instead of one: an error thrown from a `URLProtocol` reaches the transport wrapped on
   Apple and unwrapped on Linux, so it maps to `transport` there and `cancelled` here, and both are
   asserted.

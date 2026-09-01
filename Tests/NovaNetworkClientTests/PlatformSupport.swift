@@ -23,4 +23,19 @@ enum PlatformSupport {
     /// The reason attached to anything skipped because of the above. Typed as `Comment` because
     /// that is what the trait takes; a `String` does not convert.
     static let urlSessionReason: Comment = "Depends on Apple's URLSession behaviour; swift-corelibs-foundation's differs."
+
+    /// The reason for the one skip that is not about a difference in behaviour but about a
+    /// deadlock. Cancelling a `URLSessionTask` from Swift concurrency while its `URLProtocol` is
+    /// still inside `startLoading` deadlocks swift-corelibs-foundation, two locks taken in opposite
+    /// orders:
+    ///
+    /// - the session's work queue, completing the task, enqueues the awaiting `AsyncTask` and
+    ///   blocks on that task's status-record lock;
+    /// - `swift_task_cancel` holds the status-record lock and, from inside it, calls
+    ///   `URLSessionTask.cancel()`, which blocks on the work queue with `DispatchQueue.sync`.
+    ///
+    /// Neither side can give way, and the process stops rather than the test failing. Apple's
+    /// URLSession does not take the work queue synchronously from the cancellation path, so the
+    /// same test finishes there in milliseconds.
+    static let urlSessionCancellationDeadlockReason: Comment = "Cancelling a URLSession task mid-`startLoading` deadlocks swift-corelibs-foundation."
 }
