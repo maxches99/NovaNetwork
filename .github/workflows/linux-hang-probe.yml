@@ -1,0 +1,71 @@
+name: Linux Hang Probe
+
+# Temporary, and it answers exactly one question: what is the Linux test process
+# blocked on when the suite goes silent after NetworkingCoverageTests. Delete
+# this file and .github/scripts/linux-hang-probe.sh once that is answered.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - linux-tests
+
+concurrency:
+  group: linux-hang-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # If the suite hangs on its own, the cause is inside it. If it passes here and
+  # the whole-suite job below still hangs, the hang needs the rest of the suite
+  # running alongside it, which is a different bug with a different fix.
+  suspect-suite-alone:
+    name: Suspect Suite Alone (Swift 6.2.3)
+    runs-on: ubuntu-latest
+    container: swift:6.2.3-noble
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install gdb
+        run: apt-get update && apt-get install -y --no-install-recommends gdb
+
+      - name: NetworkingCoverageTests, watched
+        env:
+          SILENCE_LIMIT: "120"
+          LOG_FILE: probe-suite.log
+        run: ./.github/scripts/linux-hang-probe.sh --filter NetworkingCoverageTests
+
+      - name: Upload the log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-suite-log
+          path: probe-suite.log
+
+  whole-suite:
+    name: Whole Suite (Swift 6.2.3)
+    runs-on: ubuntu-latest
+    container: swift:6.2.3-noble
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install gdb
+        run: apt-get update && apt-get install -y --no-install-recommends gdb
+
+      - name: swift test, watched
+        env:
+          SILENCE_LIMIT: "180"
+          LOG_FILE: probe-full.log
+        run: ./.github/scripts/linux-hang-probe.sh
+
+      - name: Upload the log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-full-log
+          path: probe-full.log
