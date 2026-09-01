@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import Testing
 @testable import NovaNetworkClient
 
@@ -105,7 +108,7 @@ private actor TransferTelemetryProbe {
 
 @Suite(.serialized)
 struct TransferTests {
-    @Test
+    @Test(.enabled(if: PlatformSupport.hasAppleURLSessionBehaviour, PlatformSupport.urlSessionReason))
     func defaultTransportStreamsLargeResponseIncrementally() async throws {
         let expected = Data((0..<180_000).map { UInt8($0 % 251) })
         TransferURLProtocol.responseData = expected
@@ -140,7 +143,9 @@ struct TransferTests {
         #expect(completed?.body == Data("accepted".utf8))
     }
 
-    @Test
+    // Crashes inside libFoundationNetworking on Linux (URLSession.download ->
+    // _ProtocolClient.urlProtocolDidFinishLoading), taking the whole test process with it.
+    @Test(.enabled(if: PlatformSupport.hasAppleURLSessionBehaviour, PlatformSupport.urlSessionReason))
     func defaultTransportDownloadsAndFinalizesDestination() async throws {
         let expected = Data("downloaded-file".utf8)
         TransferURLProtocol.responseData = expected
@@ -162,7 +167,7 @@ struct TransferTests {
         #expect(try Data(contentsOf: destination) == expected)
     }
 
-    @Test
+    @Test(.enabled(if: PlatformSupport.hasAppleURLSessionBehaviour, PlatformSupport.urlSessionReason))
     func existingDownloadDestinationFailsWithoutNetworkMutation() async throws {
         let transport = Transport(session: makeTransferSession())
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -181,7 +186,7 @@ struct TransferTests {
         #expect(try Data(contentsOf: destination) == Data("existing".utf8))
     }
 
-    @Test(arguments: [DownloadDestinationPolicy.replace, .keepExisting])
+    @Test(.enabled(if: PlatformSupport.hasAppleURLSessionBehaviour, PlatformSupport.urlSessionReason), arguments: [DownloadDestinationPolicy.replace, .keepExisting])
     func existingDownloadDestinationHonorsNonFailingPolicies(
         policy: DownloadDestinationPolicy
     ) async throws {

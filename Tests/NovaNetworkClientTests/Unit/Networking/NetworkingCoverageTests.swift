@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import Testing
 @testable import NovaNetworkClient
 
@@ -770,13 +773,28 @@ struct NetworkingCoverageTests {
             _ = try await transport.execute(APIRequest(method: .get, url: URL(string: "https://example.com/cancel")!))
             Issue.record("Expected cancelled transport")
         } catch let error as NetworkError {
+            // The two Foundations disagree about what reaches the transport, and both answers are
+            // defensible, so both are pinned rather than one of them being skipped. Apple's
+            // URLSession wraps an error thrown by a URLProtocol before handing it back, so the
+            // CancellationError arrives opaque and falls through to `.transport`.
+            // swift-corelibs-foundation propagates it unwrapped, so the transport recognises it for
+            // what it is.
+            #if canImport(Darwin)
             #expect(error.failureReason == .transport)
+            #else
+            #expect(error.failureReason == .cancelled)
+            #endif
         } catch {
             Issue.record("Unexpected error type")
         }
     }
 
-    @Test
+    // This one is skipped on Linux rather than pinned like its neighbour above, because
+    // swift-corelibs-foundation does not answer differently here: it deadlocks. The sleep below is
+    // what makes it reliable, holding the session's work queue inside `startLoading` while the
+    // cancellation lands. See `PlatformSupport.urlSessionCancellationDeadlockReason` for the two
+    // locks involved.
+    @Test(.enabled(if: PlatformSupport.hasAppleURLSessionBehaviour, PlatformSupport.urlSessionCancellationDeadlockReason))
     func transportTaskCancellationMayMapToCancelled() async {
         let transport = Transport(session: makeURLSession())
         URLProtocolStub.requestHandler = { request in

@@ -9,7 +9,49 @@ convention; not every one is a tagged release — see [Releases](#releases).
 
 ## Unreleased
 
-Nothing yet.
+- **The test suite runs on Linux.** Until now CI compiled the library there and ran nothing: the
+  `Linux Client Build Gate` said as much in its own comment. Switching the suite on took four rounds
+  of build fixes before a single assertion could run — missing `FoundationNetworking` imports;
+  Apple-only APIs used unguarded in tests (`Darwin.Mach` in the benchmarks, CryptoKit encryption, two
+  `URLRequest` properties, a `self` capture in a `@Sendable` closure); `stderr`, which is a global
+  `var` on Glibc and so rejected by strict concurrency; and `PortableSHA256`, reached through a
+  module that does not define it, which had therefore never compiled anywhere, because the suite
+  exercising it only exists where CryptoKit is absent.
+
+  Then it earned its keep: the first thing it found once it could run was the `replaceItemAt` bug
+  below — a real behavioural difference, in the code that decides whether queued writes survive.
+  Fixing it took four more assertions with it.
+
+  What remains is honest about its own limits. Twelve managed transfer, background transfer, and
+  streaming tests are
+  **skipped on Linux with a stated reason** rather than deleted, because they depend on Apple's
+  `URLSession` behaviour — ranged and resumed requests reaching a `URLProtocol` double, responses
+  arriving in more than one chunk, and background sessions, which do not exist there at all. They
+  appear as skips in the output, so the gap is visible rather than absent. One of them is skipped for
+  a blunter reason: `URLSession.download` **crashes inside `libFoundationNetworking`** there, in
+  `_ProtocolClient.urlProtocolDidFinishLoading`, taking the whole test process with it. That is a bug
+  in swift-corelibs-foundation, not in this package, and nothing here can fix it. One more is
+  skipped for a reason blunter still: cancelling a `URLSessionTask` from Swift concurrency while its
+  `URLProtocol` is still inside `startLoading` **deadlocks** there, and a deadlock does not fail a
+  suite, it stops one — this is what CI was reporting as a thirty-minute timeout. The two locks are
+  taken in opposite orders: the session's work queue, completing the task, enqueues the awaiting
+  `AsyncTask` and blocks on that task's status-record lock, while `swift_task_cancel` holds the
+  status-record lock and, from inside it, calls `URLSessionTask.cancel()`, which blocks on the work
+  queue with `DispatchQueue.sync`. Apple's URLSession does not take the work queue synchronously
+  from the cancellation path. The test is the only thing skipped here, but the inversion is not
+  test-only: it sits in the Linux `URLSession`, under any caller who cancels a request while a
+  response is being delivered. With those set aside the suite passes on Linux. One test now pins *both*
+  platforms instead of one: an error thrown from a `URLProtocol` reaches the transport wrapped on
+  Apple and unwrapped on Linux, so it maps to `transport` there and `cancelled` here, and both are
+  asserted.
+- **Staged files are published with `rename(2)`, not `FileManager.replaceItemAt`.** On
+  swift-corelibs-foundation `replaceItemAt` can remove the destination and leave nothing in its
+  place, which is how an offline queue holding one entry came back holding none. The same call sat
+  in five places, all of them durability code: the offline write store, the transfer journal, the
+  managed transfer manager, the background transfer coordinator, and the streaming transport.
+  `rename(2)` replaces an existing destination and is atomic on both platforms, so a reader sees the
+  old file or the new one and never neither; a staged file on another filesystem (`EXDEV`) is copied
+  beside the destination first so the publish itself stays a rename.
 
 ## 3.4.0 — 2026-08-27
 

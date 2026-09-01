@@ -197,10 +197,23 @@ struct OfflineQueueCoverageTests {
 
         await store.markSucceeded(queueID: second.queueID)
         let afterReady = await store.nextBatch(limit: 10, now: now.addingTimeInterval(120))
+
+        // Indexing after a failed count expectation traps and takes the whole test process with it,
+        // so one regression here used to be reported as a crashed suite. `#require` fails this test
+        // and lets the rest run. The recovery report goes in the message because the store answers
+        // "no entries" both when there are none and when it decided what it found was corrupt, and
+        // those are very different bugs.
+        let report = await store.consumeRecoveryReport()
+        let ready = try #require(
+            afterReady.first,
+            "expected the retry-waiting entry to be ready; recovery report: \(String(describing: report))"
+        )
         #expect(afterReady.count == 1)
-        #expect(afterReady[0].receipt.queueID == first.queueID)
+        #expect(ready.receipt.queueID == first.queueID)
     }
 
+// AES-GCM encryption at rest is CryptoKit-only, and so are the tests that exercise it.
+#if canImport(CryptoKit)
     @Test
     func diskOfflineWriteStoreEncryptedRoundTripAndLegacyReadCompatibility() async throws {
         let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -237,7 +250,10 @@ struct OfflineQueueCoverageTests {
         let snapshot = await restoredEncrypted.snapshot(now: now.addingTimeInterval(2))
         #expect(snapshot.count == 2)
     }
+#endif
 
+// AES-GCM encryption at rest is CryptoKit-only, and so are the tests that exercise it.
+#if canImport(CryptoKit)
     @Test
     func diskOfflineWriteStoreKeepsEncryptedEntriesWhenKeyUnavailable() async throws {
         let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -263,7 +279,10 @@ struct OfflineQueueCoverageTests {
         #expect(recoveredSnapshot.count == 1)
         #expect(recoveredSnapshot[0].receipt.requestKey == "k-encrypted")
     }
+#endif
 
+// AES-GCM encryption at rest is CryptoKit-only, and so are the tests that exercise it.
+#if canImport(CryptoKit)
     @Test
     func diskOfflineWriteStoreSkipsUnknownEncryptionVersionWithoutDeletingEntry() async throws {
         let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -287,6 +306,7 @@ struct OfflineQueueCoverageTests {
         #expect(snapshot.isEmpty)
         #expect(FileManager.default.fileExists(atPath: fileURL.path))
     }
+#endif
 
     @Test
     func diskOfflineWriteStoreReadsOlderSchemaWithForwardCompatibility() async throws {
@@ -304,6 +324,8 @@ struct OfflineQueueCoverageTests {
         #expect(snapshot[0].receipt.requestKey == "legacy-schema")
     }
 
+// AES-GCM encryption at rest is CryptoKit-only, and so are the tests that exercise it.
+#if canImport(CryptoKit)
     @Test
     func diskOfflineWriteStoreRotateEncryptionRewritesEntriesWithNewVersion() async throws {
         let baseURL = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -344,6 +366,7 @@ struct OfflineQueueCoverageTests {
         let snapshot = await latestReader.snapshot(now: now.addingTimeInterval(6))
         #expect(snapshot.count == 1)
     }
+#endif
 
     @Test
     func diskOfflineWriteStoreRecoveryReportCapturesPartialCorruption() async throws {

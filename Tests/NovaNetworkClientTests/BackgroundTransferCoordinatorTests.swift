@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import Testing
 @testable import NovaNetworkClient
 
@@ -139,8 +142,11 @@ struct BackgroundTransferCoordinatorTests {
         BackgroundTransferCoordinator.applyNetworkPolicy(policy, to: &request)
 
         #expect(!request.allowsCellularAccess)
+#if canImport(Darwin)
+        // These two are Apple-only properties of URLRequest; swift-corelibs-foundation has neither.
         #expect(!request.allowsExpensiveNetworkAccess)
         #expect(!request.allowsConstrainedNetworkAccess)
+#endif
 
 #if os(iOS) || os(macOS)
         let coordinator = BackgroundTransferCoordinator()
@@ -154,7 +160,7 @@ struct BackgroundTransferCoordinatorTests {
 #endif
     }
 
-    @Test
+    @Test(.enabled(if: PlatformSupport.hasAppleURLSessionBehaviour, PlatformSupport.urlSessionReason))
     func scheduleDownloadRegistersJournalTaskAndReconciles() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -191,7 +197,7 @@ struct BackgroundTransferCoordinatorTests {
         #expect(restored.snapshots.map(\.id) == [id])
     }
 
-    @Test
+    @Test(.enabled(if: PlatformSupport.hasAppleURLSessionBehaviour, PlatformSupport.urlSessionReason))
     func scheduleUploadRegistersJournalAndAttachesTask() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
