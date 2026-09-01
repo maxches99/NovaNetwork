@@ -36,9 +36,14 @@ jobs:
       - name: Install gdb
         run: apt-get update && apt-get install -y --no-install-recommends gdb
 
+      # Separately, so that the probe below watches a test run rather than a
+      # compile.
+      - name: Build the tests
+        run: swift build --build-tests
+
       - name: The one test, watched
         env:
-          SILENCE_LIMIT: "60"
+          GRACE: "90"
           LOG_FILE: probe-one.log
         run: ./.github/scripts/linux-hang-probe.sh --filter transportTaskCancellationMayMapToCancelled
 
