@@ -35,14 +35,19 @@ dump_stacks() {
         grep -E '^(Name|State|Threads)' "/proc/$pid/status" || true
 
         echo "--- thread apply all bt ---"
-        if ! gdb -p "$pid" -batch \
-                 -ex 'set pagination off' \
-                 -ex 'thread apply all bt' 2>&1 | head -600; then
+        # The status has to come from gdb rather than from the pipeline, which
+        # reports `head`, which always succeeds.
+        gdb -p "$pid" -batch \
+            -ex 'set pagination off' \
+            -ex 'thread apply all bt' > "gdb-$pid.txt" 2>&1
+        gdb_status=$?
+        head -600 "gdb-$pid.txt"
+        if [ "$gdb_status" -ne 0 ] || grep -q 'Could not attach' "gdb-$pid.txt"; then
             # No ptrace, or no gdb. SIGABRT is in the Swift backtracer's signal
             # set, so the runtime prints the stacks on its way out instead.
-            echo "--- gdb unavailable, falling back to SIGABRT ---"
+            echo "--- gdb could not attach, falling back to SIGABRT ---"
             kill -ABRT "$pid" || true
-            sleep 20
+            sleep 25
         fi
     done
     [ "$found" = 1 ] || echo "no PackageTests.xctest process found"

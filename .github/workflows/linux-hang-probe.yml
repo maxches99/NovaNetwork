@@ -1,8 +1,12 @@
 name: Linux Hang Probe
 
 # Temporary, and it answers exactly one question: what is the Linux test process
-# blocked on when the suite goes silent after NetworkingCoverageTests. Delete
-# this file and .github/scripts/linux-hang-probe.sh once that is answered.
+# blocked on inside transportTaskCancellationMayMapToCancelled(). Delete this
+# file and .github/scripts/linux-hang-probe.sh once that is answered.
+#
+# The first round of this probe narrowed the whole-suite stall to that one test
+# and showed it stalls the same way when the suite runs alone, so this round
+# runs nothing else.
 
 on:
   workflow_dispatch:
@@ -15,13 +19,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # If the suite hangs on its own, the cause is inside it. If it passes here and
-  # the whole-suite job below still hangs, the hang needs the rest of the suite
-  # running alongside it, which is a different bug with a different fix.
-  suspect-suite-alone:
-    name: Suspect Suite Alone (Swift 6.2.3)
+  stack-of-the-stall:
+    name: Stack of the Stall (Swift 6.2.3)
     runs-on: ubuntu-latest
-    container: swift:6.2.3-noble
+    container:
+      image: swift:6.2.3-noble
+      # The default container blocks ptrace, which is why the first round came
+      # back with "Could not attach to process" instead of a backtrace.
+      options: --cap-add=SYS_PTRACE --security-opt seccomp=unconfined
     timeout-minutes: 20
 
     steps:
@@ -31,41 +36,17 @@ jobs:
       - name: Install gdb
         run: apt-get update && apt-get install -y --no-install-recommends gdb
 
-      - name: NetworkingCoverageTests, watched
+      - name: The one test, watched
         env:
-          SILENCE_LIMIT: "120"
-          LOG_FILE: probe-suite.log
-        run: ./.github/scripts/linux-hang-probe.sh --filter NetworkingCoverageTests
+          SILENCE_LIMIT: "60"
+          LOG_FILE: probe-one.log
+        run: ./.github/scripts/linux-hang-probe.sh --filter transportTaskCancellationMayMapToCancelled
 
-      - name: Upload the log
+      - name: Upload the logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: probe-suite-log
-          path: probe-suite.log
-
-  whole-suite:
-    name: Whole Suite (Swift 6.2.3)
-    runs-on: ubuntu-latest
-    container: swift:6.2.3-noble
-    timeout-minutes: 25
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Install gdb
-        run: apt-get update && apt-get install -y --no-install-recommends gdb
-
-      - name: swift test, watched
-        env:
-          SILENCE_LIMIT: "180"
-          LOG_FILE: probe-full.log
-        run: ./.github/scripts/linux-hang-probe.sh
-
-      - name: Upload the log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: probe-full-log
-          path: probe-full.log
+          name: probe-one-logs
+          path: |
+            probe-one.log
+            gdb-*.txt
