@@ -30,6 +30,13 @@ Review identity, resilience, security, observability, and lifecycle choices befo
 - Verify user-specific responses cannot cross authentication scopes.
 - Test invalidation after writes and memory-pressure handling where applicable.
 - Use disk caching only after defining storage capacity and data-sensitivity requirements.
+- Leave `POST`, `PUT`, `PATCH`, and `DELETE` out of the cache unless a reviewed requirement says
+  otherwise. They are excluded by default; ``CachePolicy/includingUnsafeMethods(_:)`` is the only way
+  back in, and it should appear in review with the reason written down.
+- Treat an unsafe-method opt-in as a correctness risk, not a performance knob. A stored `POST`
+  response either swallows a write or answers it with the reply to an earlier one, and both failures
+  are silent: a sign-in that returns an expired token reads as a wrong password, and an edit that is
+  never sent reads as a sync that worked.
 
 ### Security
 

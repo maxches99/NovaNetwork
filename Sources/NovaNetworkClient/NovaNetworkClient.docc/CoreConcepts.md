@@ -37,6 +37,16 @@ is waiting. Cancelling one of several callers does not cancel work that the othe
 are eligible by default. A non-idempotent write needs an explicit idempotency strategy; do not make
 POST retries broadly eligible without a server contract that prevents duplicate effects.
 
+### The method a request carries
+
+``APIRequest/method`` is an ``URLMethod``. `HTTPMethod` is a typealias for the same type, so either
+spelling compiles and either one finds it in documentation.
+
+Its two properties decide what the pipeline may do without being told. ``URLMethod/isSafe`` marks the
+read-only methods, and ``URLMethod/isCacheableByDefault`` marks the two — `GET` and `HEAD` — whose
+responses may be reused from the cache. Every other method bypasses the cache under every
+``CachePolicy`` unless ``CachePolicy/includingUnsafeMethods(_:)`` says otherwise.
+
 ### Cache and coalescing
 
 These mechanisms solve different problems:
@@ -47,7 +57,8 @@ These mechanisms solve different problems:
 | `cacheFirst` | Until the cached response is older than `maxAge` | Avoid a network round trip |
 | `staleWhileRevalidate` | Fresh and stale windows | Return quickly while refreshing in the background |
 
-HTTP request and response directives can further constrain cache behavior.
+HTTP request and response directives can further constrain cache behavior, and an unsafe method
+takes part in none of it by default.
 
 ### The request pipeline
 

@@ -265,9 +265,10 @@ public final class NetworkClient: Sendable {
         let fingerprint = makeFingerprint(for: request, authScope: authScope)
         let key = fingerprint.key
         let resolvedPolicy = (cachePolicy ?? defaultCachePolicy).normalized
+        let cachesUnsafeMethods = resolvedPolicy.includesUnsafeMethods
         let forceRevalidation = requestRequiresRevalidation(request)
 
-        if !requestAllowsCacheLookup(request) {
+        if !requestAllowsCacheLookup(request, includingUnsafeMethods: cachesUnsafeMethods) {
             emit(.cacheMiss(key: key))
             return try await fetchNetworkAndOptionallyStore(
                 request: request,
@@ -279,7 +280,7 @@ public final class NetworkClient: Sendable {
             ).body
         }
 
-        switch resolvedPolicy {
+        switch resolvedPolicy.freshness {
         case .networkOnly:
             emit(.cacheMiss(key: key))
             return try await fetchNetworkAndOptionallyStore(
@@ -300,6 +301,7 @@ public final class NetworkClient: Sendable {
                         key: key,
                         storeInCache: true,
                         cachedETag: nil,
+                        cachesUnsafeMethods: cachesUnsafeMethods,
                         options: options
                     ).body
                 }
@@ -324,6 +326,7 @@ public final class NetworkClient: Sendable {
                         storeInCache: true,
                         cachedETag: cached.etag,
                         cachedLastModified: cached.lastModified,
+                        cachesUnsafeMethods: cachesUnsafeMethods,
                         options: options
                     ).body
                 } catch let error as NetworkError where canServeStaleIfError(
@@ -352,6 +355,7 @@ public final class NetworkClient: Sendable {
                 key: key,
                 storeInCache: true,
                 cachedETag: nil,
+                cachesUnsafeMethods: cachesUnsafeMethods,
                 options: options
             ).body
         case .staleWhileRevalidate(let maxAge, let staleAge):
@@ -364,6 +368,7 @@ public final class NetworkClient: Sendable {
                         key: key,
                         storeInCache: true,
                         cachedETag: nil,
+                        cachesUnsafeMethods: cachesUnsafeMethods,
                         options: options
                     ).body
                 }
@@ -394,6 +399,7 @@ public final class NetworkClient: Sendable {
                             storeInCache: true,
                             cachedETag: cached.etag,
                             cachedLastModified: cached.lastModified,
+                            cachesUnsafeMethods: cachesUnsafeMethods,
                             options: options
                         )
                     }
@@ -408,6 +414,7 @@ public final class NetworkClient: Sendable {
                         storeInCache: true,
                         cachedETag: cached.etag,
                         cachedLastModified: cached.lastModified,
+                        cachesUnsafeMethods: cachesUnsafeMethods,
                         options: options
                     ).body
                 } catch let error as NetworkError where canServeStaleIfError(
@@ -433,6 +440,7 @@ public final class NetworkClient: Sendable {
                 key: key,
                 storeInCache: true,
                 cachedETag: nil,
+                cachesUnsafeMethods: cachesUnsafeMethods,
                 options: options
             ).body
         }
@@ -1048,6 +1056,7 @@ public final class NetworkClient: Sendable {
         storeInCache: Bool,
         cachedETag: String?,
         cachedLastModified: String? = nil,
+        cachesUnsafeMethods: Bool = false,
         options: RequestExecutionOptions
     ) async throws -> NetworkResponse {
         let resolvedRuntimePolicy = await runtimePolicyStore.resolve(url: request.url)
@@ -1137,12 +1146,15 @@ public final class NetworkClient: Sendable {
             throw error
         }
 
+        let storageAllowed = storeInCache
+            && requestAllowsCacheStorage(preparedRequest, includingUnsafeMethods: cachesUnsafeMethods)
+
         if outcome.statusCode == 304, let cached = await cache.entry(forKey: key) {
             var mergedHeaders = cached.headers
             for (name, value) in outcome.headers {
                 mergedHeaders[name] = value
             }
-            if storeInCache {
+            if storageAllowed {
                 let revalidated = CachedResponse(
                     body: cached.body,
                     statusCode: cached.statusCode,
@@ -1158,7 +1170,7 @@ public final class NetworkClient: Sendable {
             return NetworkResponse(statusCode: cached.statusCode, headers: mergedHeaders, body: cached.body)
         }
 
-        if storeInCache && requestAllowsCacheStorage(preparedRequest) && shouldStoreInCache(outcome.headers) {
+        if storageAllowed && shouldStoreInCache(outcome.headers) {
             let cached = CachedResponse(
                 body: outcome.body,
                 statusCode: outcome.statusCode,
