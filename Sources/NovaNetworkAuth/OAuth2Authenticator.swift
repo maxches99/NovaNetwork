@@ -35,6 +35,42 @@ public actor OAuth2Authenticator {
         self.now = now
     }
 
+    /// Creates an authenticator whose grants are performed by a closure rather than by this
+    /// package's OAuth client.
+    ///
+    /// Reach for this when the provider's token endpoint is not shaped like RFC 6749 in a way
+    /// ``OAuth2TokenRequestStyle`` cannot describe. What is worth keeping stays: the token is still
+    /// stored here, a burst of unauthorized responses still triggers exactly one refresh, and
+    /// ``middleware`` still attaches the result.
+    ///
+    /// ```swift
+    /// let authenticator = OAuth2Authenticator(
+    ///     configuration: configuration,
+    ///     exchange: OAuth2TokenExchange { grant in try await myTokenRequest(grant) },
+    ///     store: KeychainTokenStore(service: "com.example.app", account: "session")
+    /// )
+    /// ```
+    ///
+    /// - Parameters:
+    ///   - configuration: Provider and client details. Only ``OAuth2Configuration/expiryLeeway`` and
+    ///     ``OAuth2Configuration/tokenEndpoint`` are read on this path — the endpoint reaches the
+    ///     closure as ``OAuth2Grant/endpoint``, and the rest is the closure's business.
+    ///   - exchange: Turns a grant into a token.
+    ///   - store: Where the token lives. In memory by default, so nothing is persisted unless asked.
+    ///   - now: Clock used for expiry decisions.
+    public init(
+        configuration: OAuth2Configuration,
+        exchange: OAuth2TokenExchange,
+        store: any TokenStore = InMemoryTokenStore(),
+        now: @escaping @Sendable () -> Date = Date.init
+    ) {
+        self.init(
+            client: OAuth2Client(configuration: configuration, tokenExchange: exchange, now: now),
+            store: store,
+            now: now
+        )
+    }
+
     // MARK: - Token lifecycle
 
     /// The stored token, whatever its state.

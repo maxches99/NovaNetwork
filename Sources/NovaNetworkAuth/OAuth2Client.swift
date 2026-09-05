@@ -38,14 +38,22 @@ public struct DeviceAuthorization: Sendable, Equatable {
 /// Performs OAuth 2.0 grants.
 ///
 /// This is the part every adopter writes by hand: building the authorization URL, validating the
-/// callback, posting form-encoded grants, and reading an error envelope that is not shaped like the
-/// success response. It performs no storage and holds no state — ``OAuth2Authenticator`` does that.
+/// callback, posting the grants, and reading an error envelope that is not shaped like the success
+/// response. It performs no storage and holds no state — ``OAuth2Authenticator`` does that.
+///
+/// The grants go out in RFC 6749's shape unless ``OAuth2Configuration/tokenRequestStyle`` says
+/// otherwise, and a provider too far from the specification to describe that way can be served by a
+/// ``OAuth2TokenExchange`` passed to the initializer.
 ///
 /// Presenting a browser is deliberately not here. It needs a window anchor, it differs per platform,
 /// and every app already has an opinion; this supplies the URL to open and parses what comes back.
 public struct OAuth2Client: Sendable {
     /// The provider and client details.
     public let configuration: OAuth2Configuration
+
+    /// Performs the grants in place of this client, when the provider's token endpoint is shaped
+    /// differently enough that ``OAuth2TokenRequestStyle`` cannot describe it.
+    public let tokenExchange: OAuth2TokenExchange?
 
     private let transport: any NetworkTransport
     private let now: @Sendable () -> Date
@@ -55,14 +63,19 @@ public struct OAuth2Client: Sendable {
     /// - Parameters:
     ///   - configuration: Provider and client details.
     ///   - transport: How token requests are sent. A plain ``Transport`` by default.
+    ///   - tokenExchange: Performs the grants itself, for a provider this client cannot describe.
+    ///     `nil` — the default — sends the requests RFC 6749 specifies, in the shape
+    ///     ``OAuth2Configuration/tokenRequestStyle`` gives them.
     ///   - now: Clock used for expiry math. Injectable so tests are deterministic.
     public init(
         configuration: OAuth2Configuration,
         transport: any NetworkTransport = Transport(),
+        tokenExchange: OAuth2TokenExchange? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.configuration = configuration
         self.transport = transport
+        self.tokenExchange = tokenExchange
         self.now = now
     }
 
@@ -143,7 +156,7 @@ public struct OAuth2Client: Sendable {
         if let redirect = configuration.redirectURI {
             parameters["redirect_uri"] = redirect.absoluteString
         }
-        return try await requestToken(parameters: parameters)
+        return try await requestToken(grant(parameters))
     }
 
     // MARK: - Refresh and client credentials
@@ -156,11 +169,16 @@ public struct OAuth2Client: Sendable {
         guard let refreshToken = token.refreshToken else {
             throw OAuth2Error.notAuthenticated
         }
-        let refreshed = try await requestToken(parameters: [
-            "grant_type": "refresh_token",
-            "refresh_token": refreshToken,
-            "client_id": configuration.clientID,
-        ])
+        let refreshed = try await requestToken(
+            grant(
+                [
+                    "grant_type": "refresh_token",
+                    "refresh_token": refreshToken,
+                    "client_id": configuration.clientID,
+                ],
+                currentToken: token
+            )
+        )
         return refreshed.retainingRefreshToken(from: token)
     }
 
@@ -173,7 +191,7 @@ public struct OAuth2Client: Sendable {
         if !configuration.scopes.isEmpty {
             parameters["scope"] = configuration.scopes.joined(separator: " ")
         }
-        return try await requestToken(parameters: parameters)
+        return try await requestToken(grant(parameters))
     }
 
     // MARK: - Device grant
@@ -189,7 +207,7 @@ public struct OAuth2Client: Sendable {
             parameters["scope"] = configuration.scopes.joined(separator: " ")
         }
 
-        let response = try await send(formRequest(to: endpoint, parameters: parameters))
+        let response = try await send(tokenRequest(to: endpoint, parameters: parameters))
         guard let object = try? JSONSerialization.jsonObject(with: response.body) as? [String: Any],
               let deviceCode = object["device_code"] as? String,
               let userCode = object["user_code"] as? String,
@@ -231,11 +249,11 @@ public struct OAuth2Client: Sendable {
             try await sleep(interval)
 
             do {
-                return try await requestToken(parameters: [
+                return try await requestToken(grant([
                     "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
                     "device_code": authorization.deviceCode,
                     "client_id": configuration.clientID,
-                ])
+                ]))
             } catch let error as OAuth2Error {
                 guard case let .server(code, _, _) = error else { throw error }
                 switch code {
@@ -256,8 +274,21 @@ public struct OAuth2Client: Sendable {
 
     // MARK: - Transport
 
-    private func requestToken(parameters: [String: String]) async throws -> OAuth2Token {
-        let response = try await send(formRequest(to: configuration.tokenEndpoint, parameters: parameters))
+    /// Describes a grant against the configured token endpoint.
+    private func grant(_ parameters: [String: String], currentToken: OAuth2Token? = nil) -> OAuth2Grant {
+        OAuth2Grant(
+            type: parameters["grant_type"] ?? "",
+            parameters: parameters,
+            endpoint: configuration.tokenEndpoint,
+            currentToken: currentToken
+        )
+    }
+
+    private func requestToken(_ grant: OAuth2Grant) async throws -> OAuth2Token {
+        if let tokenExchange {
+            return try await tokenExchange.token(for: grant)
+        }
+        let response = try await send(tokenRequest(to: grant.endpoint, parameters: grant.parameters))
         return try OAuth2Token.decode(from: response.body, now: now())
     }
 
@@ -280,21 +311,34 @@ public struct OAuth2Client: Sendable {
         return response
     }
 
-    private func formRequest(to url: URL, parameters: [String: String]) -> APIRequest {
+    private func tokenRequest(to url: URL, parameters: [String: String]) -> APIRequest {
+        let style = configuration.tokenRequestStyle
+        var parameters = parameters
+        var queryItems: [URLQueryItem] = []
+
+        if style.grantTypePlacement == .query, let grantType = parameters.removeValue(forKey: "grant_type") {
+            queryItems.append(URLQueryItem(name: "grant_type", value: grantType))
+        }
+
         var headers = [
-            "Content-Type": "application/x-www-form-urlencoded",
+            "Content-Type": style.bodyEncoding.contentType,
             "Accept": "application/json",
         ]
         if let secret = configuration.clientSecret {
             let credentials = Data("\(configuration.clientID):\(secret)".utf8).base64EncodedString()
             headers["Authorization"] = "Basic \(credentials)"
         }
+        // Applied last, so a provider-wide API key or a replacement `Accept` wins over the defaults.
+        for (name, value) in style.additionalHeaders {
+            headers[name] = value
+        }
 
         return APIRequest(
             method: .post,
             url: url,
+            queryItems: queryItems,
             headers: headers,
-            body: Data(Self.formEncoded(parameters).utf8)
+            body: style.bodyEncoding.encode(parameters)
         )
     }
 
@@ -305,6 +349,14 @@ public struct OAuth2Client: Sendable {
             .sorted { $0.key < $1.key }
             .map { "\(encode($0.key))=\(encode($0.value))" }
             .joined(separator: "&")
+    }
+
+    /// Serializes parameters as a flat JSON object, with keys sorted for the same reason.
+    static func jsonEncoded(_ parameters: [String: String]) -> Data {
+        // Every value is a `String`, so this cannot fail; the fallback keeps the signature
+        // non-throwing rather than describing a state the type system already rules out.
+        (try? JSONSerialization.data(withJSONObject: parameters, options: [.sortedKeys]))
+            ?? Data("{}".utf8)
     }
 
     private static func encode(_ value: String) -> String {

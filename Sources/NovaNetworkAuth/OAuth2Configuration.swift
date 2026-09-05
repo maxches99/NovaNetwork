@@ -19,6 +19,8 @@ public struct OAuth2Configuration: Sendable, Equatable {
     public var scopes: [String]
     /// Extra parameters added to the authorization URL, for provider-specific options.
     public var additionalAuthorizationParameters: [String: String]
+    /// The shape of a token request on the wire, for providers that are not quite RFC 6749.
+    public var tokenRequestStyle: OAuth2TokenRequestStyle
     /// How early a token counts as expired, to avoid racing the server's clock.
     public var expiryLeeway: TimeInterval
 
@@ -33,6 +35,9 @@ public struct OAuth2Configuration: Sendable, Equatable {
     ///   - redirectURI: Redirect URI registered with the provider.
     ///   - scopes: Requested scopes.
     ///   - additionalAuthorizationParameters: Provider-specific authorization parameters.
+    ///   - tokenRequestStyle: How token requests are encoded. RFC 6749's form-encoded body by
+    ///     default; change it for a provider that reads `grant_type` from the query string or wants
+    ///     a JSON body.
     ///   - expiryLeeway: Seconds before the stated expiry at which a token is treated as expired.
     ///     Sixty by default, because a token that expires while in flight is indistinguishable from
     ///     one that was never valid.
@@ -45,6 +50,7 @@ public struct OAuth2Configuration: Sendable, Equatable {
         redirectURI: URL? = nil,
         scopes: [String] = [],
         additionalAuthorizationParameters: [String: String] = [:],
+        tokenRequestStyle: OAuth2TokenRequestStyle = .standard,
         expiryLeeway: TimeInterval = 60
     ) {
         self.clientID = clientID
@@ -55,6 +61,7 @@ public struct OAuth2Configuration: Sendable, Equatable {
         self.redirectURI = redirectURI
         self.scopes = scopes
         self.additionalAuthorizationParameters = additionalAuthorizationParameters
+        self.tokenRequestStyle = tokenRequestStyle
         self.expiryLeeway = expiryLeeway
     }
 }
