@@ -128,6 +128,27 @@ do {
 }
 ```
 
+### See what it did
+
+Three lines turn on a record of every request the client makes — attempts, retries, timings, whether
+the cache answered — and it is worth adding before the first thing goes wrong rather than after:
+
+```swift
+import NovaNetworkDiagnostics
+
+let recorder = DiagnosticsRecorder()
+var configuration = NetworkClientConfiguration()
+configuration.telemetryHooks = recorder.hooks
+let client = NetworkClient(configuration: configuration)
+recorder.startConsuming(client.events())
+```
+
+`await recorder.summary().shortDescription` then reads like
+`4 requests · 50% failed · 25% coalesced · 66% cache hits`, and `try await recorder.exportHAR()`
+produces a HAR file to attach to a bug report. A "server not found" that turns out to be a VPN on the
+developer's machine is visible here in seconds rather than half a day; read <doc:Diagnostics> for the
+rest.
+
 ### Choose your next step
 
 - Follow <doc:ShareConcurrentRequests> to see request coalescing in action.
@@ -135,6 +156,7 @@ do {
 - Follow <doc:ModelRequestsAsEndpoints> to move repeated request logic into typed endpoints.
 - Read <doc:CoreConcepts> before customizing fingerprints or authentication scopes.
 - Read <doc:ChoosingAnAPI> to choose between raw loads, endpoints, batches, streams, and transfers.
+- Read <doc:OfflineFirst> if the app owns a local database and the network is a synchronizer.
 - Review <doc:ProductionChecklist> before shipping.
 
 ## See Also

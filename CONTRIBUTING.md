@@ -82,9 +82,33 @@ contains and why. Small, self-contained changes (a bug fix, a small additive API
 
 CI runs `swift package diagnose-api-breaking-changes` against the most recently tagged release to
 catch accidental breaking changes to public API. A small number of known, deliberate,
-source-compatible differences are allowlisted in `docs/api-breakage-allowlist.txt` — that file
-documents why each entry is there. If your change is intentionally breaking, discuss it in the PR
-first; if CI flags something you didn't intend to change, that's the gate doing its job.
+source-compatible differences are allowlisted in `docs/api-breakage-allowlist.txt`. If your change is
+intentionally breaking, discuss it in the PR first; if CI flags something you didn't intend to
+change, that's the gate doing its job.
+
+**The allowlist file takes breakage lines and nothing else.** A single `#` comment anywhere in it
+makes the digester ignore the whole file, silently, so every entry stops working — which is why the
+reasons for the entries live here rather than beside them. Blank lines are fine. Copy the message
+exactly as CI prints it, without the `💔`:
+
+```
+API breakage: constructor Foo.init(bar:) has been removed
+```
+
+Current entries and why they are there:
+
+- `OAuth2Client.init(configuration:transport:now:)` — gained `tokenExchange:`, which has a default.
+- `OAuth2Configuration.init(clientID:…:expiryLeeway:)` — gained `tokenRequestStyle:`, which has a
+  default. An initializer that grows a defaulted parameter is reported as a removal, and every
+  existing call still compiles.
+- `CachePolicy.includingUnsafeMethods` — a **deliberate** break, not a source-compatible one: an
+  added case fails an exhaustive `switch` over the enum. Accepted because a cache policy is
+  constructed and passed rather than matched on, and because the alternative designs put the
+  unsafe-method opt-in somewhere nobody reads it. It is described in `docs/WHATS_NEW_v3.5.md` with
+  the fix (`policy.strategy` and `policy.includesUnsafeMethods`).
+
+Nothing that changes the meaning of existing code belongs in this file. A deliberate break like the
+last one belongs in the release notes first and here second, and needs the PR discussion above.
 
 ## Cutting a release
 

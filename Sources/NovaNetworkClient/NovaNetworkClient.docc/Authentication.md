@@ -96,6 +96,51 @@ Polling honors RFC 8628: `authorization_pending` means wait and retry, `slow_dow
 seconds to the interval from then on. Ignoring either is how a device flow gets rate limited by the
 provider.
 
+## A provider that is not quite RFC 6749
+
+Plenty of services speak "OAuth 2.0" and shape the token request differently. Supabase's GoTrue reads
+`grant_type` from the query string and everything else from a JSON body:
+
+```
+POST /auth/v1/token?grant_type=password
+{"email": "...", "password": "..."}
+```
+
+Say so, and the standard grants keep working:
+
+```swift
+var configuration = OAuth2Configuration(clientID: projectRef, tokenEndpoint: gotrueTokenURL)
+configuration.tokenRequestStyle = OAuth2TokenRequestStyle(
+    bodyEncoding: .json,
+    grantTypePlacement: .query,
+    additionalHeaders: ["apikey": anonKey]
+)
+```
+
+``OAuth2TokenRequestStyle/additionalHeaders`` is applied after the headers this library sets, so a
+provider-wide API key lands on every token request and can override a default rather than fight it.
+
+When the difference is larger than an encoding — a different parameter vocabulary, a signature over
+the body, a grant that is not an OAuth grant — supply the exchange itself:
+
+```swift
+let authenticator = OAuth2Authenticator(
+    configuration: configuration,
+    exchange: OAuth2TokenExchange { grant in try await myTokenRequest(grant) },
+    store: KeychainTokenStore(service: "com.example.app", account: "session")
+)
+```
+
+The closure receives an ``OAuth2Grant`` — the `grant_type`, the parameters the standard request would
+have carried, the endpoint, and the token being refreshed — and returns an `OAuth2Token`. Everything
+around it stays library-side: storage, the single refresh across a burst of unauthorized responses,
+`retainingRefreshToken(from:)`, clearing the session on `invalid_grant`, and the middleware. Writing
+the token request is the part your provider made you write; writing the rest again is the part this
+avoids.
+
+For a sign-in this library has no grant for — `grant_type=password` among them — perform it yourself
+and hand the result over with `setToken(_:)`. Refresh still runs through the exchange from then on.
+
 ## Where the token lives
 
 The choice is explicit, and the default is memory:
@@ -139,7 +184,9 @@ memory — that kind of test passes for the wrong reasons.
 
 ## The symbols
 
-`OAuth2Configuration` and `PKCEChallenge` describe the flow; `OAuth2Client` performs the grants;
+`OAuth2Configuration` and `PKCEChallenge` describe the flow, and `OAuth2TokenRequestStyle` says what
+shape a token request takes on the wire; `OAuth2Client` performs the grants, or hands them to an
+`OAuth2TokenExchange` as an `OAuth2Grant`;
 `OAuth2Token`, `DeviceAuthorization`, and `OAuth2Error` are what comes back. `OAuth2Authenticator`
 holds the token and produces the `HTTPAuthRefreshProvider` and middleware. `TokenStore`,
 `InMemoryTokenStore`, and `KeychainTokenStore` decide where it lives. `HMACRequestSigner` and

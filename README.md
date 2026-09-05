@@ -17,6 +17,7 @@ When multiple callers ask for the same resource at the same time, only one under
 - [Diagnostics (recorder, HAR export, Instruments, SwiftUI panel)](Sources/NovaNetworkClient/NovaNetworkClient.docc/Diagnostics.md)
 - [Authentication (OAuth 2.0, PKCE, token storage, request signing)](Sources/NovaNetworkClient/NovaNetworkClient.docc/Authentication.md)
 - [Query Layer (server state for screens)](Sources/NovaNetworkClient/NovaNetworkClient.docc/QueryLayer.md)
+- [Offline-First Apps (offline queue or your own database?)](Sources/NovaNetworkClient/NovaNetworkClient.docc/OfflineFirst.md)
 - [Production Checklist](Sources/NovaNetworkClient/NovaNetworkClient.docc/ProductionChecklist.md)
 - [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md)
@@ -38,6 +39,7 @@ When multiple callers ask for the same resource at the same time, only one under
 - [NovaNetwork v3.2 DFR](docs/dfr/NOVA_NETWORK_V3_2_DFR.md)
 - [NovaNetwork v3.3 DFR](docs/dfr/NOVA_NETWORK_V3_3_DFR.md)
 - [NovaNetwork v3.4 DFR](docs/dfr/NOVA_NETWORK_V3_4_DFR.md)
+- [NovaNetwork v3.5 DFR](docs/dfr/NOVA_NETWORK_V3_5_DFR.md)
 - [v1.19 Traceability Pack](docs/TRACEABILITY_PACK_v1.19.md)
 - [v2.0 Traceability Pack](docs/TRACEABILITY_PACK_v2.0.md)
 - [v2.1 Traceability Pack](docs/TRACEABILITY_PACK_v2.1.md)
@@ -50,6 +52,7 @@ When multiple callers ask for the same resource at the same time, only one under
 - [v3.2 Traceability Pack](docs/TRACEABILITY_PACK_v3.2.md)
 - [v3.3 Traceability Pack](docs/TRACEABILITY_PACK_v3.3.md)
 - [v3.4 Traceability Pack](docs/TRACEABILITY_PACK_v3.4.md)
+- [v3.5 Traceability Pack](docs/TRACEABILITY_PACK_v3.5.md)
 
 ## Product Delivery Templates
 
@@ -661,7 +664,36 @@ and never sync to another device. For APIs that authenticate with a shared secre
 Version 4 (its correctness needs reference vectors; an unverified signer would look finished and be
 dangerous). Both are stated rather than quietly missing.
 
+### A provider that is not quite RFC 6749 (v3.5)
+
+Supabase's GoTrue reads `grant_type` from the query string and everything else from a JSON body.
+Describe the shape and the standard grants keep working:
+
+```swift
+configuration.tokenRequestStyle = OAuth2TokenRequestStyle(
+    bodyEncoding: .json,
+    grantTypePlacement: .query,
+    additionalHeaders: ["apikey": anonKey]
+)
+```
+
+When the difference is bigger than an encoding, supply the exchange itself and keep the rest:
+
+```swift
+let authenticator = OAuth2Authenticator(
+    configuration: configuration,
+    exchange: OAuth2TokenExchange { grant in try await myTokenRequest(grant) },
+    store: KeychainTokenStore(service: "com.example.app", account: "session")
+)
+```
+
+The closure gets the `grant_type`, the parameters, the endpoint, and the token being refreshed;
+storage, the single refresh across a burst of 401s, the retained refresh token, the `invalid_grant`
+sign-out, and the middleware all stay library-side. A sign-in this package has no grant for —
+`grant_type=password` among them — is performed by the app and handed over with `setToken(_:)`.
+
 A runnable walkthrough is in [`Examples/Authentication`](Examples/Authentication).
+
 ## Query Layer (v3.0)
 
 `NetworkClient` answers "perform this request". A screen asks something else: *what is the current
@@ -930,6 +962,23 @@ let data = try await client.load(
 )
 ```
 
+**`POST`, `PUT`, `PATCH`, and `DELETE` never take part in the cache** under any of these policies, no
+matter what the server's `Cache-Control` says. A stored response to a write either swallows the write
+or answers it with the reply to an earlier one, and both failures are silent — a sign-in that returns
+an expired token reads as a wrong password.
+
+Say so explicitly when a `POST` is genuinely a read:
+
+```swift
+let data = try await client.load(
+    request: searchRequest,                                       // POST /search
+    authScope: "user:42",
+    cachePolicy: .includingUnsafeMethods(.cacheFirst(maxAge: 30))
+)
+```
+
+A request carrying `Cache-Control: no-store` still bypasses the cache, opt-in or not.
+
 ## Disk Cache
 
 ```swift
@@ -1035,6 +1084,11 @@ let data = try await client.load(
 ```
 
 ## Offline Queue (Write Requests)
+
+Before wiring this up, read
+[Offline-First Apps](Sources/NovaNetworkClient/NovaNetworkClient.docc/OfflineFirst.md): the queue
+stores **requests**, and an app whose unit of edit is a row in SwiftData or GRDB is usually better
+served by a dirty flag on that row. Running both over the same edit sends it twice.
 
 ```swift
 let queueURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
@@ -1425,6 +1479,19 @@ directly: `write(to:)` streams the encoded body to any file you choose, and `con
 returns the matching header value. That decouples encoding from transport, so the same encoded
 file can be handed to any file-based upload path, including a durable/resumable one, instead of
 `uploadMultipart`'s own upload-then-delete-temp-file flow.
+
+## HTTP Methods
+
+`APIRequest.method` has type `URLMethod`; `HTTPMethod` is a typealias for the same enum, so both
+spellings compile and either one finds it in the documentation.
+
+```swift
+URLMethod.post.isSafe                 // false
+URLMethod.get.isCacheableByDefault    // true — only GET and HEAD are
+```
+
+Those two properties are what the client consults before a request may read from or write to the
+response cache.
 
 ## Request Builder
 

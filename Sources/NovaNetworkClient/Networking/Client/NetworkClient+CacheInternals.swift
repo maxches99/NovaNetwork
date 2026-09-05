@@ -33,12 +33,27 @@ extension NetworkClient {
         return !directives.contains("no-store") && !hasWildcardVary(headers: headers)
     }
 
-    func requestAllowsCacheLookup(_ request: APIRequest) -> Bool {
-        !cacheDirectives(from: request.headers).contains("no-store")
+    func requestAllowsCacheLookup(_ request: APIRequest, includingUnsafeMethods: Bool) -> Bool {
+        guard methodParticipatesInCache(request.method, includingUnsafeMethods: includingUnsafeMethods) else {
+            return false
+        }
+        return !cacheDirectives(from: request.headers).contains("no-store")
     }
 
-    func requestAllowsCacheStorage(_ request: APIRequest) -> Bool {
-        !cacheDirectives(from: request.headers).contains("no-store")
+    func requestAllowsCacheStorage(_ request: APIRequest, includingUnsafeMethods: Bool) -> Bool {
+        guard methodParticipatesInCache(request.method, includingUnsafeMethods: includingUnsafeMethods) else {
+            return false
+        }
+        return !cacheDirectives(from: request.headers).contains("no-store")
+    }
+
+    /// Whether a request's method may read from or write to the cache at all.
+    ///
+    /// This is the gate before freshness: a stored `POST` response either swallows a write or
+    /// answers it with the reply to an earlier one, and both failures are silent. Only
+    /// ``CachePolicy/includingUnsafeMethods(_:)`` opens it.
+    func methodParticipatesInCache(_ method: URLMethod, includingUnsafeMethods: Bool) -> Bool {
+        method.isCacheableByDefault || includingUnsafeMethods
     }
 
     func requestRequiresRevalidation(_ request: APIRequest) -> Bool {
