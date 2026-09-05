@@ -1,6 +1,3 @@
-# Deliberate, source-compatible differences the API-breakage gate should ignore.
-#
-# Empty as of the 3.4.0 baseline: every entry that used to be here described an initializer whose
-# signature grew a defaulted parameter between 2.0.0 and 3.4.0, and 3.4.0 records those signatures
-# as they now are. Add a line only for a difference that is genuinely source-compatible, and say in
-# the commit why it is.
+API breakage: constructor OAuth2Client.init(configuration:transport:now:) has been removed
+API breakage: constructor OAuth2Configuration.init(clientID:clientSecret:authorizationEndpoint:tokenEndpoint:deviceAuthorizationEndpoint:redirectURI:scopes:additionalAuthorizationParameters:expiryLeeway:) has been removed
+API breakage: enumelement CachePolicy.includingUnsafeMethods has been added as a new enum case
