@@ -24,6 +24,7 @@ If you're new to the package, start with <doc:GettingStarted> or follow the inte
 - <doc:Diagnostics>
 - <doc:Authentication>
 - <doc:QueryLayer>
+- <doc:OfflineFirst>
 - <doc:ProductionChecklist>
 - <doc:Tutorial-Table-of-Contents>
 

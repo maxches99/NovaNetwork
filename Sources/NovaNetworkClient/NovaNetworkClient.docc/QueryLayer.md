@@ -105,12 +105,24 @@ normal.
 The cache holds 100 entries by default and evicts the least recently used entry **that nobody is
 subscribed to**, so a screen's data cannot disappear from under it.
 
+## If you already have a local store
+
+`QueryClient` caches server state **you do not persist**. When SwiftData, Core Data, or GRDB already
+holds the same entities, that store is the cache: putting a query cache above it gives you two, each
+with its own idea of what is stale, and a screen reading one while a sync writes the other.
+
+The dividing line is which one the user's edit lands in. If an edit is written to your store and
+synced later, read that screen from your store and leave `QueryClient` out of it. Use it for the
+screens your store does not cover — a search, a feed, anything refetched rather than owned — and use
+`PagedQuery` for lists you never keep. <doc:OfflineFirst> works the same question through for writes.
+
 ## What this is not
 
 - **A replacement for `NetworkClient`.** It sits above and calls it.
 - **A normalized entity cache.** Values are stored by key, not merged into a graph. Normalization is
   a different product with different failure modes.
-- **Persistence.** The cache is in memory; the offline queue remains the durable path for writes.
+- **Persistence.** The cache is in memory. Durable writes belong either to the offline queue or to
+  your own store — <doc:OfflineFirst> says which.
 - **A view framework.** One observable model is provided; layout, navigation, and error presentation
   belong to the app.
 
@@ -124,5 +136,6 @@ They live in the `NovaNetworkQuery` module.
 
 ## See Also
 
+- <doc:OfflineFirst>
 - <doc:ChoosingAnAPI>
 - <doc:CoreConcepts>
