@@ -9,7 +9,35 @@ convention; not every one is a tagged release — see [Releases](#releases).
 
 ## Unreleased
 
-Nothing yet.
+- [3.5](docs/WHATS_NEW_v3.5.md) — **Responses to writes are no longer cached, and an OAuth endpoint
+  that is not quite RFC 6749 no longer costs you the module.** Both come from one adopter's report
+  ([#48](https://github.com/maxches99/NovaNetwork/issues/48)) after moving a SwiftUI app onto 3.4.0
+  against Supabase.
+
+  Whether a response could be cached was decided by the request's `Cache-Control` header alone; the
+  method was never consulted, so a `POST` was cached like a `GET`. That is a behavior change now:
+  `POST`, `PUT`, `PATCH`, and `DELETE` take part in neither cache lookup nor cache storage under any
+  `CachePolicy`, whatever the server says. Both ways it failed were silent — a sign-in served from
+  the cache with an expired token, refused on refresh as `invalid_grant` and shown to the user as a
+  wrong password; and an edit answered from the cache and never sent. A `POST` that really is a read
+  says so with `CachePolicy.includingUnsafeMethods(_:)`, per call or as a client default, and
+  `Cache-Control: no-store` still wins over it. `URLMethod` gained `isSafe` and
+  `isCacheableByDefault`, and `HTTPMethod` is now a typealias for it, because the type was
+  unfindable under the name people search for.
+
+  On the auth side, `OAuth2Client` always posted a form-encoded body with `grant_type` inside it, so
+  Supabase's GoTrue — `grant_type` in the query string, JSON in the body — meant bypassing both the
+  client and the authenticator, and losing single-flight refresh and token storage with them.
+  `OAuth2TokenRequestStyle` describes the shape (encoding, `grant_type` placement, extra headers) for
+  a provider that is close; `OAuth2TokenExchange`, injectable into `OAuth2Client` or straight into
+  `OAuth2Authenticator`, replaces the token request entirely for one that is not, while storage, the
+  single refresh across a burst of 401s, the retained refresh token, the `invalid_grant` sign-out,
+  and the middleware all stay library-side. Additive.
+
+  Also from the same report: a new **Offline-First Apps** article on whether the offline queue or the
+  app's own database owns an offline edit, a query-layer section for adopters who already have a
+  local store, a three-line diagnostics install near the top of Getting Started, and the cache rule
+  written into the production checklist.
 
 ## 3.4.0 — 2026-08-27
 
