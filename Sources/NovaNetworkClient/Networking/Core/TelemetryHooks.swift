@@ -233,6 +233,10 @@ public enum TelemetryWebSocketEventType: String, Sendable {
     case ackResendAttempt = "ack_resend_attempt"
     case ackDuplicate = "ack_duplicate"
     case ackTimeout = "ack_timeout"
+    case eventResumeRequested = "event_resume_requested"
+    case eventGapDetected = "event_gap_detected"
+    case eventDuplicateDropped = "event_duplicate_dropped"
+    case eventResyncRequired = "event_resync_required"
 }
 
 public struct TelemetryWebSocketContext: Sendable {

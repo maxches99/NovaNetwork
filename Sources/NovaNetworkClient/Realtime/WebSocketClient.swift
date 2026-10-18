@@ -291,8 +291,10 @@ public actor WebSocketClient: WebSocketClientProtocol {
     private let connectionManager: any WebSocketConnectionManaging
     private let ackManager: any WebSocketAckManaging
     private let outboundQueueManager: any WebSocketOutboundQueueManaging
+    private let eventResumePolicy: WebSocketEventResumePolicy?
     private let stateHub = WebSocketStateHub()
     private let messageHub = WebSocketMessageHub()
+    private let eventResumeHub = WebSocketEventResumeHub()
 
     private var state: WebSocketConnectionState = .disconnected
     private var health: WebSocketConnectionHealth = .disconnected
@@ -311,6 +313,7 @@ public actor WebSocketClient: WebSocketClientProtocol {
     private var acknowledgedMessageIDs: [String: UInt64] = [:]
     private var registeredSubscriptions: [String: WebSocketOutboundEnvelope] = [:]
     private var subscriptionOrder: [String] = []
+    private var eventCursors: [String: UInt64] = [:]
     private var lastError: WebSocketError?
     private var refreshedAuthHeaders: [String: String] = [:]
     private var didRestorePersistedOutboundQueue = false
@@ -327,18 +330,51 @@ public actor WebSocketClient: WebSocketClientProtocol {
         outboundQueueStore: (any WebSocketOutboundQueueStore)? = nil,
         telemetryHooks: NetworkTelemetryHooks? = nil
     ) {
-        self.configuration = configuration
-        self.ackMatcher = ackMatcher
-        self.authRefreshProvider = authRefreshProvider
-        self.connectivityMonitor = connectivityMonitor
-        self.outboundQueueStore = outboundQueueStore
-        self.transport = URLSessionWebSocketTransport()
-        self.telemetryHooks = telemetryHooks
-        self.retryClock = SystemRetryClock()
-        self.retryRandomGenerator = SystemRetryRandomGenerator()
-        self.connectionManager = DefaultWebSocketConnectionManager()
-        self.ackManager = DefaultWebSocketAckManager()
-        self.outboundQueueManager = DefaultWebSocketOutboundQueueManager()
+        self.init(
+            configuration: configuration,
+            transport: URLSessionWebSocketTransport(),
+            ackMatcher: ackMatcher,
+            authRefreshProvider: authRefreshProvider,
+            connectivityMonitor: connectivityMonitor,
+            outboundQueueStore: outboundQueueStore,
+            telemetryHooks: telemetryHooks
+        )
+    }
+
+    /// Creates a client that resumes event streams after a reconnect.
+    ///
+    /// With `eventResume`, the client records the last sequence it delivered for each stream. After a
+    /// reconnect it re-sends each registered subscription asking for the events after that sequence,
+    /// drops the ones it already delivered, and reports gaps and resync signals on
+    /// ``eventResumeEvents()``. A stream's ID must match the subscription ID it was registered under.
+    ///
+    /// - Parameters:
+    ///   - configuration: Connection, reconnect, heartbeat, queue, ACK, and subscription settings.
+    ///   - eventResume: How the server numbers events and resumes a subscription.
+    ///   - ackMatcher: Recognises ACK frames for messages sent with `requiresAck`.
+    ///   - authRefreshProvider: Supplies fresh headers when the handshake is rejected for auth.
+    ///   - connectivityMonitor: Suppresses reconnect attempts while the device is offline.
+    ///   - outboundQueueStore: Persists queued outbound messages across launches.
+    ///   - telemetryHooks: Receives connection, message, and resume telemetry.
+    public init(
+        configuration: WebSocketConfiguration,
+        eventResume: WebSocketEventResumePolicy,
+        ackMatcher: WebSocketAckMatcher = .default,
+        authRefreshProvider: WebSocketAuthRefreshProvider? = nil,
+        connectivityMonitor: (any OfflineConnectivityMonitor)? = nil,
+        outboundQueueStore: (any WebSocketOutboundQueueStore)? = nil,
+        telemetryHooks: NetworkTelemetryHooks? = nil
+    ) {
+        self.init(
+            configuration: configuration,
+            transport: URLSessionWebSocketTransport(),
+            ackMatcher: ackMatcher,
+            authRefreshProvider: authRefreshProvider,
+            connectivityMonitor: connectivityMonitor,
+            outboundQueueStore: outboundQueueStore,
+            telemetryHooks: telemetryHooks,
+            eventResumePolicy: eventResume
+        )
     }
 
     init(
@@ -350,7 +386,8 @@ public actor WebSocketClient: WebSocketClientProtocol {
         outboundQueueStore: (any WebSocketOutboundQueueStore)? = nil,
         retryClock: any RetryClock = SystemRetryClock(),
         retryRandomGenerator: any RetryRandomGenerator = SystemRetryRandomGenerator(),
-        telemetryHooks: NetworkTelemetryHooks? = nil
+        telemetryHooks: NetworkTelemetryHooks? = nil,
+        eventResumePolicy: WebSocketEventResumePolicy? = nil
     ) {
         self.configuration = configuration
         self.ackMatcher = ackMatcher
@@ -364,6 +401,7 @@ public actor WebSocketClient: WebSocketClientProtocol {
         self.ackManager = DefaultWebSocketAckManager()
         self.outboundQueueManager = DefaultWebSocketOutboundQueueManager()
         self.telemetryHooks = telemetryHooks
+        self.eventResumePolicy = eventResumePolicy
     }
 
     public func connectionStates() -> AsyncStream<WebSocketConnectionState> {
@@ -398,6 +436,41 @@ public actor WebSocketClient: WebSocketClientProtocol {
                 }
             }
         }
+    }
+
+    /// Resume requests, gaps, and resync signals, for a client created with an event resume policy.
+    ///
+    /// Only events that happen after the stream is created are delivered.
+    public func eventResumeEvents() -> AsyncStream<WebSocketEventResumeEvent> {
+        AsyncStream { continuation in
+            Task {
+                let upstream = await eventResumeHub.makeStream()
+                for await event in upstream {
+                    continuation.yield(event)
+                }
+                continuation.finish()
+            }
+        }
+    }
+
+    /// The last sequence delivered for a stream, or `nil` if none has been.
+    ///
+    /// Persist it to resume after a relaunch, and hand it back with ``seedEventCursor(_:forStream:)``.
+    public func eventCursor(forStream streamID: String) -> UInt64? {
+        eventCursors[streamID]
+    }
+
+    /// Sets a stream's cursor, for example from a value persisted before the app was terminated or
+    /// from the sequence of a snapshot fetched over HTTP.
+    public func seedEventCursor(_ sequence: UInt64, forStream streamID: String) {
+        eventCursors[streamID] = sequence
+    }
+
+    /// Forgets a stream's cursor, so the next event starts it again and the next reconnect re-sends
+    /// the original subscription. Use it when the server resets its sequence in a way the policy's
+    /// resync signal does not recognise.
+    public func resetEventCursor(forStream streamID: String) {
+        eventCursors.removeValue(forKey: streamID)
     }
 
     public func webSocketDiagnostics() -> WebSocketDiagnostics {
@@ -520,11 +593,13 @@ public actor WebSocketClient: WebSocketClientProtocol {
     public func unregisterSubscription(id: String) async {
         registeredSubscriptions.removeValue(forKey: id)
         subscriptionOrder.removeAll { $0 == id }
+        eventCursors.removeValue(forKey: id)
     }
 
     public func clearSubscriptions() async {
         registeredSubscriptions.removeAll()
         subscriptionOrder.removeAll()
+        eventCursors.removeAll()
     }
 
     public func disconnect(reason: String? = nil) async {
@@ -821,6 +896,9 @@ public actor WebSocketClient: WebSocketClientProtocol {
                     let message = try await transport.receive()
                     if let ackID = ackMatcher.match(message) {
                         self.handleAck(messageID: ackID)
+                    }
+                    guard await trackEventPosition(of: message) else {
+                        continue
                     }
                     await messageHub.emit(message)
                     emitTelemetry(type: .messageReceived, messageKind: message.telemetryKind)
@@ -1217,10 +1295,11 @@ public actor WebSocketClient: WebSocketClientProtocol {
                 continue
             }
 
+            let outbound = await resumedEnvelope(for: id, original: envelope, correlationID: replayCorrelationID)
             var restored = false
             for subscriptionAttempt in 1...replayPolicy.maxAttemptsPerSubscription {
                 do {
-                    try await sendEnvelope(envelope)
+                    try await sendEnvelope(outbound)
                     restored = true
                     break
                 } catch {
@@ -1279,6 +1358,58 @@ public actor WebSocketClient: WebSocketClientProtocol {
             subscriptionRestoreTotalCount: orderedSubscriptions.count,
             subscriptionRestoreFailedCount: failedIDs.count,
             correlationID: replayCorrelationID
+        )
+    }
+
+    /// Updates the stream cursor for an inbound message, and reports whether it should be delivered.
+    private func trackEventPosition(of message: WebSocketMessage) async -> Bool {
+        guard let eventResumePolicy else {
+            return true
+        }
+        if let streamID = eventResumePolicy.resyncSignal(message) {
+            eventCursors.removeValue(forKey: streamID)
+            emitTelemetry(type: .eventResyncRequired, reason: streamID)
+            await eventResumeHub.emit(.resyncRequired(streamID: streamID))
+            return true
+        }
+        guard let position = eventResumePolicy.position(message) else {
+            return true
+        }
+        let streamID = position.streamID
+        if let last = eventCursors[streamID] {
+            if position.sequence <= last {
+                emitTelemetry(type: .eventDuplicateDropped, reason: "\(streamID):\(position.sequence)")
+                return false
+            }
+            if position.sequence > last + 1 {
+                emitTelemetry(type: .eventGapDetected, reason: "\(streamID):\(last + 1)-\(position.sequence)")
+                await eventResumeHub.emit(
+                    .gapDetected(streamID: streamID, expectedSequence: last + 1, receivedSequence: position.sequence)
+                )
+            }
+        }
+        eventCursors[streamID] = position.sequence
+        return true
+    }
+
+    /// The subscription to re-send after a reconnect: the policy's resume message when the stream
+    /// has a cursor, otherwise the one the app registered.
+    private func resumedEnvelope(
+        for id: String,
+        original: WebSocketOutboundEnvelope,
+        correlationID: String
+    ) async -> WebSocketOutboundEnvelope {
+        guard let eventResumePolicy,
+              let afterSequence = eventCursors[id],
+              let message = eventResumePolicy.resumeMessage(original.message, afterSequence) else {
+            return original
+        }
+        emitTelemetry(type: .eventResumeRequested, reason: "\(id):\(afterSequence)", correlationID: correlationID)
+        await eventResumeHub.emit(.resumeRequested(streamID: id, afterSequence: afterSequence))
+        return WebSocketOutboundEnvelope(
+            message: message,
+            options: original.options,
+            resolvedMessageID: original.resolvedMessageID
         )
     }
 

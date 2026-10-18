@@ -1,3 +1,7 @@
 API breakage: constructor OAuth2Client.init(configuration:transport:now:) has been removed
 API breakage: constructor OAuth2Configuration.init(clientID:clientSecret:authorizationEndpoint:tokenEndpoint:deviceAuthorizationEndpoint:redirectURI:scopes:additionalAuthorizationParameters:expiryLeeway:) has been removed
 API breakage: enumelement CachePolicy.includingUnsafeMethods has been added as a new enum case
+API breakage: enumelement TelemetryWebSocketEventType.eventResumeRequested has been added as a new enum case
+API breakage: enumelement TelemetryWebSocketEventType.eventGapDetected has been added as a new enum case
+API breakage: enumelement TelemetryWebSocketEventType.eventDuplicateDropped has been added as a new enum case
+API breakage: enumelement TelemetryWebSocketEventType.eventResyncRequired has been added as a new enum case

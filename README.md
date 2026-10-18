@@ -40,6 +40,7 @@ When multiple callers ask for the same resource at the same time, only one under
 - [NovaNetwork v3.3 DFR](docs/dfr/NOVA_NETWORK_V3_3_DFR.md)
 - [NovaNetwork v3.4 DFR](docs/dfr/NOVA_NETWORK_V3_4_DFR.md)
 - [NovaNetwork v3.5 DFR](docs/dfr/NOVA_NETWORK_V3_5_DFR.md)
+- [NovaNetwork v3.6 DFR](docs/dfr/NOVA_NETWORK_V3_6_DFR.md)
 - [v1.19 Traceability Pack](docs/TRACEABILITY_PACK_v1.19.md)
 - [v2.0 Traceability Pack](docs/TRACEABILITY_PACK_v2.0.md)
 - [v2.1 Traceability Pack](docs/TRACEABILITY_PACK_v2.1.md)
@@ -53,6 +54,7 @@ When multiple callers ask for the same resource at the same time, only one under
 - [v3.3 Traceability Pack](docs/TRACEABILITY_PACK_v3.3.md)
 - [v3.4 Traceability Pack](docs/TRACEABILITY_PACK_v3.4.md)
 - [v3.5 Traceability Pack](docs/TRACEABILITY_PACK_v3.5.md)
+- [v3.6 Traceability Pack](docs/TRACEABILITY_PACK_v3.6.md)
 
 ## Product Delivery Templates
 
@@ -1272,6 +1274,43 @@ For connectivity-aware reconnect suppression/resume, pass `connectivityMonitor` 
 For durable outbound buffering across app restarts, pass `outboundQueueStore` (for example `DiskWebSocketOutboundQueueStore`).
 
 For optional subscription restore after reconnect, register subscriptions via `registerSubscription(id:message:options:)`.
+
+### Resuming missed events after a reconnect (v3.6)
+
+A re-sent subscription starts from "now", so whatever the server published while the socket was down
+is lost. Pass an `eventResume` policy and the client keeps the last sequence it delivered per stream,
+re-sends each registered subscription asking for what came after it, drops the overlap, and reports
+what it could not recover:
+
+```swift
+let socket = WebSocketClient(
+    configuration: .init(url: URL(string: "wss://example.com/ws")!),
+    eventResume: .default
+)
+// Events look like {"stream":"orders","seq":42,...}. The stream ID is the subscription ID.
+await socket.registerSubscription(id: "orders", message: .text(#"{"type":"subscribe","channel":"orders"}"#))
+// After a reconnect the client sends {"afterSeq":42,"channel":"orders","type":"subscribe"}.
+
+Task {
+    for await event in await socket.eventResumeEvents() {
+        switch event {
+        case .resyncRequired(let stream), .gapDetected(let stream, _, _):
+            let snapshot = try await api.orders()             // refetch over HTTP
+            await socket.seedEventCursor(snapshot.seq, forStream: stream)
+        case .resumeRequested:
+            break
+        }
+    }
+}
+```
+
+`.default` reads `"stream"` and `"seq"`, resumes a JSON-object subscription by adding `"afterSeq"`,
+and treats `{"type":"resync_required","stream":"…"}` as "history no longer reaches back". A different
+protocol is three closures: `WebSocketEventResumePolicy(position:resumeMessage:resyncSignal:)`.
+
+Events at or below the cursor never reach `messages()`. To resume after a relaunch, persist
+`eventCursor(forStream:)` and hand it back with `seedEventCursor(_:forStream:)`. Telemetry:
+`event_resume_requested`, `event_gap_detected`, `event_duplicate_dropped`, `event_resync_required`.
 
 `WebSocketDiagnostics` also includes queue pressure, ACK pending age buckets, and reconnect phase/reason snapshots for incident triage.
 

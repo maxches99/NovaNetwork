@@ -9,6 +9,14 @@ convention; not every one is a tagged release — see [Releases](#releases).
 
 ## Unreleased
 
+- [3.6](docs/WHATS_NEW_v3.6.md) — **A WebSocket reconnect no longer loses what happened while it was
+  down.** Re-sent subscriptions used to start from "now". With an `eventResume` policy,
+  `WebSocketClient` tracks the last sequence delivered per stream, re-sends each registered
+  subscription asking for the events after it, drops the overlap before it reaches `messages()`, and
+  reports gaps and "cannot replay that far back" on `eventResumeEvents()`. `.default` follows a small
+  JSON convention; any other protocol is three closures. Cursors can be read and seeded, so resume
+  survives a relaunch. Additive and opt-in; `TelemetryWebSocketEventType` gains four cases.
+
 - [3.5](docs/WHATS_NEW_v3.5.md) — **Responses to writes are no longer cached, and an OAuth endpoint
   that is not quite RFC 6749 no longer costs you the module.** Both come from one adopter's report
   ([#48](https://github.com/maxches99/NovaNetwork/issues/48)) after moving a SwiftUI app onto 3.4.0
