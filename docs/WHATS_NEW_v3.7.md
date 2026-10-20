@@ -226,3 +226,54 @@ List(posts) { post in
   waiting.
 
 `prefetch(_:staleTime:fetch:)` is unchanged.
+
+## Copy as cURL, and replay, from the diagnostics panel
+
+"It fails on my phone" used to end in a screenshot and a backend engineer retyping the request.
+
+```swift
+print(record.curlCommand())
+// curl -X 'POST' 'https://api.example.com/items' \
+//   -H 'Authorization: <redacted>' \
+//   -H 'Content-Type: application/json' \
+//   --data-raw '{"name":"lamp"}'
+
+try await client.replay(record)   // uncoalesced, past the cache; middleware adds fresh credentials
+
+NetworkDiagnosticsView(recorder: recorder, onReplay: { try? await client.replay($0) })
+```
+
+- **`curlCommand()`** — method, URL, headers in name order, and the body inlined with `--data-raw`
+  when it was captured in full and is UTF-8. A binary body becomes `--data-binary @body.bin`; a
+  truncated or uncaptured one, a comment saying so. Every argument is single-quoted, embedded quotes
+  included.
+- **No new secrets.** Both start from the record, which was redacted when it was made. A redacted
+  header appears with its placeholder in the command, and is left out of a replay for the client's
+  middleware to fill in.
+- **`replayRequest()`** rebuilds the `APIRequest`, or says why it cannot: `bodyNotCaptured`,
+  `bodyTruncated`, `urlRedacted`, `invalidRecord`. **`NetworkClient.replay(_:)`** sends it
+  uncoalesced and past the cache; with a recorder installed, the replay is a record of its own.
+- **The panel.** The request detail has *Copy as cURL* (iOS and macOS) and, with the new
+  `NetworkDiagnosticsView(recorder:onExportHAR:onReplay:)`, *Replay*.
+
+## A cassette from a HAR
+
+A HAR from a tester's device could be read in the inspector, but reproducing the bug still meant
+finding a server state that produced the same responses.
+
+```swift
+let conversion = try Cassette.fromHAR(
+    Data(contentsOf: harURL),
+    include: { _, url in url.host == "api.example.com" }   // a browser HAR holds every image too
+)
+try conversion.cassette.write(to: cassetteURL)
+for entry in conversion.skipped { print(entry.index, entry.url ?? "", entry.reason) }
+```
+
+- **Any producer.** `HARExporter`, Safari, Chrome, Charles, Proxyman — HAR 1.x.
+- **Redaction first.** Headers, query items, and bodies go through `CassetteRedaction` before anything
+  is in the cassette; browsers export cookies and authorization headers verbatim.
+- **Skipped, not faked.** Malformed entries, aborted requests (status `0`), bodies HAR kept only the
+  size of, truncated bodies, and anything `include` rejects are listed in `skipped` with the reason.
+- **Headers that would lie are dropped**: `Content-Encoding` and `Content-Length` describe the
+  encoded wire bytes, not the decoded body HAR stores; HTTP/2 pseudo-headers are not headers.

@@ -98,6 +98,24 @@ HAR 1.2, because it is already understood: every browser's network inspector, Ch
 open it, so a support artifact needs no new viewer. What HAR has no field for — attempts, coalescing,
 cache outcome, truncation — goes in each entry's `comment`.
 
+## Copy as cURL, and replay
+
+```swift
+print(record.curlCommand())
+// curl -X 'POST' 'https://api.example.com/items' \
+//   -H 'Authorization: <redacted>' \
+//   -H 'Content-Type: application/json' \
+//   --data-raw '{"name":"lamp"}'
+
+try await client.replay(record)   // uncoalesced, past the cache; middleware adds fresh credentials
+
+NetworkDiagnosticsView(recorder: recorder, onReplay: { try? await client.replay($0) })
+```
+
+A redacted header shows the placeholder in the command and is left out of a replay, for the client's
+middleware to fill in. A body that was not captured in full makes replay fail with
+`ReplayUnavailable`.
+
 ## The panel
 
 `NetworkDiagnosticsView` presents the same data on Apple platforms: a summary line, a list of

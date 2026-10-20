@@ -536,6 +536,25 @@ re-saving an unchanged recording produces identical bytes and a real change show
 build links it without a test-support module. Only completed HTTP exchanges are recorded — a
 throwing transport is not an exchange — and streaming, SSE, and managed transfers are out of scope.
 
+### A cassette from a HAR (v3.7)
+
+A HAR attached to a bug report — from `HARExporter`, Safari, Chrome, Charles, or Proxyman — becomes a
+cassette, so the responses someone else saw replay in a test:
+
+```swift
+let conversion = try Cassette.fromHAR(
+    Data(contentsOf: harURL),
+    include: { _, url in url.host == "api.example.com" }   // a browser HAR holds every image too
+)
+try conversion.cassette.write(to: cassetteURL)
+for entry in conversion.skipped { print(entry.index, entry.url ?? "", entry.reason) }
+```
+
+Redaction runs during conversion, because browsers export cookies and tokens verbatim. Entries that
+would not replay faithfully — aborted, or with a body the HAR kept only the size of, or truncated —
+are skipped and listed. `Content-Encoding`, `Content-Length`, and HTTP/2 pseudo-headers are dropped:
+HAR stores the decoded body they no longer describe.
+
 A runnable end-to-end demo is in [`Examples/Cassette`](Examples/Cassette).
 
 ## Diagnostics (v2.13)
@@ -628,6 +647,25 @@ await recorder.load(try HARImporter().import(Data(contentsOf: url)))
 
 [`Inspector`](Inspector) is a macOS app built on those two lines: drop a HAR on it and read it with
 the same panel a live app embeds.
+
+### Copy as cURL, and replay (v3.7)
+
+```swift
+print(record.curlCommand())
+// curl -X 'POST' 'https://api.example.com/items' \
+//   -H 'Authorization: <redacted>' \
+//   -H 'Content-Type: application/json' \
+//   --data-raw '{"name":"lamp"}'
+
+try await client.replay(record)   // uncoalesced, past the cache; middleware adds fresh credentials
+
+NetworkDiagnosticsView(recorder: recorder, onReplay: { try? await client.replay($0) })
+```
+
+Both start from the record, which was redacted when it was made: a redacted header shows the
+placeholder in the command, and is left out of a replay so the client's middleware supplies a fresh
+one. A body that was not captured, or was truncated, makes replay fail with `ReplayUnavailable`
+rather than send something else. The panel's request detail has both buttons.
 
 ## Authentication (v2.14)
 

@@ -5,7 +5,7 @@
 - Feature name: NovaNetwork 3.7 — tail latency, cold starts, contracts, and the tools around them
 - Owner: NovaNetwork maintainers
 - Stakeholders: Swift package consumers, Engineering
-- Status: `In Development`
+- Status: `Implementation complete; pre-release CI gates pending`
 - Target version: 3.7.0
 - Source baseline: 3.6 (`main`)
 - Related artifacts:
@@ -779,3 +779,191 @@ Negative tests: cancelling a promoted prefetch does not cancel it (T-23.4); a ca
 late result is dropped (T-23.5).
 
 E2E: not applicable — the query layer does no networking of its own.
+
+---
+
+## G. Copy as cURL and replay from the diagnostics panel
+
+### G.1 Goal
+
+Turn a recorded request into something a backend engineer can run — a `curl` command — and let a
+developer send it again from the panel, without either path leaking a credential.
+
+### G.2 User value
+
+"It fails on my phone" ends in a screenshot of the panel and a backend engineer retyping the request.
+A `curl` command is the lingua franca for "this is exactly what was sent". Replaying from the panel
+answers "is it still failing?" without reproducing the steps that led there.
+
+### G.3 Scope split
+
+- MVP / required for 3.7:
+  - `RequestDiagnostic.curlCommand()`: method, URL, headers, and body as recorded;
+  - `RequestDiagnostic.replayRequest(redactionPlaceholder:)`: an `APIRequest` rebuilt from the
+    record, or the reason it cannot be;
+  - `NetworkClient.replay(_:authScope:)` sending it through the client, uncoalesced and uncached;
+  - "Copy as cURL" and "Replay" in the panel's request detail.
+- Nice-to-have after MVP:
+  - exporting every request as a shell script;
+  - HTTPie and `fetch()` formats.
+
+### G.4 Non-goals
+
+- Restoring redacted values. The record never held them; replay leaves redacted headers out so the
+  app's middleware adds fresh ones.
+
+### G.5 Risks and mitigations
+
+- **A token in a pasted command.** The command is built from the record, which is redacted when it
+  is made; a redacted header appears with the placeholder, so the reader knows it existed.
+- **Replaying a write twice.** Replay is a button a developer presses on a request they are looking
+  at; the panel labels it with the method, and the README says it sends the request again.
+- **Replaying a partial body.** A body that was not captured, or was truncated, makes replay
+  unavailable with that reason rather than sending something else.
+
+### G.6 Requirements
+
+#### Functional (FR)
+
+- **FR-CURL-1** `curlCommand()` produces `curl` with `-X <method>` (omitted for `GET` without a body),
+  the URL, one `-H` per header in name order, and `--data-raw` with the body when it was captured
+  in full and is UTF-8; every argument is single-quoted with embedded quotes escaped.
+- **FR-CURL-2** A binary body becomes `--data-binary @body.bin` with a comment giving its size; a
+  truncated or uncaptured body becomes a comment saying so.
+- **FR-CURL-3** `replayRequest` returns the method, URL, and body of the record, and every header
+  except those whose value is the redaction placeholder.
+- **FR-CURL-4** `replayRequest` fails with `bodyNotCaptured`, `bodyTruncated`, `urlRedacted`, or
+  `invalidRecord` (an unknown method or an unparseable URL) instead of guessing.
+- **FR-CURL-5** `NetworkClient.replay(_:authScope:)` sends the rebuilt request with coalescing
+  disabled and `CachePolicy.networkOnly`, so it reaches the server.
+- **FR-CURL-6** The panel's request detail offers "Copy as cURL" and, when the panel is given an
+  `onReplay` closure, "Replay".
+
+#### Edge cases (EC)
+
+- **EC-CURL-1** A header value or body containing `'` is still a single valid shell word.
+- **EC-CURL-2** A record with no body sends none; a recorded empty body is sent empty.
+
+#### Analytics (AR)
+
+Not applicable: these are developer actions inside a debug tool, not product events.
+
+### G.7 Flow
+
+`record → curlCommand() → pasteboard`; `record → replayRequest() → (request | reason) →
+client.replay → new record in the recorder`.
+
+### G.8 Engineering notes
+
+`replay` lives in `NovaNetworkDiagnostics` as an extension on `NetworkClient` because rebuilding a
+request from a record is a diagnostics concern, and the client should not know records exist.
+
+### G.9 Test matrix
+
+| Requirement ID | Test IDs | Type | Owner |
+|---|---|---|---|
+| FR-CURL-1, EC-CURL-1 | T-24.1 | unit | Engineering |
+| FR-CURL-2 | T-24.2 | unit | Engineering |
+| FR-CURL-3, EC-CURL-2 | T-24.3 | unit | Engineering |
+| FR-CURL-4 | T-24.4 | unit | Engineering |
+| FR-CURL-5 | T-24.5 | unit | Engineering |
+| FR-CURL-6 | T-24.6 (demo app UI test; the view is excluded from coverage) | UI | Engineering |
+
+E2E: not applicable — replay sends whatever was recorded; the transport path it uses is already
+covered by the E2E suite.
+
+---
+
+## H. A cassette from a HAR
+
+### H.1 Goal
+
+Turn a HAR file — from a tester's device via `HARExporter`, from Safari or Chrome, from Charles or
+Proxyman — into a cassette, so a bug seen on someone else's device becomes a test that replays the
+exact responses.
+
+### H.2 User value
+
+A HAR attached to a bug report can be read in the inspector, but reproducing the bug still means
+finding a server state that produces the same responses. A cassette replays them deterministically;
+the missing step is converting one into the other, by hand, entry by entry.
+
+### H.3 Scope split
+
+- MVP / required for 3.7:
+  - `Cassette.fromHAR(_:redaction:include:)` returning the cassette and a list of skipped entries
+    with reasons;
+  - redaction applied during conversion with the cassette's own `CassetteRedaction`, so no secret
+    from the HAR reaches the file;
+  - an `include` filter, because a browser HAR also holds every image, font, and analytics beacon;
+  - entries that cannot be replayed faithfully are skipped and listed rather than recorded wrong.
+- Nice-to-have after MVP:
+  - a `nova-har-to-cassette` command-line tool.
+
+### H.4 Non-goals
+
+- Timing. Cassettes replay without delays; HAR timings stay in the HAR.
+- Reconstructing bodies HAR did not keep.
+
+### H.5 Risks and mitigations
+
+- **Secrets in the HAR.** Browsers export cookies and authorization headers verbatim. Conversion
+  runs the redaction on headers, query items, and bodies before anything is in the cassette; the
+  default policy is the cassette's default.
+- **A replay that lies.** An entry whose response body was not captured, or was truncated, would
+  replay as an empty or partial body. Such entries are skipped and reported.
+- **Headers that no longer describe the body.** HAR stores decoded content, so `Content-Encoding` and
+  `Content-Length` from the original response are wrong for it; both are dropped, as are HTTP/2
+  pseudo-headers (`:authority`).
+
+### H.6 Requirements
+
+#### Functional (FR)
+
+- **FR-HARCAS-1** `Cassette.fromHAR` reads HAR 1.x and returns one interaction per usable entry, in
+  file order, with method, URL, headers, and bodies.
+- **FR-HARCAS-2** Response bodies come from `content.text`, base64-decoded when `content.encoding` is
+  `base64`; request bodies from `postData.text`.
+- **FR-HARCAS-3** Redaction is applied to request and response headers, the URL's query items, and
+  both bodies.
+- **FR-HARCAS-4** An entry is skipped, with its index, URL, and reason, when it is malformed, was
+  aborted (status `0` or below), has a response body HAR did not keep, has a truncated body
+  (`HARExporter`'s comment), or is excluded by `include`.
+- **FR-HARCAS-5** `Content-Encoding`, `Content-Length`, and pseudo-headers are dropped from recorded
+  headers.
+- **FR-HARCAS-6** A file that is not JSON, not a HAR log, or a HAR major version other than 1 throws
+  `HARConversionError`.
+
+#### Edge cases (EC)
+
+- **EC-HARCAS-1** Repeated header names are joined with `, ` as HTTP allows.
+- **EC-HARCAS-2** An entry with an empty response body records no body.
+
+#### Analytics (AR)
+
+Not applicable: a developer tool with no runtime events. The `skipped` list is the report.
+
+### H.7 Flow
+
+`HAR → parse → per entry: well-formed? → included? → not aborted? → bodies kept? → redact → strip
+stale headers → interaction`; every "no" adds a skipped entry.
+
+### H.8 Engineering notes
+
+The conversion lives in `NovaNetworkCassette` and parses HAR itself rather than going through
+`HARImporter`: the cassette module depends on `NovaNetworkCore` alone so preview and demo builds can
+link it, and `HARImporter` lives in the diagnostics module, which needs the whole client. HAR's
+shape is small enough that a second reader is cheaper than the dependency.
+
+### H.9 Test matrix
+
+| Requirement ID | Test IDs | Type | Owner |
+|---|---|---|---|
+| FR-HARCAS-1, FR-HARCAS-2, EC-HARCAS-1 | T-25.1 | unit | Engineering |
+| FR-HARCAS-3 | T-25.2 | unit | Engineering |
+| FR-HARCAS-4, EC-HARCAS-2 | T-25.3 | unit | Engineering |
+| FR-HARCAS-5 | T-25.4 | unit | Engineering |
+| FR-HARCAS-6 | T-25.5 | unit | Engineering |
+| Round trip: `HARExporter` → `fromHAR` → `CassetteTransport` replay | T-25.6 | unit | Engineering |
+
+E2E: not applicable — conversion reads a file and makes no request.

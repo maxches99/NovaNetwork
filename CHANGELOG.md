@@ -32,6 +32,11 @@ convention; not every one is a tagged release — see [Releases](#releases).
   - *Prefetching rows as they appear.* `QueryClient.prefetchWhileVisible(_:fetch:)` and
     `cancelPrefetch(_:)` run at most `maximumConcurrentPrefetches` at once, most recent first, and
     cancel fetches for rows that left the screen unless a reader is waiting on them.
+  - *Copy as cURL, and replay.* `RequestDiagnostic.curlCommand()`, `replayRequest()`, and
+    `NetworkClient.replay(_:)`, with both actions in the panel's request detail. Redacted values
+    stay redacted.
+  - *A cassette from a HAR.* `Cassette.fromHAR(_:redaction:include:)` turns a HAR from any producer
+    into a cassette, redacting as it goes and listing the entries it could not replay faithfully.
 
 - [3.6](docs/WHATS_NEW_v3.6.md) — **A WebSocket reconnect no longer loses what happened while it was
   down.** Re-sent subscriptions used to start from "now". With an `eventResume` policy,

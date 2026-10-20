@@ -211,3 +211,58 @@ stubs, under `RUN_E2E_TESTS=1 swift test --filter E2ECoverageTests`.
 ### E2E
 
 Not applicable (DFR §F.9).
+
+## G. Copy as cURL and replay from the diagnostics panel
+
+### Requirement to implementation mapping
+
+| Requirement IDs | Implementation |
+|---|---|
+| FR-CURL-1…5, EC-CURL-1…2 | `Sources/NovaNetworkDiagnostics/RequestReplay.swift` |
+| FR-CURL-6 | `Sources/NovaNetworkDiagnostics/NetworkDiagnosticsView.swift` (`init(recorder:onExportHAR:onReplay:)`, Share section) |
+
+### Requirement to test mapping
+
+| Test IDs | Requirement IDs | Type | Executable reference |
+|---|---|---|---|
+| T-24.1 | FR-CURL-1, EC-CURL-1 | unit | `CurlCommandTests.aRecordBecomesARunnableCommandWithEveryArgumentQuoted` |
+| T-24.2 | FR-CURL-2 | unit | `CurlCommandTests.aBodyThatCannotBeInlinedIsDescribedInstead` |
+| T-24.3 | FR-CURL-3, EC-CURL-2 | unit | `ReplayRequestTests.theRequestIsRebuiltWithoutTheHeadersThatWereRedacted` |
+| T-24.4 | FR-CURL-4 | unit | `ReplayRequestTests.aRecordThatCannotBeSentAsItWasSaysWhy` |
+| T-24.5 | FR-CURL-5 | unit | `ReplayThroughTheClientTests.aReplayReachesTheServerEveryTimeAndTheMiddlewareSuppliesFreshCredentials` |
+| T-24.6 | FR-CURL-6 | UI | `DemoApp/NovaDiagnosticsDemoUITests` `DiagnosticsPanelUITests.testARequestCanBeCopiedAsCurlAndReplayed` |
+
+### Analytics verification
+
+Not applicable (DFR §G.6).
+
+### E2E
+
+Not applicable (DFR §G.9).
+
+## H. A cassette from a HAR
+
+### Requirement to implementation mapping
+
+| Requirement IDs | Implementation |
+|---|---|
+| FR-HARCAS-1…6, EC-HARCAS-1…2 | `Sources/NovaNetworkCassette/CassetteFromHAR.swift` |
+
+### Requirement to test mapping
+
+| Test IDs | Requirement IDs | Type | Executable reference |
+|---|---|---|---|
+| T-25.1 | FR-HARCAS-1, FR-HARCAS-2, EC-HARCAS-1 | unit | `CassetteFromHARTests.eachEntryBecomesAnInteractionInFileOrder` |
+| T-25.2 | FR-HARCAS-3 | unit | `CassetteFromHARTests.secretsInTheHARNeverReachTheCassette` |
+| T-25.3 | FR-HARCAS-4, EC-HARCAS-2 | unit | `CassetteFromHARTests.entriesThatWouldNotReplayFaithfullyAreSkippedWithTheirReason` |
+| T-25.4 | FR-HARCAS-5 | unit | `CassetteFromHARTests.headersThatDescribeTheWireRatherThanTheBodyAreDropped` |
+| T-25.5 | FR-HARCAS-6 | unit | `CassetteFromHARTests.aFileThatIsNotAHAR1LogIsRefused` |
+| T-25.6 | FR-HARCAS-1, FR-HARCAS-3 | unit | `HARToCassetteRoundTripTests.aHARExportedOnOneDeviceReplaysAsACassetteOnAnother` |
+
+### Analytics verification
+
+Not applicable (DFR §H.6).
+
+### E2E
+
+Not applicable (DFR §H.9).
