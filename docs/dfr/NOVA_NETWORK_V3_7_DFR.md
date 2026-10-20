@@ -449,3 +449,112 @@ where null is not allowed (T-20.3); a conforming response produces no report (T-
 
 E2E: not applicable. The policy allows only real public APIs, and none publishes a spec it is known to
 match exactly; a report against one would test the API, not the client.
+
+---
+
+## D. Compressing request bodies
+
+### D.1 Goal
+
+Send large request bodies — a sync batch, an analytics flush, a JSON document — gzip-compressed to
+servers that accept it, so uploads on a slow or metered link take a fraction of the bytes.
+
+### D.2 User value
+
+Responses have been compressed by `URLSession` for as long as it has existed; request bodies never
+are. JSON compresses 5–10×, and the requests that are large are exactly the ones a mobile app sends
+on reconnect: the offline queue's replay, a batch of events. Hand-rolled compression usually breaks
+request signing (the signature covers the uncompressed bytes) or compresses for a server that
+rejects it.
+
+### D.3 Scope split
+
+- MVP / required for 3.7:
+  - `NetworkMiddleware.compressingRequestBodies(_:onEvent:)`, opt-in, with a `RequestCompressionPolicy`;
+  - compress only for hosts the app names (or every host, explicitly), only bodies above a minimum
+    size, only compressible content types, only when the result is smaller;
+  - `gzip` (RFC 1952) and `deflate` (RFC 1950 zlib) encodings;
+  - an event per decision: compressed with sizes, or skipped with the reason.
+- Nice-to-have after MVP:
+  - learning from a `415 Unsupported Media Type` to stop compressing for that host;
+  - Brotli and zstd.
+
+### D.4 Non-goals
+
+- Compressing for every server by default. Most servers do not decompress request bodies unless
+  configured to; compressing for one that does not turns every write into a 400.
+- Compressing streams, multipart uploads, or files on disk.
+- Linux. Foundation on Linux has no compressor; there the middleware reports `unavailable` and sends
+  the body unchanged.
+
+### D.5 Risks and mitigations
+
+- **A server that does not decompress.** Hosts are opt-in; the policy cannot be built without naming
+  them or choosing `.anyHost` explicitly.
+- **Signing covers the wrong bytes.** Middleware runs in array order; the documentation and the
+  README example put compression before signing, so the signature covers the bytes that are sent.
+- **Double compression.** A request that already has a `Content-Encoding` header is left alone.
+- **CPU on the main path.** Bodies below `minimumBodyBytes` (1 KB by default) are not compressed: the
+  saving is smaller than the cost.
+
+### D.6 Requirements
+
+#### Functional (FR)
+
+- **FR-COMPRESS-1** `NetworkMiddleware.compressingRequestBodies(_:onEvent:)` returns a `beforeSend`
+  middleware; without it no body is ever compressed.
+- **FR-COMPRESS-2** A body is compressed only when the request's host is in the policy's hosts (or the
+  policy is `.anyHost`), the body is at least `minimumBodyBytes`, the request has no
+  `Content-Encoding`, and its `Content-Type` is compressible (JSON, `+json`, text, XML,
+  `application/x-www-form-urlencoded`, or absent).
+- **FR-COMPRESS-3** The compressed body replaces the original only when it is smaller; the request
+  then carries `Content-Encoding: gzip` or `deflate`.
+- **FR-COMPRESS-4** `gzip` output is a valid RFC 1952 member (header, DEFLATE data, CRC-32, size);
+  `deflate` output is a valid RFC 1950 stream (header, DEFLATE data, Adler-32).
+- **FR-COMPRESS-5** The policy's `isEligible` closure, when given, replaces the content-type rule.
+
+#### Edge cases (EC)
+
+- **EC-COMPRESS-1** A request with no body, or an empty one, passes through without an event.
+- **EC-COMPRESS-2** Data that does not compress (already compressed, random) is sent unchanged.
+- **EC-COMPRESS-3** A host is matched case-insensitively.
+- **EC-COMPRESS-4** A negative `minimumBodyBytes` is clamped to `0`.
+
+#### Analytics (AR)
+
+- **AR-COMPRESS-1** `onEvent` receives `.compressed(url:encoding:originalBytes:compressedBytes:)`.
+- **AR-COMPRESS-2** `.skipped(url:reason:)` with `hostNotListed`, `tooSmall`, `alreadyEncoded`,
+  `notCompressible`, `notSmaller`, or `unavailable`; no `compressed` for that request.
+
+### D.7 Flow
+
+`request → has body? (no: pass, silent) → host listed? → large enough? → not encoded? → compressible
+type? → compress → smaller? → replace body + header, report compressed`; each "no" reports skipped
+with its reason and sends the original.
+
+### D.8 Engineering notes
+
+DEFLATE comes from Apple's Compression framework (`COMPRESSION_ZLIB`, which is raw RFC 1951 data);
+the gzip and zlib framing and their checksums are written here, because the framework produces
+neither. That is 40 lines, against a dependency.
+
+It is a middleware rather than a configuration field because where it sits relative to signing
+matters, and middleware order is the one place in the client where that is already explicit.
+
+### D.9 Test matrix
+
+| Requirement ID | Test IDs | Type | Owner |
+|---|---|---|---|
+| FR-COMPRESS-3, FR-COMPRESS-4, AR-COMPRESS-1 | T-21.1 | unit | Engineering |
+| FR-COMPRESS-4 | T-21.2 | unit | Engineering |
+| FR-COMPRESS-2, AR-COMPRESS-2, EC-COMPRESS-3 | T-21.3 | unit | Engineering |
+| EC-COMPRESS-2 | T-21.4 | unit | Engineering |
+| FR-COMPRESS-5 | T-21.5 | unit | Engineering |
+| EC-COMPRESS-1, EC-COMPRESS-4 | T-21.6 | unit | Engineering |
+| FR-COMPRESS-1 (through the client, with ordering) | T-21.7 | unit | Engineering |
+
+Negative tests: an unlisted host, a small body, an encoded body, and a multipart body are each sent
+unchanged with their reason (T-21.3); random bytes are not "compressed" larger (T-21.4).
+
+E2E: `https://httpbin.org/anything` echoes what it receives but does not decompress request bodies,
+so it cannot confirm the server side; the round trip is verified by decompressing in the unit tests.

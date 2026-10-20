@@ -114,3 +114,34 @@ Not applicable (DFR §B.9).
 ### E2E
 
 Not applicable (DFR §C.9).
+
+## D. Compressing request bodies
+
+### Requirement to implementation mapping
+
+| Requirement IDs | Implementation |
+|---|---|
+| FR-COMPRESS-1…5, EC-COMPRESS-1…4, AR-COMPRESS-1…2 | `Sources/NovaNetworkClient/Networking/Core/RequestCompression.swift` |
+
+### Requirement to test mapping
+
+| Test IDs | Requirement IDs | Type | Executable reference |
+|---|---|---|---|
+| T-21.1 | FR-COMPRESS-3, FR-COMPRESS-4, AR-COMPRESS-1 | unit | `RequestCompressionTests.aLargeJSONBodyIsSentAsGzipThatDecodesToTheOriginal` |
+| T-21.2 | FR-COMPRESS-4 | unit | `RequestCompressionTests.deflateMeansAZlibStreamAndTheChecksumsMatchTheirReferenceValues` |
+| T-21.3 | FR-COMPRESS-2, AR-COMPRESS-2, EC-COMPRESS-3 | unit | `RequestCompressionTests.eachRuleThatSaysNoSendsTheBodyUnchangedAndSaysWhy` |
+| T-21.4 | EC-COMPRESS-2 | unit | `RequestCompressionTests.dataThatDoesNotCompressIsSentAsItIs` |
+| T-21.5 | FR-COMPRESS-5 | unit | `RequestCompressionTests.anEligibilityRuleReplacesTheContentTypeRule` |
+| T-21.6 | EC-COMPRESS-1, EC-COMPRESS-4 | unit | `RequestCompressionTests.aRequestWithNoBodyPassesSilentlyAndANegativeMinimumIsZero` |
+| T-21.7 | FR-COMPRESS-1 | unit | `RequestCompressionClientTests.aSigningMiddlewareAfterCompressionSignsTheBytesThatAreSent` |
+
+### Analytics verification
+
+- Trigger timing: one event per request with a body, when the middleware decides (T-21.1, T-21.3).
+- Payload: `compressed` carries both sizes and the encoding; `skipped` carries the reason (T-21.1, T-21.3).
+- No false success: an uncompressible body reports `not_smaller` and no `compressed` (T-21.4); a
+  request with no body reports nothing (T-21.6).
+
+### E2E
+
+Not applicable (DFR §D.9).

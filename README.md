@@ -1116,6 +1116,26 @@ let client = NetworkClient(
 )
 ```
 
+### Compressing request bodies (v3.7)
+
+`URLSession` decompresses responses; nothing compressed request bodies. For a server that accepts
+compressed bodies:
+
+```swift
+configuration.middlewares = [
+    .compressingRequestBodies(
+        RequestCompressionPolicy(hosts: ["sync.example.com"]),   // gzip, bodies ≥ 1 KB
+        onEvent: { print($0) }                                   // compressed / skipped(reason)
+    ),
+    signingMiddleware,   // after compression, so the signature covers the bytes sent
+]
+```
+
+Hosts are named because most servers do not decompress request bodies unless configured to;
+`.anyHost()` is the explicit alternative. Only JSON, text, XML, and form bodies are compressed, only
+when the result is smaller, and never a request that already has a `Content-Encoding`. `.deflate`
+is available too. On Linux, which has no compressor in Foundation, bodies are sent unchanged.
+
 ## Rate Limiting
 
 ```swift

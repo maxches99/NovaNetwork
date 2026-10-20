@@ -128,3 +128,31 @@ middleware runs. `$ref`, `allOf`, `oneOf`, `anyOf`, `items`, `properties`, and
 `additionalProperties` are followed; bounds, patterns, and `format` are not checked.
 
 `NovaNetworkOpenAPI` now depends on `NovaNetworkCore`, to vend the middleware.
+
+## Compressed request bodies
+
+`URLSession` has always decompressed responses; request bodies went out as they were. JSON compresses
+5–10×, and the large requests are the ones an app sends on a reconnect — the offline queue's replay,
+an analytics flush.
+
+```swift
+configuration.middlewares = [
+    .compressingRequestBodies(RequestCompressionPolicy(hosts: ["sync.example.com"])),
+    signingMiddleware,
+]
+```
+
+- **Named hosts.** Most servers do not decompress request bodies unless configured to, so the policy
+  names the hosts that do. `.anyHost()` exists, and has to be chosen.
+- **Only when it pays.** Bodies of at least `minimumBodyBytes` (1 KB), with a JSON, `+json`, text,
+  XML, form, or GraphQL content type (or none), without a `Content-Encoding` already, and only when
+  the compressed body is smaller. `isEligible:` replaces the content-type rule.
+- **`gzip` or `deflate`.** RFC 1952 gzip by default; `.deflate` sends an RFC 1950 zlib stream, which
+  is what HTTP's `deflate` means.
+- **Order matters.** Middleware runs in array order. Put compression before anything that signs or
+  hashes the body.
+- **Reported.** `onEvent` receives `.compressed(url:encoding:originalBytes:compressedBytes:)` or
+  `.skipped(url:reason:)` — `host_not_listed`, `too_small`, `already_encoded`, `not_compressible`,
+  `not_smaller`, `unavailable`.
+
+On Linux the middleware sends every body unchanged and reports `unavailable`.

@@ -23,6 +23,9 @@ convention; not every one is a tagged release — see [Releases](#releases).
     from the spec — *breaking* (types, `required`, null, `enum`, `oneOf`) or *drift* (undocumented
     fields, status codes, operations) — each distinct violation once, sampled.
     `NovaNetworkOpenAPI` now depends on `NovaNetworkCore`.
+  - *Compressed request bodies.* `NetworkMiddleware.compressingRequestBodies(_:)` gzips (or
+    deflates) JSON, text, XML, and form bodies of 1 KB or more for the hosts a
+    `RequestCompressionPolicy` names, only when that makes them smaller.
 
 - [3.6](docs/WHATS_NEW_v3.6.md) — **A WebSocket reconnect no longer loses what happened while it was
   down.** Re-sent subscriptions used to start from "now". With an `eventResume` policy,
