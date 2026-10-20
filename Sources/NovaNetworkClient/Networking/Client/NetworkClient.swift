@@ -167,7 +167,14 @@ public final class NetworkClient: Sendable {
             }
         }
         self.httpExecutionPipeline = DefaultNetworkClientHTTPExecutionPipeline(
-            transport: transport,
+            transport: configuration.hedging.map { policy in
+                HedgingTransport(
+                    base: transport,
+                    policy: policy,
+                    clock: retryClock,
+                    onEvent: telemetryHooks?.onRequestHedged
+                )
+            } ?? transport,
             retryPolicy: retryPolicy,
             retryClock: retryClock,
             retryRandomGenerator: retryRandomGenerator,

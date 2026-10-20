@@ -9,6 +9,12 @@ convention; not every one is a tagged release — see [Releases](#releases).
 
 ## Unreleased
 
+- [3.7](docs/WHATS_NEW_v3.7.md) — **Eight opt-in features.**
+  - *Hedged requests.* `NetworkClientConfiguration.hedging` sends a slow `GET` (or any request with
+    an `Idempotency-Key`) a second time once it has run longer than the host's recent p95, takes the
+    first success, and cancels the other — within a budget of 5% of eligible requests.
+    `NetworkTelemetryHooks.onRequestHedged` reports `fired`, `won`, and `budget_exhausted`.
+
 - [3.6](docs/WHATS_NEW_v3.6.md) — **A WebSocket reconnect no longer loses what happened while it was
   down.** Re-sent subscriptions used to start from "now". With an `eventResume` policy,
   `WebSocketClient` tracks the last sequence delivered per stream, re-sends each registered

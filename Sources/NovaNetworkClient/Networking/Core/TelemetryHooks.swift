@@ -400,6 +400,33 @@ public struct TelemetryConcurrencyLimitContext: Sendable, Equatable {
     }
 }
 
+/// What happened to a hedge.
+public enum TelemetryHedgeEventType: String, Sendable, Equatable {
+    /// The delay elapsed and the request was sent a second time.
+    case fired
+    /// The second request's response is the one returned.
+    case won
+    /// The delay elapsed, but the hedge budget was spent, so nothing more was sent.
+    case budgetExhausted = "budget_exhausted"
+}
+
+/// One hedging event for one attempt of a request.
+public struct TelemetryHedgeContext: Sendable {
+    /// What happened.
+    public let type: TelemetryHedgeEventType
+    /// The prepared request that was, or would have been, sent twice.
+    public let request: APIRequest
+    /// How long the client waited before hedging.
+    public let delayMilliseconds: Double
+
+    /// Creates a context.
+    public init(type: TelemetryHedgeEventType, request: APIRequest, delayMilliseconds: Double) {
+        self.type = type
+        self.request = request
+        self.delayMilliseconds = delayMilliseconds
+    }
+}
+
 public struct NetworkTelemetryHooks: Sendable {
     public typealias OnRequestStart = @Sendable (TelemetryRequestContext) -> Void
     public typealias OnRequestEnd = @Sendable (TelemetryResponseContext) -> Void
@@ -423,6 +450,8 @@ public struct NetworkTelemetryHooks: Sendable {
     public typealias OnHTTPAuthRefresh = @Sendable (TelemetryHTTPAuthRefreshContext) -> Void
     /// Receives one event each time the adaptive concurrency limit moves.
     public typealias OnConcurrencyLimitChanged = @Sendable (TelemetryConcurrencyLimitContext) -> Void
+    /// Receives one event each time a hedge is sent, wins, or is refused by the budget.
+    public typealias OnRequestHedged = @Sendable (TelemetryHedgeContext) -> Void
 
     public let onRequestStart: OnRequestStart?
     public let onRequestEnd: OnRequestEnd?
@@ -447,6 +476,8 @@ public struct NetworkTelemetryHooks: Sendable {
     /// Adaptive concurrency limit hook. A limit that moves without being observable is a limit
     /// nobody can trust.
     public let onConcurrencyLimitChanged: OnConcurrencyLimitChanged?
+    /// Hedged request hook. `fired` minus `won` is what hedging cost without helping.
+    public let onRequestHedged: OnRequestHedged?
 
     /// Creates a set of optional telemetry hooks.
     public init(
@@ -466,7 +497,8 @@ public struct NetworkTelemetryHooks: Sendable {
         onTransferEvent: OnTransferEvent? = nil,
         onManagedTransferEvent: OnManagedTransferEvent? = nil,
         onHTTPAuthRefresh: OnHTTPAuthRefresh? = nil,
-        onConcurrencyLimitChanged: OnConcurrencyLimitChanged? = nil
+        onConcurrencyLimitChanged: OnConcurrencyLimitChanged? = nil,
+        onRequestHedged: OnRequestHedged? = nil
     ) {
         self.onRequestStart = onRequestStart
         self.onRequestEnd = onRequestEnd
@@ -485,5 +517,6 @@ public struct NetworkTelemetryHooks: Sendable {
         self.onManagedTransferEvent = onManagedTransferEvent
         self.onHTTPAuthRefresh = onHTTPAuthRefresh
         self.onConcurrencyLimitChanged = onConcurrencyLimitChanged
+        self.onRequestHedged = onRequestHedged
     }
 }

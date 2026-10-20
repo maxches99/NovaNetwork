@@ -41,6 +41,7 @@ When multiple callers ask for the same resource at the same time, only one under
 - [NovaNetwork v3.4 DFR](docs/dfr/NOVA_NETWORK_V3_4_DFR.md)
 - [NovaNetwork v3.5 DFR](docs/dfr/NOVA_NETWORK_V3_5_DFR.md)
 - [NovaNetwork v3.6 DFR](docs/dfr/NOVA_NETWORK_V3_6_DFR.md)
+- [NovaNetwork v3.7 DFR](docs/dfr/NOVA_NETWORK_V3_7_DFR.md)
 - [v1.19 Traceability Pack](docs/TRACEABILITY_PACK_v1.19.md)
 - [v2.0 Traceability Pack](docs/TRACEABILITY_PACK_v2.0.md)
 - [v2.1 Traceability Pack](docs/TRACEABILITY_PACK_v2.1.md)
@@ -55,6 +56,7 @@ When multiple callers ask for the same resource at the same time, only one under
 - [v3.4 Traceability Pack](docs/TRACEABILITY_PACK_v3.4.md)
 - [v3.5 Traceability Pack](docs/TRACEABILITY_PACK_v3.5.md)
 - [v3.6 Traceability Pack](docs/TRACEABILITY_PACK_v3.6.md)
+- [v3.7 Traceability Pack](docs/TRACEABILITY_PACK_v3.7.md)
 
 ## Product Delivery Templates
 
@@ -1439,6 +1441,26 @@ let snapshot = await client.concurrencySnapshot()   // limit, in flight, waiting
 One limiter per client, not per host; a retrying request holds its slot while it waits out backoff;
 and every launch starts at `initialLimit`. Those are the known edges, listed in
 [What's New 3.2](docs/WHATS_NEW_v3.2.md).
+
+## Hedged Requests (v3.7)
+
+A retry starts after an attempt fails; most of a mobile p99 is requests that are not failing, just
+slow. A hedge sends a slow, repeatable request a second time and takes whichever answer comes first:
+
+```swift
+var configuration = NetworkClientConfiguration()
+configuration.hedging = HedgingPolicy(
+    delay: .percentile(0.95),   // p95 of recent latencies to the same host
+    maximumHedgeRatio: 0.05     // never hedge more than 5% of eligible requests
+)
+configuration.telemetryHooks = NetworkTelemetryHooks(
+    onRequestHedged: { print($0.type, $0.delayMilliseconds) }   // fired / won / budget_exhausted
+)
+```
+
+Only `GET`, `HEAD`, `OPTIONS`, and requests with an `Idempotency-Key` are hedged, unless
+`isEligible:` says otherwise. The loser is cancelled; a request that fails before the delay goes to
+the retry policy as before. Off by default. Details in [What's New 3.7](docs/WHATS_NEW_v3.7.md).
 
 ## Benchmark Baseline Check
 

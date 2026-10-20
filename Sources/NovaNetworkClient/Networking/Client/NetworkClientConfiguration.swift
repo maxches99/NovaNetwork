@@ -78,6 +78,11 @@ public struct NetworkClientConfiguration: Sendable {
     /// the caller's own concurrency happens to be.
     public var adaptiveConcurrency: AdaptiveConcurrencyPolicy?
 
+    /// When to send a slow, repeatable request a second time and take the first answer.
+    ///
+    /// `nil`, the default, sends every request once. The hedge delay sleeps on ``retryClock``.
+    public var hedging: HedgingPolicy?
+
     /// Creates a configuration with the same defaults as `NetworkClient.init`.
     public init(
         transport: any NetworkTransport = Transport(),
@@ -103,7 +108,8 @@ public struct NetworkClientConfiguration: Sendable {
         responseDecoding: (any ResponseDecoding)? = nil,
         networkPathPolicy: NetworkPathPolicy? = nil,
         networkPathMonitor: (any NetworkPathMonitor)? = nil,
-        adaptiveConcurrency: AdaptiveConcurrencyPolicy? = nil
+        adaptiveConcurrency: AdaptiveConcurrencyPolicy? = nil,
+        hedging: HedgingPolicy? = nil
     ) {
         self.transport = transport
         self.cancellationPolicy = cancellationPolicy
@@ -129,6 +135,7 @@ public struct NetworkClientConfiguration: Sendable {
         self.networkPathPolicy = networkPathPolicy
         self.networkPathMonitor = networkPathMonitor
         self.adaptiveConcurrency = adaptiveConcurrency
+        self.hedging = hedging
     }
 }
 
