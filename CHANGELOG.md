@@ -29,6 +29,9 @@ convention; not every one is a tagged release — see [Releases](#releases).
   - *GraphQL.* A new `NovaNetworkGraphQL` product: typed `GraphQLOperation`s through
     `NetworkClient`, data and errors returned together, automatic persisted queries, queries over
     `GET`, and mutations that are never coalesced.
+  - *Prefetching rows as they appear.* `QueryClient.prefetchWhileVisible(_:fetch:)` and
+    `cancelPrefetch(_:)` run at most `maximumConcurrentPrefetches` at once, most recent first, and
+    cancel fetches for rows that left the screen unless a reader is waiting on them.
 
 - [3.6](docs/WHATS_NEW_v3.6.md) — **A WebSocket reconnect no longer loses what happened while it was
   down.** Re-sent subscriptions used to start from "now". With an `eventResume` policy,

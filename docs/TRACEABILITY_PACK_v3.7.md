@@ -180,3 +180,34 @@ Not applicable (DFR §D.9).
 
 T-22.8 runs against `https://countries.trevorblades.com/graphql` with the real `Transport` and no
 stubs, under `RUN_E2E_TESTS=1 swift test --filter E2ECoverageTests`.
+
+## F. Prefetching what is about to be on screen
+
+### Requirement to implementation mapping
+
+| Requirement IDs | Implementation |
+|---|---|
+| FR-PREFETCH-1…5, EC-PREFETCH-1…4, AR-PREFETCH-1…2 | `Sources/NovaNetworkQuery/QueryClient.swift` (`prefetchWhileVisible`, `cancelPrefetch`, `prefetchEvents`, `promote`) |
+| EC-PREFETCH-4, AR-PREFETCH-1 | `Sources/NovaNetworkQuery/QueryConfiguration.swift` (`maximumConcurrentPrefetches`, `QueryPrefetchEvent`) |
+
+### Requirement to test mapping
+
+| Test IDs | Requirement IDs | Type | Executable reference |
+|---|---|---|---|
+| T-23.1 | FR-PREFETCH-1, EC-PREFETCH-1, AR-PREFETCH-1 | unit | `QueryPrefetchTests.aRowComingIntoViewIsFetchedOnceAndAFreshOneNotAtAll` |
+| T-23.2 | FR-PREFETCH-2, EC-PREFETCH-4 | unit | `QueryPrefetchTests.onlyTheLimitRunsAtOnceAndTheMostRecentRowGoesNext` |
+| T-23.3 | FR-PREFETCH-3, AR-PREFETCH-2 | unit | `QueryPrefetchTests.aRowThatLeavesTheScreenStopsBeingFetched` |
+| T-23.4 | FR-PREFETCH-4 | unit | `QueryPrefetchTests.aReadPromotesAPrefetchSoItIsNeverCancelledUnderIt` |
+| T-23.5 | FR-PREFETCH-5, AR-PREFETCH-2 | unit | `QueryPrefetchTests.aCancelledPrefetchThatFinishesAnywayIsNotStored` |
+| T-23.6 | EC-PREFETCH-2, EC-PREFETCH-3 | unit | `QueryPrefetchTests.aFailedPrefetchFreesItsSlotAndCancellingNothingDoesNothing` |
+
+### Analytics verification
+
+- Trigger timing: `queued` on the call, `started` when a slot frees, `completed`/`failed` when the
+  fetch ends (T-23.1, T-23.6).
+- No false success: a cancelled prefetch emits `cancelled` and never `completed`, even when its fetch
+  finishes anyway (T-23.3, T-23.5).
+
+### E2E
+
+Not applicable (DFR §F.9).

@@ -30,6 +30,8 @@ public actor QueryClient {
         var subscribers: [UUID: @Sendable (Snapshot) -> Void] = [:]
         /// Set once the key is read through `persistedValue`: how to write its value to the store.
         var persist: Persister?
+        /// The running visibility prefetch for this key, while nobody else is waiting on it.
+        var prefetchID: UUID?
     }
 
     /// Turns a key's value into a record, for a key whose values are written to the store.
@@ -54,6 +56,11 @@ public actor QueryClient {
     private let persistence: QueryPersistence?
     /// The last store write, which the next one waits for, so writes land in the order they were made.
     private var pendingWrite: Task<Void, Never>?
+    /// Keys waiting for a prefetch slot, oldest first.
+    private var prefetchQueue: [QueryKey] = []
+    /// Keys whose prefetch is running.
+    private var runningPrefetches: Set<QueryKey> = []
+    private var prefetchObservers: [UUID: AsyncStream<QueryPrefetchEvent>.Continuation] = [:]
 
     /// Creates a query client.
     ///
@@ -107,6 +114,7 @@ public actor QueryClient {
     ) async throws -> Value {
         let window = staleTime ?? configuration.staleTime
         touch(key)
+        promote(key)
         entries[key, default: newEntry()].refetch = { try await fetch() }
 
         if let cached = try cachedValue(for: key, as: Value.self) {
@@ -180,6 +188,7 @@ public actor QueryClient {
         _ key: QueryKey,
         fetch: @escaping @Sendable () async throws -> Value
     ) async throws -> Value {
+        promote(key)
         entries[key, default: newEntry()].refetch = { try await fetch() }
         return try await awaitFetch(key, fetch: fetch)
     }
@@ -193,6 +202,146 @@ public actor QueryClient {
         guard !isFresh(key, within: staleTime ?? configuration.staleTime) else { return }
         entries[key, default: newEntry()].refetch = { try await fetch() }
         startFetch(key, fetch: fetch)
+    }
+
+    // MARK: - Prefetching what is about to be visible
+
+    /// Warms a key for a row coming into view, within a limit on how many such fetches run at once.
+    ///
+    /// Call it from `onAppear` and ``cancelPrefetch(_:)`` from `onDisappear`. A fresh key, or one
+    /// already being fetched, is left alone. Otherwise the key waits for one of
+    /// ``QueryConfiguration/maximumConcurrentPrefetches`` slots; waiting keys start most recent first,
+    /// because in a scrolling list the row that appeared last is the one nearest the user.
+    ///
+    /// A read of the key while it waits fetches it at once; a read while it runs waits for it, and
+    /// from then on cancelling the prefetch no longer cancels the fetch.
+    public func prefetchWhileVisible<Value: Sendable>(
+        _ key: QueryKey,
+        staleTime: TimeInterval? = nil,
+        fetch: @escaping @Sendable () async throws -> Value
+    ) {
+        if isFresh(key, within: staleTime ?? configuration.staleTime) {
+            emitPrefetch(.skippedFresh(key))
+            return
+        }
+        touch(key)
+        entries[key, default: newEntry()].refetch = { try await fetch() }
+        guard entries[key]?.task == nil, !prefetchQueue.contains(key) else { return }
+
+        prefetchQueue.append(key)
+        emitPrefetch(.queued(key))
+        startQueuedPrefetches()
+    }
+
+    /// Calls off a prefetch for a row that left the screen.
+    ///
+    /// A waiting prefetch is dropped. A running one is cancelled, and the key left as it was —
+    /// unless a read or a subscriber is waiting on it, in which case it finishes.
+    public func cancelPrefetch(_ key: QueryKey) {
+        if let index = prefetchQueue.firstIndex(of: key) {
+            prefetchQueue.remove(at: index)
+            emitPrefetch(.cancelled(key, wasRunning: false))
+            return
+        }
+        guard runningPrefetches.contains(key), let entry = entries[key], entry.prefetchID != nil,
+              entry.subscribers.isEmpty, let task = entry.task else { return }
+
+        entries[key]?.prefetchID = nil
+        entries[key]?.task = nil
+        entries[key]?.isLoading = false
+        runningPrefetches.remove(key)
+        task.cancel()
+        publish(key)
+        emitPrefetch(.cancelled(key, wasRunning: true))
+        startQueuedPrefetches()
+    }
+
+    /// Prefetch decisions as they happen, for diagnostics and tests.
+    public func prefetchEvents() -> AsyncStream<QueryPrefetchEvent> {
+        AsyncStream { continuation in
+            let id = UUID()
+            prefetchObservers[id] = continuation
+            continuation.onTermination = { [weak self] _ in
+                Task { await self?.removePrefetchObserver(id) }
+            }
+        }
+    }
+
+    /// How many visibility prefetches are running and waiting.
+    public func prefetchCounts() -> (running: Int, queued: Int) {
+        (runningPrefetches.count, prefetchQueue.count)
+    }
+
+    private func startQueuedPrefetches() {
+        while runningPrefetches.count < max(1, configuration.maximumConcurrentPrefetches),
+              let key = prefetchQueue.popLast() {
+            guard let refetch = entries[key]?.refetch, entries[key]?.task == nil else { continue }
+
+            let id = UUID()
+            runningPrefetches.insert(key)
+            entries[key]?.prefetchID = id
+            entries[key]?.isLoading = true
+            publish(key)
+            emitPrefetch(.started(key))
+
+            entries[key]?.task = Task<any Sendable, any Error> { [weak self] in
+                do {
+                    let value = try await refetch()
+                    await self?.finishPrefetch(key, id: id, value: value)
+                    return value
+                } catch {
+                    await self?.failPrefetch(key, id: id, error: error)
+                    throw error
+                }
+            }
+        }
+    }
+
+    private func finishPrefetch(_ key: QueryKey, id: UUID, value: any Sendable) {
+        guard runningPrefetches.contains(key), isCurrentPrefetch(key, id: id) else { return }
+        runningPrefetches.remove(key)
+        entries[key]?.prefetchID = nil
+        finishFetch(key, value: value, typeName: String(describing: Swift.type(of: value)))
+        emitPrefetch(.completed(key))
+        startQueuedPrefetches()
+    }
+
+    private func failPrefetch(_ key: QueryKey, id: UUID, error: any Error) {
+        guard runningPrefetches.contains(key), isCurrentPrefetch(key, id: id) else { return }
+        runningPrefetches.remove(key)
+        entries[key]?.prefetchID = nil
+        failFetch(key, error: error)
+        emitPrefetch(.failed(key))
+        startQueuedPrefetches()
+    }
+
+    /// Whether `id` is still the key's prefetch, or the prefetch was promoted to a fetch that a read
+    /// is waiting on — either way its result is wanted. A cancelled prefetch is neither.
+    private func isCurrentPrefetch(_ key: QueryKey, id: UUID) -> Bool {
+        let current = entries[key]?.prefetchID
+        return current == id || (current == nil && entries[key]?.task != nil)
+    }
+
+    /// Marks a key as wanted by a reader: a waiting prefetch is dropped so the read fetches at once,
+    /// and a running one can no longer be cancelled.
+    private func promote(_ key: QueryKey) {
+        if let index = prefetchQueue.firstIndex(of: key) {
+            prefetchQueue.remove(at: index)
+            emitPrefetch(.promoted(key))
+        } else if entries[key]?.prefetchID != nil {
+            entries[key]?.prefetchID = nil
+            emitPrefetch(.promoted(key))
+        }
+    }
+
+    private func emitPrefetch(_ event: QueryPrefetchEvent) {
+        for continuation in prefetchObservers.values {
+            continuation.yield(event)
+        }
+    }
+
+    private func removePrefetchObserver(_ id: UUID) {
+        prefetchObservers.removeValue(forKey: id)
     }
 
     // MARK: - Observing
@@ -278,6 +427,9 @@ public actor QueryClient {
     /// launch into the previous one's data.
     public func removeAll() {
         enqueueWrite(for: nil) { try await $0.removeAll() }
+        // The tasks are cancelled below; their slots go with them.
+        prefetchQueue.removeAll()
+        runningPrefetches.removeAll()
         for (key, entry) in entries {
             entry.task?.cancel()
             entries[key]?.value = nil

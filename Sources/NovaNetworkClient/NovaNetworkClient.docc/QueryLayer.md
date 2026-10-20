@@ -105,6 +105,25 @@ normal.
 The cache holds 100 entries by default and evicts the least recently used entry **that nobody is
 subscribed to**, so a screen's data cannot disappear from under it.
 
+## Prefetching rows as they appear (3.7)
+
+`prefetch(_:fetch:)` starts a fetch and forgets it; a fast scroll calls it for every row. For a list,
+`prefetchWhileVisible` and `cancelPrefetch` bound the work to what is near the screen:
+
+```swift
+List(posts) { post in
+    PostRow(post)
+        .onAppear { Task { await queries.prefetchWhileVisible(QueryKey("post", post.id)) {
+            try await api.postDetail(post.id)
+        } } }
+        .onDisappear { Task { await queries.cancelPrefetch(QueryKey("post", post.id)) } }
+}
+```
+
+At most `maximumConcurrentPrefetches` run at once and the most recently queued row goes next. A read
+of a waiting key fetches it at once; a read of a running one waits for it and keeps it from being
+cancelled. A cancelled prefetch leaves the key as it was, and a late result from one is dropped.
+
 ## A warm start (3.7)
 
 A screen that showed data yesterday can show it again the moment the app launches, marked stale and

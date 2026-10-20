@@ -677,3 +677,105 @@ Negative tests: two identical mutations are two requests (T-22.5); a non-GraphQL
 
 E2E: `https://countries.trevorblades.com/graphql` is a public GraphQL API; T-22.8 runs a typed query
 against it under `RUN_E2E_TESTS=1`.
+
+---
+
+## F. Prefetching what is about to be on screen
+
+### F.1 Goal
+
+Let a list warm the cache for rows as they come into view, and stop warming rows the user has
+scrolled past — without those prefetches crowding out the requests for what is on screen now.
+
+### F.2 User value
+
+`QueryClient.prefetch` starts a fetch and forgets it. A fast scroll through a feed calls it for
+every row: fifty detail requests in flight, most for rows already gone, each competing with the one
+row the user stopped on. Apps that care write a queue, a concurrency limit, and cancellation around
+it, and usually get the race between "cancel the prefetch" and "the row reappeared and is now
+waiting on it" wrong.
+
+### F.3 Scope split
+
+- MVP / required for 3.7:
+  - `prefetchWhileVisible(_:staleTime:fetch:)` and `cancelPrefetch(_:)`, for `onAppear` and
+    `onDisappear`;
+  - a limit on concurrent prefetches (`QueryConfiguration.maximumConcurrentPrefetches`, 4 by
+    default); the rest wait, most recent first;
+  - cancelling a waiting prefetch removes it; cancelling a running one cancels its task — unless a
+    reader or a subscriber has started waiting on it, in which case it is left to finish;
+  - a read of a key with a waiting prefetch fetches it at once instead;
+  - an event stream: queued, started, completed, skipped (fresh), cancelled, promoted.
+- Nice-to-have after MVP:
+  - passing a priority into the fetch closure so `NetworkClient` can schedule it lower;
+  - a SwiftUI modifier.
+
+### F.4 Non-goals
+
+- Deciding what is about to be visible. The list knows; it calls `prefetchWhileVisible` from
+  `onAppear` or a prefetching data source.
+- Changing `prefetch(_:staleTime:fetch:)`, which keeps its fire-and-forget behaviour.
+
+### F.5 Risks and mitigations
+
+- **Cancelling a fetch someone is waiting on.** Every read and refetch "promotes" the key; a promoted
+  or subscribed fetch is never cancelled by `cancelPrefetch`, asserted.
+- **A cancelled fetch that completes anyway** (a fetch closure that ignores cancellation) arriving
+  after a newer fetch. Each prefetch carries an identity; a result from an abandoned one is dropped.
+- **A cancellation shown as a failure.** A cancelled prefetch leaves the key as it was, with no error.
+
+### F.6 Requirements
+
+#### Functional (FR)
+
+- **FR-PREFETCH-1** `prefetchWhileVisible` does nothing for a fresh key or a key already being
+  fetched; otherwise it queues the key.
+- **FR-PREFETCH-2** At most `maximumConcurrentPrefetches` (at least 1) prefetches run at once; queued
+  keys start most recent first as running ones finish or are cancelled.
+- **FR-PREFETCH-3** `cancelPrefetch` removes a queued key; for a running prefetch with no subscriber
+  that nobody has promoted, it cancels the task and restores the key's previous state.
+- **FR-PREFETCH-4** `value(for:)` and `refetch(_:)` on a queued key take it out of the queue and fetch
+  it at once; on a running prefetch they wait for it and mark it promoted.
+- **FR-PREFETCH-5** A result from a cancelled prefetch is not stored.
+
+#### Edge cases (EC)
+
+- **EC-PREFETCH-1** Calling `prefetchWhileVisible` twice for one key queues it once.
+- **EC-PREFETCH-2** `cancelPrefetch` for a key that is not being prefetched does nothing.
+- **EC-PREFETCH-3** A failing prefetch records its error like any fetch and frees its slot.
+- **EC-PREFETCH-4** A `maximumConcurrentPrefetches` below 1 behaves as 1.
+
+#### Analytics (AR)
+
+- **AR-PREFETCH-1** `prefetchEvents()` yields `.queued`, `.started`, `.completed`, `.failed`,
+  `.skippedFresh`, `.cancelled(wasRunning:)`, and `.promoted` with the key.
+- **AR-PREFETCH-2** No `.completed` for a cancelled prefetch.
+
+### F.7 State machine
+
+Per key: `idle → queued → running → (completed | failed)`; `queued → (cancelled | promoted→fetch)`;
+`running → cancelled` (no subscriber, not promoted) | `running → promoted → completed`.
+
+### F.8 Engineering notes
+
+Most recent first, because in a scrolling list the row that appeared last is the one nearest the
+user's attention; the oldest queued row has usually scrolled away.
+
+The limit is the query layer's own. `NetworkClient` has priorities and adaptive concurrency, but the
+query layer is deliberately independent of it, so the slot count lives here.
+
+### F.9 Test matrix
+
+| Requirement ID | Test IDs | Type | Owner |
+|---|---|---|---|
+| FR-PREFETCH-1, EC-PREFETCH-1, AR-PREFETCH-1 | T-23.1 | unit | Engineering |
+| FR-PREFETCH-2, EC-PREFETCH-4 | T-23.2 | unit | Engineering |
+| FR-PREFETCH-3, AR-PREFETCH-2 | T-23.3 | unit | Engineering |
+| FR-PREFETCH-4 | T-23.4 | unit | Engineering |
+| FR-PREFETCH-5 | T-23.5 | unit | Engineering |
+| EC-PREFETCH-2, EC-PREFETCH-3 | T-23.6 | unit | Engineering |
+
+Negative tests: cancelling a promoted prefetch does not cancel it (T-23.4); a cancelled prefetch's
+late result is dropped (T-23.5).
+
+E2E: not applicable — the query layer does no networking of its own.

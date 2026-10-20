@@ -196,3 +196,33 @@ let data = try await graphQL.data(for: CountryQuery(variables: .init(code: "NO")
 `.partialResponse(operationName:errorCount:hasData:)`.
 
 Not included: subscriptions, a normalized cache, code generation.
+
+## Prefetching rows as they come into view
+
+`QueryClient.prefetch` starts a fetch and forgets it. A fast scroll through a feed calls it for every
+row — dozens of requests for rows already gone, each competing with the one the user stopped on.
+
+```swift
+List(posts) { post in
+    PostRow(post)
+        .onAppear { Task { await queries.prefetchWhileVisible(QueryKey("post", post.id)) {
+            try await api.postDetail(post.id)
+        } } }
+        .onDisappear { Task { await queries.cancelPrefetch(QueryKey("post", post.id)) } }
+}
+```
+
+- **A limit.** `QueryConfiguration.maximumConcurrentPrefetches`, 4 by default. The rest wait, most
+  recent first: in a scrolling list the row that appeared last is the one nearest the user.
+- **Cancelled when it leaves.** A waiting prefetch is dropped; a running one is cancelled and the key
+  left exactly as it was, with no error.
+- **Never under a reader.** A `value(for:)` or `refetch` of a waiting key fetches it at once; of a
+  running one, waits on it — and from then on `cancelPrefetch` leaves it alone. A subscriber does
+  the same.
+- **No stale arrivals.** A fetch closure that ignores cancellation and finishes anyway does not
+  overwrite anything.
+- **Observable.** `prefetchEvents()` yields `queued`, `started`, `completed`, `failed`,
+  `skippedFresh`, `cancelled(wasRunning:)`, and `promoted`; `prefetchCounts()` reports running and
+  waiting.
+
+`prefetch(_:staleTime:fetch:)` is unchanged.

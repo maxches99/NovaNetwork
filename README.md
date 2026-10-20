@@ -796,6 +796,22 @@ let feed = PagedQuery<Post, String>(key: "feed", client: queries) { cursor in
 let posts = try await feed.loadNextPage()   // everything so far, not just the new page
 ```
 
+### Prefetching rows as they appear (v3.7)
+
+```swift
+List(posts) { post in
+    PostRow(post)
+        .onAppear { Task { await queries.prefetchWhileVisible(QueryKey("post", post.id)) {
+            try await api.postDetail(post.id)
+        } } }
+        .onDisappear { Task { await queries.cancelPrefetch(QueryKey("post", post.id)) } }
+}
+```
+
+At most `QueryConfiguration.maximumConcurrentPrefetches` (4) run at once; the rest wait, most recent
+first. A row that leaves the screen is dropped from the queue, or its fetch cancelled — unless a
+read or a subscriber is already waiting on it. `prefetchEvents()` reports each decision.
+
 ### A warm start (v3.7)
 
 ```swift
