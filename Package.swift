@@ -80,7 +80,10 @@ let package = Package(
             path: "Sources/NovaNetworkMacros"
         ),
         .target(
+            // Core only for `NetworkMiddleware.openAPIContract`: the transport-neutral layer that
+            // generated code already imports.
             name: "NovaNetworkOpenAPI",
+            dependencies: ["NovaNetworkCore"],
             path: "Sources/NovaNetworkOpenAPI"
         ),
         .executableTarget(

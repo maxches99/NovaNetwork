@@ -18,6 +18,11 @@ convention; not every one is a tagged release — see [Releases](#releases).
     `persistedValue(for:)` writes `Codable` values to a `FileQueryPersistenceStore` and restores
     them on the first read after launch, discarding records from another schema version or type,
     or older than `maximumAge`. Optimistic values are never written; `removeAll()` empties the store.
+  - *Responses checked against their OpenAPI spec.* `OpenAPIContract` and
+    `NetworkMiddleware.openAPIContract(_:)` report, with a JSON pointer, where real responses differ
+    from the spec — *breaking* (types, `required`, null, `enum`, `oneOf`) or *drift* (undocumented
+    fields, status codes, operations) — each distinct violation once, sampled.
+    `NovaNetworkOpenAPI` now depends on `NovaNetworkCore`.
 
 - [3.6](docs/WHATS_NEW_v3.6.md) — **A WebSocket reconnect no longer loses what happened while it was
   down.** Re-sent subscriptions used to start from "now". With an `eventResume` policy,

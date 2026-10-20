@@ -313,3 +313,139 @@ Negative tests: an optimistic value is not on disk after a crash-equivalent (a n
 store) (T-19.4); each discard reason produces no `restored` (T-19.3).
 
 E2E: not applicable — nothing here touches the network.
+
+---
+
+## C. Checking responses against an OpenAPI contract
+
+### C.1 Goal
+
+Notice when the server stops matching its own specification — a field renamed, a type changed, a
+new enum value — from real traffic, before a decode failure in production is the first sign.
+
+### C.2 User value
+
+API drift is found today by a crash report: a `DecodingError` on some users' devices, days after a
+backend deploy. The spec that would have caught it is already in the repository — the generator
+reads it — but nothing compares it with what the server actually sends. Contract-testing tools
+exist for the backend side; on the client side, nothing in the Swift ecosystem does this.
+
+### C.3 Scope split
+
+- MVP / required for 3.7:
+  - `OpenAPIContract`, built from the same document `nova-openapi` reads;
+  - matching a response to its operation (method, path template, server base path) and to its
+    response schema (exact status, `2XX`, `default`);
+  - validating JSON bodies: types, `required`, `nullable` / `type: [.., "null"]`, `enum`, `items`,
+    `properties`, `additionalProperties`, `$ref`, `allOf`, `oneOf`, `anyOf`;
+  - two severities: *breaking* (what would fail a decode or mean wrong data) and *drift* (fields,
+    status codes, or operations the spec does not mention);
+  - a `NetworkMiddleware` with a sample rate that reports each distinct violation once, and can fail
+    the request on a breaking violation for debug builds and tests.
+- Nice-to-have after MVP:
+  - error responses (the transport throws for non-2xx, so middleware never sees them);
+  - `format` checks (`date-time`, `uuid`);
+  - showing violations in the diagnostics panel.
+
+### C.4 Non-goals
+
+- Validating requests the app sends. The app's own code is what the generator already typed.
+- A complete JSON Schema implementation. Numeric bounds, string patterns, and lengths are out of
+  scope: they describe valid data, not the data's shape, and a drift detector that reported them
+  would be noise.
+
+### C.5 Risks and mitigations
+
+- **Cost on the main path.** Parsing every body twice is waste in production. `sampleRate`
+  (default 1 in debug use, recommended 0.01–0.05 in production) and an early exit for non-JSON
+  content types bound it.
+- **Report floods.** A renamed field fails on every response. Each distinct violation (operation,
+  pointer, kind) is reported once per middleware instance by default.
+- **A wrong spec reports a correct server.** That is the point: either the spec or the server is
+  wrong, and the report says which field to look at.
+- **`NovaNetworkOpenAPI` gains a dependency on `NovaNetworkCore`** to vend the middleware. Core is
+  the transport-neutral layer the generated code already imports; no new external dependency.
+
+### C.6 Requirements
+
+#### Functional (FR)
+
+- **FR-CONTRACT-1** `OpenAPIContract(specText:)` and `OpenAPIContract(document:)` build a contract
+  from JSON or YAML; a document without `paths` is rejected.
+- **FR-CONTRACT-2** A response is matched to an operation by method and path template, after
+  stripping the first server URL's path; a literal segment outranks a `{parameter}` segment.
+- **FR-CONTRACT-3** The response schema is chosen by exact status code, then `NXX`, then `default`.
+- **FR-CONTRACT-4** A JSON body is checked against the schema for: type (`integer` admits only whole
+  numbers; `number` admits any; `boolean` admits only booleans), `required`, null (allowed only by
+  `nullable: true` or a `"null"` type), `enum`, array `items`, and object `properties`.
+- **FR-CONTRACT-5** `$ref` is followed; `allOf` requires every member; `oneOf` / `anyOf` require at
+  least one member to match, and report `noMatchingSchema` otherwise.
+- **FR-CONTRACT-6** A property not described by `properties` (across every `allOf` member) is a
+  drift violation, unless `additionalProperties` allows it; with an `additionalProperties` schema the
+  extra values are validated against it; with `additionalProperties: false` the extra property is
+  breaking.
+- **FR-CONTRACT-7** A response whose operation or status code the spec does not describe is a drift
+  violation; a body that is not valid JSON is breaking.
+- **FR-CONTRACT-8** `NetworkMiddleware.openAPIContract(_:sampleRate:reportsEachViolationOnce:failOnBreaking:onReport:)`
+  validates sampled successful responses and calls `onReport` with a `ContractReport` when there is
+  at least one violation.
+- **FR-CONTRACT-9** With `failOnBreaking`, a response with a breaking violation throws
+  `ContractViolationError` carrying the report.
+
+#### Edge cases (EC)
+
+- **EC-CONTRACT-1** A response with a non-JSON content type is not validated.
+- **EC-CONTRACT-2** A response whose schema has no content (`204`) is not validated, whatever the body.
+- **EC-CONTRACT-3** A recursive schema (`Pet.parent: Pet`) validates as deep as the data goes.
+- **EC-CONTRACT-4** A sample rate outside `0...1` is clamped; `0` validates nothing.
+- **EC-CONTRACT-5** A server URL with variables (`https://{host}/v1`) still yields its base path.
+
+#### Analytics (AR)
+
+- **AR-CONTRACT-1** `onReport` receives the method, the URL path, the matched path template (when
+  there is one), the status code, and every violation with its JSON pointer, kind, and severity.
+- **AR-CONTRACT-2** A conforming response produces no report.
+- **AR-CONTRACT-3** With `reportsEachViolationOnce`, a violation already reported for the same
+  operation, pointer, and kind is left out; a report with nothing left is not sent.
+
+### C.7 Flow
+
+`response → sampled? → JSON content type? → operation found? (no: drift) → status documented? (no:
+drift) → schema has content? → parse (fail: breaking) → validate → de-duplicate → report / throw`.
+
+State → UI → action for the app: *breaking* → page someone, the next release's decode will fail;
+*drift* → update the spec or ask the backend; both carry the pointer to the field.
+
+### C.8 Engineering notes
+
+Bodies are parsed with `JSONDecoder` into a small JSON value enum rather than with
+`JSONSerialization`, because `JSONSerialization` returns `true` and `1` as the same `NSNumber` on
+Linux, and telling a boolean from an integer is half of what a type check is.
+
+For `oneOf` / `anyOf`, a member "matches" when it produces no breaking violation; drift inside a
+candidate member is not reported, because which member the server meant is a guess.
+
+`allOf` members are validated one by one for types and `required`, but undocumented properties are
+judged against the union of every member's `properties` — otherwise a field documented in one member
+would be reported as unknown by the other.
+
+### C.9 Test matrix
+
+| Requirement ID | Test IDs | Type | Owner |
+|---|---|---|---|
+| FR-CONTRACT-1, EC-CONTRACT-5 | T-20.1 | unit | Engineering |
+| FR-CONTRACT-2, FR-CONTRACT-3, FR-CONTRACT-7 | T-20.2 | unit | Engineering |
+| FR-CONTRACT-4 | T-20.3 | unit | Engineering |
+| FR-CONTRACT-5, EC-CONTRACT-3 | T-20.4 | unit | Engineering |
+| FR-CONTRACT-6 | T-20.5 | unit | Engineering |
+| FR-CONTRACT-8, AR-CONTRACT-1, AR-CONTRACT-2 | T-20.6 | unit | Engineering |
+| AR-CONTRACT-3 | T-20.7 | unit | Engineering |
+| FR-CONTRACT-9 | T-20.8 | unit | Engineering |
+| EC-CONTRACT-1, EC-CONTRACT-2, EC-CONTRACT-4 | T-20.9 | unit | Engineering |
+| Regression (petstore conforming traffic) | T-20.10 | unit | Engineering |
+
+Negative tests: a boolean where an integer is expected, `1.5` where an integer is expected, `null`
+where null is not allowed (T-20.3); a conforming response produces no report (T-20.6, T-20.10).
+
+E2E: not applicable. The policy allows only real public APIs, and none publishes a spec it is known to
+match exactly; a report against one would test the API, not the client.

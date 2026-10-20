@@ -77,3 +77,40 @@ Not applicable (DFR §A.9). The existing E2E suite is unaffected.
 ### E2E
 
 Not applicable (DFR §B.9).
+
+## C. Checking responses against an OpenAPI contract
+
+### Requirement to implementation mapping
+
+| Requirement IDs | Implementation |
+|---|---|
+| FR-CONTRACT-1…7, EC-CONTRACT-1…3, EC-CONTRACT-5 | `Sources/NovaNetworkOpenAPI/OpenAPIContract.swift` |
+| FR-CONTRACT-8, FR-CONTRACT-9, EC-CONTRACT-4, AR-CONTRACT-1…3 | `Sources/NovaNetworkOpenAPI/OpenAPIContractMiddleware.swift` |
+
+### Requirement to test mapping
+
+| Test IDs | Requirement IDs | Type | Executable reference |
+|---|---|---|---|
+| T-20.1 | FR-CONTRACT-1, EC-CONTRACT-5 | unit | `OpenAPIContractMatchingTests.aContractIsBuiltFromYAMLOrJSONAndNeedsPaths` |
+| T-20.2 | FR-CONTRACT-2, FR-CONTRACT-3, FR-CONTRACT-7 | unit | `OpenAPIContractMatchingTests.theOperationAndResponseAreFoundByMethodPathAndStatus` |
+| T-20.3 | FR-CONTRACT-4 | unit | `OpenAPIContractSchemaTests.typesRequiredNullAndEnumsAreChecked` |
+| T-20.4 | FR-CONTRACT-5, EC-CONTRACT-3 | unit | `OpenAPIContractSchemaTests.referencesAndCompositionAreFollowedAsDeepAsTheDataGoes` |
+| T-20.5 | FR-CONTRACT-6 | unit | `OpenAPIContractSchemaTests.undocumentedFieldsAreDriftUnlessTheSchemaAllowsOrForbidsThem` |
+| T-20.6 | FR-CONTRACT-8, AR-CONTRACT-1, AR-CONTRACT-2 | unit | `OpenAPIContractMiddlewareTests.aDifferingResponseIsReportedWithWhereAndWhatAndAConformingOneIsNot` |
+| T-20.7 | AR-CONTRACT-3 | unit | `OpenAPIContractMiddlewareTests.eachViolationIsReportedOnceUnlessAskedOtherwise` |
+| T-20.8 | FR-CONTRACT-9 | unit | `OpenAPIContractMiddlewareTests.failOnBreakingTurnsABreakingViolationIntoAnError` |
+| T-20.9 | EC-CONTRACT-1, EC-CONTRACT-2, EC-CONTRACT-4 | unit | `OpenAPIContractSchemaTests.bodiesThatAreNotJSONOrNotDescribedAreLeftAlone`, `OpenAPIContractMiddlewareTests.theSampleRateIsClampedAndDecidesWhatIsChecked` |
+| T-20.10 | regression | unit | `OpenAPIContractMiddlewareTests.conformingPetstoreTrafficProducesNoReports` |
+
+### Analytics verification
+
+- Trigger timing: `onReport` is called once per checked response with something new to report, after
+  the response is validated and before it is returned (T-20.6, T-20.7).
+- Payload: method, path, matched template, status, and each violation's pointer, kind, and severity
+  (T-20.6).
+- No false reports: conforming traffic produces none (T-20.6, T-20.10); an unsampled response is not
+  checked (T-20.9).
+
+### E2E
+
+Not applicable (DFR §C.9).

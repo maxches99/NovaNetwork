@@ -85,3 +85,46 @@ let feed: Feed = try await queries.persistedValue(for: "feed") { try await api.f
   group — is a `QueryPersistenceStore` of your own.
 
 A store that refuses writes reports `.writeFailed(key:)` and never fails the query.
+
+## Responses checked against their OpenAPI spec
+
+API drift used to be found by a crash report: a `DecodingError` on some devices, days after a backend
+deploy. The spec that would have caught it was already in the repository — `nova-openapi` reads it —
+but nothing compared it with what the server sent. `OpenAPIContract` does:
+
+```swift
+import NovaNetworkOpenAPI
+
+let contract = try OpenAPIContract(specText: String(contentsOf: specURL, encoding: .utf8))
+configuration.addMiddleware(
+    .openAPIContract(contract, sampleRate: 0.05) { report in
+        for violation in report.violations {
+            logger.warning("\(report.method) \(report.operationPath ?? report.path) \(violation)")
+            // breaking: /id: expected integer, got string
+            // drift: body: field 'color' is not in the spec
+        }
+    }
+)
+```
+
+- **Matching.** The operation is found by method and path template, after the first server URL's
+  path (`https://{host}/v1` → `/v1`); a literal segment beats a `{parameter}`. The response schema is
+  the exact status, then `2XX`, then `default`.
+- **Breaking** — would fail a decode or mean wrong data: a type mismatch (`integer` admits only whole
+  numbers, `boolean` only booleans), a missing `required` field, `null` without `nullable` or a
+  `"null"` type, a string outside its `enum`, no `oneOf`/`anyOf` member matching, a field
+  `additionalProperties: false` forbids, a body that is not JSON.
+- **Drift** — what the spec does not mention: a field (judged against every `allOf` member at once),
+  a status code, an operation.
+- **Each violation once.** A renamed field fails on every response; it is reported the first time,
+  per operation, pointer, and kind. `reportsEachViolationOnce: false` reports every time.
+- **Sampling.** Checking parses the body a second time; `sampleRate` bounds that. A few percent is
+  plenty in production.
+- **Fail loudly in debug.** `failOnBreaking: true` throws `ContractViolationError`, which reaches the
+  caller as `NetworkError.transport`.
+
+Only successful responses are checked, because the transport throws for other status codes before
+middleware runs. `$ref`, `allOf`, `oneOf`, `anyOf`, `items`, `properties`, and
+`additionalProperties` are followed; bounds, patterns, and `format` are not checked.
+
+`NovaNetworkOpenAPI` now depends on `NovaNetworkCore`, to vend the middleware.

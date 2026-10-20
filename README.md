@@ -452,6 +452,31 @@ guessed at. Credentials from `securitySchemes` never reach generated code.
 A complete worked example — spec, checked-in output, and a runnable program — is in
 [`Examples/OpenAPIPetstore`](Examples/OpenAPIPetstore).
 
+### Checking real responses against the spec (v3.7)
+
+The spec the code was generated from can also check what the server actually sends:
+
+```swift
+import NovaNetworkOpenAPI
+
+let contract = try OpenAPIContract(specText: String(contentsOf: specURL, encoding: .utf8))
+configuration.addMiddleware(
+    .openAPIContract(contract, sampleRate: 0.05) { report in
+        for violation in report.violations {
+            logger.warning("\(report.method) \(report.operationPath ?? report.path) \(violation)")
+            // breaking: /id: expected integer, got string
+            // drift: body: field 'color' is not in the spec
+        }
+    }
+)
+```
+
+*Breaking* violations would fail a decode or mean wrong data — a changed type, a missing `required`
+field, `null` where it is not allowed, an unknown `enum` value, no matching `oneOf` member. *Drift*
+is what the spec does not mention: an extra field, a status code, an operation. Each distinct
+violation is reported once; `failOnBreaking: true` turns a breaking one into an error for debug
+builds and tests. Only successful JSON responses are checked.
+
 ## Record and Replay (v2.12)
 
 Capture real traffic once, replay it forever. A cassette is a fixture with the fidelity of the real
