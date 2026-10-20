@@ -558,3 +558,122 @@ unchanged with their reason (T-21.3); random bytes are not "compressed" larger (
 
 E2E: `https://httpbin.org/anything` echoes what it receives but does not decompress request bodies,
 so it cannot confirm the server side; the round trip is verified by decompressing in the unit tests.
+
+---
+
+## E. GraphQL
+
+### E.1 Goal
+
+Run GraphQL operations through `NetworkClient` — and so through its coalescing, retries, hedging,
+auth refresh, diagnostics, and offline-aware policies — with typed operations, partial results that
+are not thrown away, and automatic persisted queries.
+
+### E.2 User value
+
+An app with a GraphQL backend either adopts Apollo iOS — a second network stack, with its own cache,
+code generator, and interceptors — or posts JSON by hand through `NetworkClient` and loses the parts
+of GraphQL that HTTP does not know about: an error list beside the data, `PersistedQueryNotFound`,
+and the fact that two identical mutations must never be merged into one.
+
+### E.3 Scope split
+
+- MVP / required for 3.7:
+  - a `NovaNetworkGraphQL` product with a `GraphQLOperation` protocol (document, variables, data type,
+    query or mutation);
+  - `GraphQLClient.response(for:)` returning data and errors together, and `data(for:)` that throws
+    when there are errors;
+  - errors with `message`, `path`, `locations`, and `extensions`;
+  - automatic persisted queries (Apollo's protocol): send the hash, and the document only when the
+    server asks;
+  - identical concurrent queries share one request; mutations never do;
+  - optionally sending queries as `GET`, so a CDN or the HTTP cache can serve them;
+  - a GraphQL error body inside a non-2xx response is read as GraphQL, not reported as a bare status.
+- Nice-to-have after MVP:
+  - subscriptions over `graphql-transport-ws`;
+  - a normalized cache;
+  - generating operations from `.graphql` files.
+
+### E.4 Non-goals
+
+- A normalized cache. `NovaNetworkQuery` caches by key, which is what most screens need; a graph
+  cache is a different product.
+- Code generation. Operations are written by hand or by an external generator against the protocol.
+
+### E.5 Risks and mitigations
+
+- **Merging two mutations.** Coalescing is by request fingerprint, so two identical mutation bodies
+  would be one request. Mutations are sent with coalescing disabled, asserted.
+- **A server without APQ support.** It answers `PersistedQueryNotSupported`; the client resends with
+  the document and stops sending hashes for the rest of its lifetime.
+- **`GET` URLs too long.** `GET` is opt-in, only for queries, and only carries the hash when APQ is on;
+  without APQ the document goes in the URL and the README says so.
+
+### E.6 Requirements
+
+#### Functional (FR)
+
+- **FR-GQL-1** `GraphQLOperation` declares `document`, `operationName`, `kind`, `variables`, and a
+  `Decodable` `Data` type.
+- **FR-GQL-2** `response(for:)` posts `{query, operationName, variables}` as JSON (keys sorted) with
+  `Accept: application/graphql-response+json, application/json`, and returns a `GraphQLResponse`
+  holding the decoded `data` (if any) and every error.
+- **FR-GQL-3** `data(for:)` returns the data when there are no errors, and throws
+  `GraphQLResponseError` carrying the errors and any partial data otherwise.
+- **FR-GQL-4** `GraphQLError` decodes `message`, `path` (strings and integers), `locations`, and
+  `extensions` (any JSON).
+- **FR-GQL-5** With `persistedQueries: .automatic`, the first request sends only
+  `extensions.persistedQuery {version: 1, sha256Hash}`; on `PersistedQueryNotFound` it is resent with
+  the document and the hash; on `PersistedQueryNotSupported` it is resent with the document, and APQ
+  is turned off for that client.
+- **FR-GQL-6** Queries are coalesced by their body; mutations are sent with coalescing disabled.
+- **FR-GQL-7** With `usesGETForQueries`, queries are sent as `GET` with `operationName`, `variables`,
+  and `extensions` (or `query`) in the URL; mutations are always `POST`.
+- **FR-GQL-8** A non-2xx response whose body is a GraphQL response is returned as one; any other
+  non-2xx is rethrown unchanged.
+
+#### Edge cases (EC)
+
+- **EC-GQL-1** `data: null` with errors yields a response with no data; `data(for:)` throws.
+- **EC-GQL-2** An operation with no variables sends no `variables` key.
+- **EC-GQL-3** The persisted-query error is recognised by `extensions.code`
+  (`PERSISTED_QUERY_NOT_FOUND`, `PERSISTED_QUERY_NOT_SUPPORTED`) or by the message.
+- **EC-GQL-4** A body that is not a GraphQL response surfaces as `NetworkError.decoding`.
+
+#### Analytics (AR)
+
+- **AR-GQL-1** `onEvent` receives `.persistedQueryRegistered(operationName:)` when the document had
+  to be sent after a miss, and `.persistedQueriesUnsupported` once when APQ is turned off.
+- **AR-GQL-2** `.partialResponse(operationName:errorCount:hasData:)` for every response with errors;
+  none for a clean one.
+
+### E.7 State machine (APQ, per client)
+
+`enabled → (PersistedQueryNotSupported) → disabled`. Per request under `enabled`:
+`hash only → ok | NotFound → hash + document → ok`. A request under `disabled` sends the document.
+
+### E.8 Engineering notes
+
+The body is encoded with sorted keys so that two identical operations always produce the same bytes,
+which is what the coalescer keys on.
+
+`GraphQLClient` is an actor only for the APQ switch; requests do not wait on each other.
+
+### E.9 Test matrix
+
+| Requirement ID | Test IDs | Type | Owner |
+|---|---|---|---|
+| FR-GQL-1, FR-GQL-2, EC-GQL-2 | T-22.1 | unit | Engineering |
+| FR-GQL-3, FR-GQL-4, EC-GQL-1, AR-GQL-2 | T-22.2 | unit | Engineering |
+| FR-GQL-5, EC-GQL-3, AR-GQL-1 | T-22.3 | unit | Engineering |
+| FR-GQL-5 (unsupported), AR-GQL-1 | T-22.4 | unit | Engineering |
+| FR-GQL-6 | T-22.5 | unit | Engineering |
+| FR-GQL-7 | T-22.6 | unit | Engineering |
+| FR-GQL-8, EC-GQL-4 | T-22.7 | unit | Engineering |
+| End-to-end against a public GraphQL API | T-22.8 | E2E | Engineering |
+
+Negative tests: two identical mutations are two requests (T-22.5); a non-GraphQL 500 stays a 500
+(T-22.7); a clean response emits no `partialResponse` (T-22.2).
+
+E2E: `https://countries.trevorblades.com/graphql` is a public GraphQL API; T-22.8 runs a typed query
+against it under `RUN_E2E_TESTS=1`.

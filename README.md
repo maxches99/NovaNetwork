@@ -149,7 +149,14 @@ Generating endpoints from an OpenAPI document needs neither the trait nor the ma
   `stale-if-error`, and safe `Vary: *` handling.
 - Query layer (`NovaNetworkQuery`): server state by key for the screens that render it, with
   stale-while-revalidate reads, shared in-flight fetches, subscriptions, optimistic mutations with
-  rollback, hierarchical invalidation, and paged queries.
+  rollback, hierarchical invalidation, and paged queries; values can be kept across launches (v3.7).
+- GraphQL (`NovaNetworkGraphQL`, v3.7): typed operations through `NetworkClient`, partial results
+  kept beside their errors, automatic persisted queries, and queries over `GET`.
+- Hedged requests (v3.7): a slow, repeatable request is sent a second time within a budget, and the
+  first answer wins.
+- OpenAPI contract checks (v3.7): real responses compared with the spec, with a JSON pointer to each
+  difference.
+- Request body compression (v3.7): gzip or deflate for the hosts that accept it.
 - Coalesces concurrent requests by stable fingerprint key.
 - Optional short-lived in-memory response cache (`cacheFirst`, `staleWhileRevalidate`).
 - Optional pluggable response cache (`MemoryResponseCache`, `DiskResponseCache`, custom `ResponseCache`).
@@ -809,6 +816,45 @@ every old record is discarded.
 The offline queue remains the durable path for writes.
 
 A runnable demo is in [`Examples/Query`](Examples/Query).
+
+## GraphQL (v3.7)
+
+A GraphQL operation is an ordinary request to `NetworkClient`, so coalescing, retries, hedging, auth
+refresh, and diagnostics all apply — without a second network stack.
+
+```swift
+import NovaNetworkGraphQL
+
+struct CountryQuery: GraphQLOperation {
+    static let document = "query Country($code: ID!) { country(code: $code) { name capital } }"
+    static let operationName: String? = "Country"
+
+    struct Variables: Encodable, Sendable { let code: String }
+    struct Data: Decodable, Sendable {
+        struct Country: Decodable, Sendable { let name: String; let capital: String? }
+        let country: Country?
+    }
+    let variables: Variables
+}
+
+let graphQL = GraphQLClient(
+    endpoint: URL(string: "https://api.example.com/graphql")!,
+    client: client,
+    persistedQueries: .automatic   // send the hash; the document only when the server asks
+)
+let data = try await graphQL.data(for: CountryQuery(variables: .init(code: "NO")))
+```
+
+`data(for:)` throws `GraphQLResponseError` — with the errors *and* whatever partial data came back.
+`response(for:)` returns both without throwing, for a screen that can render part of itself. Errors
+carry `message`, `path`, `locations`, and `extensions` (`error.code` reads `extensions.code`).
+
+Identical concurrent queries share one request; mutations (`static let kind = .mutation`) never do.
+`usesGETForQueries: true` sends queries as `GET` so the HTTP cache or a CDN can answer them. A 4xx
+whose body is a GraphQL response is returned as one. A server that does not support persisted
+queries turns them off for that client after one round trip.
+
+**Not included:** subscriptions, a normalized cache, and code generation from `.graphql` files.
 
 ## Preset Quick Start (v1.15)
 

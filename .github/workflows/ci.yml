@@ -154,6 +154,7 @@ jobs:
             Sources/NovaNetworkDiagnostics \
             Sources/NovaNetworkAuth \
             Sources/NovaNetworkQuery \
+            Sources/NovaNetworkGraphQL \
             -name "*.swift" \
             ! -name "NetworkDiagnosticsView.swift" \
             ! -name "KeychainTokenStore.swift" -print)
@@ -233,7 +234,8 @@ jobs:
             --target NovaNetworkCassette \
             --target NovaNetworkDiagnostics \
             --target NovaNetworkAuth \
-            --target NovaNetworkQuery
+            --target NovaNetworkQuery \
+            --target NovaNetworkGraphQL
 
   endpoint-macros-trait:
     # The @Endpoint macro lives behind the EndpointMacros package trait, so the default build never

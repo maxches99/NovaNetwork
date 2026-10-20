@@ -15,6 +15,7 @@ let package = Package(
         .library(name: "NovaNetworkCassette", targets: ["NovaNetworkCassette"]),
         .library(name: "NovaNetworkAuth", targets: ["NovaNetworkAuth"]),
         .library(name: "NovaNetworkQuery", targets: ["NovaNetworkQuery"]),
+        .library(name: "NovaNetworkGraphQL", targets: ["NovaNetworkGraphQL"]),
         .library(name: "NovaNetworkOpenAPI", targets: ["NovaNetworkOpenAPI"]),
         .library(name: "NovaNetworkDiagnostics", targets: ["NovaNetworkDiagnostics"]),
         .executable(name: "nova-openapi", targets: ["NovaNetworkOpenAPIGenerator"]),
@@ -129,6 +130,13 @@ let package = Package(
             path: "Sources/NovaNetworkQuery"
         ),
         .target(
+            // A GraphQL operation is an ordinary request to the client, so it gets coalescing,
+            // retries, hedging, and auth refresh without a second network stack.
+            name: "NovaNetworkGraphQL",
+            dependencies: ["NovaNetworkClient"],
+            path: "Sources/NovaNetworkGraphQL"
+        ),
+        .target(
             name: "NovaNetworkClientTestSupport",
             dependencies: ["NovaNetworkClient", "NovaNetworkCassette"],
             path: "Sources/NovaNetworkClientTestSupport"
@@ -176,6 +184,11 @@ let package = Package(
             name: "NovaNetworkQueryTests",
             dependencies: ["NovaNetworkQuery", "NovaNetworkClient"],
             path: "Tests/NovaNetworkQueryTests"
+        ),
+        .testTarget(
+            name: "NovaNetworkGraphQLTests",
+            dependencies: ["NovaNetworkGraphQL"],
+            path: "Tests/NovaNetworkGraphQLTests"
         ),
         .testTarget(
             name: "NovaNetworkOpenAPITests",

@@ -156,3 +156,43 @@ configuration.middlewares = [
   `not_smaller`, `unavailable`.
 
 On Linux the middleware sends every body unchanged and reports `unavailable`.
+
+## GraphQL, through the client you already have
+
+A GraphQL backend used to mean adopting a second network stack, or posting JSON by hand and losing
+what HTTP does not know about GraphQL. `NovaNetworkGraphQL` is a new product that runs operations
+through `NetworkClient`, so coalescing, retries, hedging, auth refresh, and diagnostics apply to them
+unchanged.
+
+```swift
+struct CountryQuery: GraphQLOperation {
+    static let document = "query Country($code: ID!) { country(code: $code) { name capital } }"
+    static let operationName: String? = "Country"
+    struct Variables: Encodable, Sendable { let code: String }
+    struct Data: Decodable, Sendable { /* … */ }
+    let variables: Variables
+}
+
+let graphQL = GraphQLClient(endpoint: endpoint, client: client, persistedQueries: .automatic)
+let data = try await graphQL.data(for: CountryQuery(variables: .init(code: "NO")))
+```
+
+- **Partial results are kept.** GraphQL resolves fields independently; one failed field leaves the
+  rest of `data` intact. `response(for:)` returns data and errors together. `data(for:)` throws
+  `GraphQLResponseError`, which still carries `partialData`.
+- **Errors in full.** `message`, `path` (field names and list indices), `locations`, `extensions`,
+  and `code` for `extensions.code`.
+- **Automatic persisted queries.** The first request sends only the document's SHA-256; on
+  `PersistedQueryNotFound` it is resent with the document. On `PersistedQueryNotSupported` the
+  client stops sending hashes for the rest of its life.
+- **Mutations are never merged.** Identical concurrent queries share one request, as any request
+  does. Mutations are sent with coalescing disabled — two identical likes are two likes.
+- **`GET` for queries**, opt-in with `usesGETForQueries`, so a CDN or the HTTP cache can answer.
+  With persisted queries the URL carries only the hash.
+- **GraphQL errors inside a 4xx** are read as a GraphQL response; any other non-2xx stays the
+  client's `NetworkError`.
+
+`onEvent` reports `.persistedQueryRegistered`, `.persistedQueriesUnsupported`, and
+`.partialResponse(operationName:errorCount:hasData:)`.
+
+Not included: subscriptions, a normalized cache, code generation.

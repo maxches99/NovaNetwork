@@ -145,3 +145,38 @@ Not applicable (DFR §C.9).
 ### E2E
 
 Not applicable (DFR §D.9).
+
+## E. GraphQL
+
+### Requirement to implementation mapping
+
+| Requirement IDs | Implementation |
+|---|---|
+| FR-GQL-1 | `Sources/NovaNetworkGraphQL/GraphQLOperation.swift` |
+| FR-GQL-3, FR-GQL-4, EC-GQL-1, AR-GQL-1…2 | `Sources/NovaNetworkGraphQL/GraphQLResponse.swift` |
+| FR-GQL-2, FR-GQL-5…8, EC-GQL-2…4 | `Sources/NovaNetworkGraphQL/GraphQLClient.swift` |
+
+### Requirement to test mapping
+
+| Test IDs | Requirement IDs | Type | Executable reference |
+|---|---|---|---|
+| T-22.1 | FR-GQL-1, FR-GQL-2, EC-GQL-2 | unit | `GraphQLRequestTests.anOperationIsPostedAsSortedJSONWithItsDocumentNameAndVariables` |
+| T-22.2 | FR-GQL-3, FR-GQL-4, EC-GQL-1, AR-GQL-2 | unit | `GraphQLRequestTests.errorsComeBackBesideTheDataAndDataForThrowsThemWithWhatSurvived` |
+| T-22.3 | FR-GQL-5, EC-GQL-3, AR-GQL-1 | unit | `GraphQLPersistedQueryTests.aHashIsSentFirstAndTheDocumentOnlyWhenTheServerAsks` |
+| T-22.4 | FR-GQL-5, EC-GQL-3, AR-GQL-1 | unit | `GraphQLPersistedQueryTests.aServerWithoutSupportTurnsPersistedQueriesOffForGood` |
+| T-22.5 | FR-GQL-6 | unit | `GraphQLTransportTests.identicalQueriesShareARequestButIdenticalMutationsNeverDo` |
+| T-22.6 | FR-GQL-7 | unit | `GraphQLTransportTests.queriesCanGoAsGETWhileMutationsStayPOST` |
+| T-22.7 | FR-GQL-8, EC-GQL-4 | unit | `GraphQLTransportTests.aGraphQLBodyInAnErrorStatusIsReadAndAnythingElseStaysAnHTTPError` |
+| T-22.8 | FR-GQL-2, FR-GQL-3 | E2E | `GraphQLE2ECoverageTests.e2eATypedQueryDecodesFromARealGraphQLServer`, `e2eAValidationErrorFromARealServerIsAGraphQLError` |
+
+### Analytics verification
+
+- Trigger timing: `persistedQueryRegistered` only after a miss, before the resend; `persistedQueriesUnsupported`
+  once, when APQ is turned off (T-22.3, T-22.4).
+- Payload: `partialResponse` carries the operation name, the error count, and whether data came back (T-22.2).
+- No false events: a clean response emits nothing (T-22.2).
+
+### E2E
+
+T-22.8 runs against `https://countries.trevorblades.com/graphql` with the real `Transport` and no
+stubs, under `RUN_E2E_TESTS=1 swift test --filter E2ECoverageTests`.

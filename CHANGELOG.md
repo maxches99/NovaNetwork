@@ -26,6 +26,9 @@ convention; not every one is a tagged release — see [Releases](#releases).
   - *Compressed request bodies.* `NetworkMiddleware.compressingRequestBodies(_:)` gzips (or
     deflates) JSON, text, XML, and form bodies of 1 KB or more for the hosts a
     `RequestCompressionPolicy` names, only when that makes them smaller.
+  - *GraphQL.* A new `NovaNetworkGraphQL` product: typed `GraphQLOperation`s through
+    `NetworkClient`, data and errors returned together, automatic persisted queries, queries over
+    `GET`, and mutations that are never coalesced.
 
 - [3.6](docs/WHATS_NEW_v3.6.md) — **A WebSocket reconnect no longer loses what happened while it was
   down.** Re-sent subscriptions used to start from "now". With an `eventResume` policy,
