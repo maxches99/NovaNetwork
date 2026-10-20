@@ -30,6 +30,38 @@ final class DiagnosticsPanelUITests: XCTestCase {
         add(shot)
     }
 
+    /// A request's detail offers to copy it as cURL and to send it again. The panel says when the
+    /// replay has gone out; that the replay is recorded is a unit test's job (T-24.5).
+    func testARequestCanBeCopiedAsCurlAndReplayed() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--autorun"]
+        app.launch()
+
+        let row = app.staticTexts["GET /settings"]
+        XCTAssertTrue(row.waitForExistence(timeout: 60), "the panel never showed the recorded request")
+        row.tap()
+        XCTAssertTrue(app.navigationBars["GET /settings"].waitForExistence(timeout: 10))
+
+        let copy = app.buttons["Copy as cURL"]
+        let replay = app.buttons["Replay GET"]
+        for _ in 0..<5 where !replay.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(copy.exists, "the detail has no Copy as cURL action")
+        XCTAssertTrue(replay.isHittable, "the detail has no Replay action")
+
+        copy.tap()
+        replay.tap()
+
+        let sent = app.staticTexts["Sent again. The replay is at the top of the list."]
+        XCTAssertTrue(sent.waitForExistence(timeout: 20), "the panel never said the replay went out")
+
+        let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        shot.name = "replayed"
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
     /// The timeline draws the same snapshot against one clock instead of one row per request.
     func testTheTimelinePutsEveryRequestOnOneClock() {
         let app = XCUIApplication()

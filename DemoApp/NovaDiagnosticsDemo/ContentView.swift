@@ -120,9 +120,11 @@ struct ContentView: View {
             .sheet(isPresented: $showsDiagnostics) {
                 // The panel brings its own navigation container, so it is presented bare -- wrapping
                 // it in another one would nest two stacks. Swipe down to dismiss.
-                NetworkDiagnosticsView(recorder: session.recorder) { _ in
-                    Task { exportMessage = await session.exportHAR() }
-                }
+                NetworkDiagnosticsView(
+                    recorder: session.recorder,
+                    onExportHAR: { _ in Task { exportMessage = await session.exportHAR() } },
+                    onReplay: { record in await session.replay(record) }
+                )
                 .presentationDragIndicator(.visible)
             }
             .alert("HAR export", isPresented: .constant(exportMessage != nil)) {

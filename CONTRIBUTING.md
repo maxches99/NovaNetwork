@@ -106,6 +106,10 @@ Current entries and why they are there:
   constructed and passed rather than matched on, and because the alternative designs put the
   unsafe-method opt-in somewhere nobody reads it. It is described in `docs/WHATS_NEW_v3.5.md` with
   the fix (`policy.strategy` and `policy.includesUnsafeMethods`).
+- `NetworkClientConfiguration.init(transport:…:adaptiveConcurrency:)` — gained `hedging:` in 3.7,
+  which has a default.
+- `NetworkTelemetryHooks.init(onRequestStart:…:onConcurrencyLimitChanged:)` — gained
+  `onRequestHedged:` in 3.7, which has a default.
 
 Nothing that changes the meaning of existing code belongs in this file. A deliberate break like the
 last one belongs in the release notes first and here second, and needs the PR discussion above.

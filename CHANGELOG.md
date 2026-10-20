@@ -9,6 +9,35 @@ convention; not every one is a tagged release — see [Releases](#releases).
 
 ## Unreleased
 
+- [3.7](docs/WHATS_NEW_v3.7.md) — **Eight opt-in features.**
+  - *Hedged requests.* `NetworkClientConfiguration.hedging` sends a slow `GET` (or any request with
+    an `Idempotency-Key`) a second time once it has run longer than the host's recent p95, takes the
+    first success, and cancels the other — within a budget of 5% of eligible requests.
+    `NetworkTelemetryHooks.onRequestHedged` reports `fired`, `won`, and `budget_exhausted`.
+  - *The query cache survives a relaunch.* `QueryClient(persistence:)` with
+    `persistedValue(for:)` writes `Codable` values to a `FileQueryPersistenceStore` and restores
+    them on the first read after launch, discarding records from another schema version or type,
+    or older than `maximumAge`. Optimistic values are never written; `removeAll()` empties the store.
+  - *Responses checked against their OpenAPI spec.* `OpenAPIContract` and
+    `NetworkMiddleware.openAPIContract(_:)` report, with a JSON pointer, where real responses differ
+    from the spec — *breaking* (types, `required`, null, `enum`, `oneOf`) or *drift* (undocumented
+    fields, status codes, operations) — each distinct violation once, sampled.
+    `NovaNetworkOpenAPI` now depends on `NovaNetworkCore`.
+  - *Compressed request bodies.* `NetworkMiddleware.compressingRequestBodies(_:)` gzips (or
+    deflates) JSON, text, XML, and form bodies of 1 KB or more for the hosts a
+    `RequestCompressionPolicy` names, only when that makes them smaller.
+  - *GraphQL.* A new `NovaNetworkGraphQL` product: typed `GraphQLOperation`s through
+    `NetworkClient`, data and errors returned together, automatic persisted queries, queries over
+    `GET`, and mutations that are never coalesced.
+  - *Prefetching rows as they appear.* `QueryClient.prefetchWhileVisible(_:fetch:)` and
+    `cancelPrefetch(_:)` run at most `maximumConcurrentPrefetches` at once, most recent first, and
+    cancel fetches for rows that left the screen unless a reader is waiting on them.
+  - *Copy as cURL, and replay.* `RequestDiagnostic.curlCommand()`, `replayRequest()`, and
+    `NetworkClient.replay(_:)`, with both actions in the panel's request detail. Redacted values
+    stay redacted.
+  - *A cassette from a HAR.* `Cassette.fromHAR(_:redaction:include:)` turns a HAR from any producer
+    into a cassette, redacting as it goes and listing the entries it could not replay faithfully.
+
 - [3.6](docs/WHATS_NEW_v3.6.md) — **A WebSocket reconnect no longer loses what happened while it was
   down.** Re-sent subscriptions used to start from "now". With an `eventResume` policy,
   `WebSocketClient` tracks the last sequence delivered per stream, re-sends each registered

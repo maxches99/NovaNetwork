@@ -113,6 +113,20 @@ bytes. Commit it and review it like any other fixture.
 
 Binary bodies are stored base64 and replay byte-identically.
 
+## A cassette from a HAR
+
+```swift
+let conversion = try Cassette.fromHAR(
+    Data(contentsOf: harURL),
+    include: { _, url in url.host == "api.example.com" }   // a browser HAR holds every image too
+)
+try conversion.cassette.write(to: cassetteURL)
+for entry in conversion.skipped { print(entry.index, entry.url ?? "", entry.reason) }
+```
+
+Redaction runs during conversion. Entries that would not replay faithfully are skipped and listed, and
+headers that describe the encoded wire bytes rather than the decoded body HAR keeps are dropped.
+
 ## Beyond tests
 
 `NovaNetworkCassette` is its own product and depends only on `NovaNetworkCore`, so a preview or a
