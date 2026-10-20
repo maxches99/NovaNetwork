@@ -28,6 +28,14 @@ public actor QueryClient {
         var task: Task<any Sendable, any Error>?
         var refetch: (@Sendable () async throws -> any Sendable)?
         var subscribers: [UUID: @Sendable (Snapshot) -> Void] = [:]
+        /// Set once the key is read through `persistedValue`: how to write its value to the store.
+        var persist: Persister?
+    }
+
+    /// Turns a key's value into a record, for a key whose values are written to the store.
+    private struct Persister: Sendable {
+        let typeName: String
+        let encode: @Sendable (any Sendable) -> Data?
     }
 
     /// The type-erased state handed to subscribers, which each one casts to its own value type.
@@ -43,6 +51,9 @@ public actor QueryClient {
 
     private var entries: [QueryKey: Entry] = [:]
     private let now: @Sendable () -> Date
+    private let persistence: QueryPersistence?
+    /// The last store write, which the next one waits for, so writes land in the order they were made.
+    private var pendingWrite: Task<Void, Never>?
 
     /// Creates a query client.
     ///
@@ -55,6 +66,25 @@ public actor QueryClient {
     ) {
         self.configuration = configuration
         self.now = now
+        self.persistence = nil
+    }
+
+    /// Creates a query client that keeps values across launches.
+    ///
+    /// Only queries read through ``persistedValue(for:staleTime:fetch:)`` are written to the store.
+    ///
+    /// - Parameters:
+    ///   - configuration: Default stale time and cache capacity.
+    ///   - persistence: Where and how values are kept between launches.
+    ///   - now: Clock used for staleness and record age. Injectable so tests do not sleep.
+    public init(
+        configuration: QueryConfiguration = QueryConfiguration(),
+        persistence: QueryPersistence,
+        now: @escaping @Sendable () -> Date = Date.init
+    ) {
+        self.configuration = configuration
+        self.now = now
+        self.persistence = persistence
     }
 
     // MARK: - Reading
@@ -89,6 +119,44 @@ public actor QueryClient {
         }
 
         return try await awaitFetch(key, fetch: fetch)
+    }
+
+    /// The value for a key, kept across launches.
+    ///
+    /// Behaves like ``value(for:staleTime:fetch:)``, and also writes every value it fetches to the
+    /// client's ``QueryPersistence`` store. The first read after a launch restores the key from the
+    /// store before deciding whether to fetch: a restored value is as old as when it was saved, so a
+    /// stale one is returned at once and refreshed in the background, and the screen never starts
+    /// empty.
+    ///
+    /// A record written under another schema version or for another type, older than the maximum
+    /// age, or that cannot be decoded is discarded and removed from the store.
+    ///
+    /// Without a persistence configuration this is exactly ``value(for:staleTime:fetch:)``.
+    @discardableResult
+    public func persistedValue<Value: Codable & Sendable>(
+        for key: QueryKey,
+        staleTime: TimeInterval? = nil,
+        fetch: @escaping @Sendable () async throws -> Value
+    ) async throws -> Value {
+        if let persistence {
+            entries[key, default: newEntry()].persist = Persister(
+                typeName: String(reflecting: Value.self),
+                encode: { value in (value as? Value).flatMap { try? JSONEncoder().encode($0) } }
+            )
+            if entries[key]?.value == nil, entries[key]?.task == nil {
+                await restore(key, as: Value.self, from: persistence)
+            }
+        }
+        return try await value(for: key, staleTime: staleTime, fetch: fetch)
+    }
+
+    /// Waits until every store write made so far has finished.
+    ///
+    /// Writes happen in the background. Call this before the process may be suspended for good — on
+    /// `scenePhase` becoming `.background`, say — or in a test before reading the store.
+    public func flushPersistence() async {
+        await pendingWrite?.value
     }
 
     /// The cached value for a key, without fetching anything.
@@ -167,11 +235,15 @@ public actor QueryClient {
         entry.lastAccess = now()
         entries[key] = entry
         publish(key)
+        persist(key)
         evictIfNeeded()
     }
 
     /// Removes a key's value, leaving any subscribers to see an empty state.
+    ///
+    /// With persistence, the key's record is removed from the store too.
     public func remove(_ key: QueryKey) {
+        enqueueWrite(for: key) { try await $0.remove(key) }
         guard var entry = entries[key] else { return }
         entry.value = nil
         entry.valueTypeName = nil
@@ -201,7 +273,11 @@ public actor QueryClient {
     }
 
     /// Drops everything.
+    ///
+    /// With persistence, the store is emptied too — call this on sign-out, so the next user does not
+    /// launch into the previous one's data.
     public func removeAll() {
+        enqueueWrite(for: nil) { try await $0.removeAll() }
         for (key, entry) in entries {
             entry.task?.cancel()
             entries[key]?.value = nil
@@ -320,6 +396,7 @@ public actor QueryClient {
         entry.lastAccess = now()
         entries[key] = entry
         publish(key)
+        persist(key)
         evictIfNeeded()
     }
 
@@ -350,6 +427,92 @@ public actor QueryClient {
             }
         }
         entries[key]?.task = task
+    }
+
+    // MARK: - Persistence
+
+    /// Puts a key's stored value back in the cache, if there is one worth using.
+    private func restore<Value: Codable & Sendable>(
+        _ key: QueryKey,
+        as type: Value.Type,
+        from persistence: QueryPersistence
+    ) async {
+        let record: PersistedQueryRecord?
+        do {
+            record = try await persistence.store.record(for: key)
+        } catch {
+            discard(key, reason: .unreadable, in: persistence)
+            return
+        }
+        guard let record else { return }
+
+        if record.version != persistence.version {
+            return discard(key, reason: .versionMismatch, in: persistence)
+        }
+        if record.typeName != String(reflecting: Value.self) {
+            return discard(key, reason: .typeMismatch, in: persistence)
+        }
+        let age = now().timeIntervalSince(record.savedAt)
+        if age > persistence.maximumAge {
+            return discard(key, reason: .expired, in: persistence)
+        }
+        guard let value = try? JSONDecoder().decode(Value.self, from: record.payload) else {
+            return discard(key, reason: .unreadable, in: persistence)
+        }
+        // Another caller may have filled the key while the store was being read; what is in memory
+        // is newer than anything on disk.
+        guard entries[key]?.value == nil else { return }
+
+        var entry = entries[key] ?? newEntry()
+        entry.value = value
+        entry.valueTypeName = String(describing: Value.self)
+        entry.updatedAt = record.savedAt
+        entry.isStale = false
+        entries[key] = entry
+        publish(key)
+        persistence.onEvent?(.restored(key: key, age: age))
+    }
+
+    private func discard(_ key: QueryKey, reason: QueryPersistenceEvent.DiscardReason, in persistence: QueryPersistence) {
+        persistence.onEvent?(.discarded(key: key, reason: reason))
+        enqueueWrite(for: key) { try await $0.remove(key) }
+    }
+
+    /// Writes a key's current value, when the key is one whose values are kept.
+    private func persist(_ key: QueryKey) {
+        guard let persistence, let entry = entries[key], let persister = entry.persist,
+              let value = entry.value, let updatedAt = entry.updatedAt else { return }
+        guard let payload = persister.encode(value) else {
+            persistence.onEvent?(.writeFailed(key: key))
+            return
+        }
+        let record = PersistedQueryRecord(
+            key: key.components,
+            typeName: persister.typeName,
+            version: persistence.version,
+            savedAt: updatedAt,
+            payload: payload
+        )
+        enqueueWrite(for: key) { try await $0.save(record, for: key) }
+    }
+
+    /// Runs a store operation after every one enqueued before it.
+    private func enqueueWrite(
+        for key: QueryKey?,
+        _ operation: @escaping @Sendable (any QueryPersistenceStore) async throws -> Void
+    ) {
+        guard let persistence else { return }
+        let previous = pendingWrite
+        pendingWrite = Task {
+            await previous?.value
+            do {
+                try await operation(persistence.store)
+            } catch {
+                if let key {
+                    persistence.onEvent?(.writeFailed(key: key))
+                }
+            }
+        }
     }
 
     // MARK: - Entry maintenance

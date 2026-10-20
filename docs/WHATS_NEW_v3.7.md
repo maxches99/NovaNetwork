@@ -49,3 +49,39 @@ request and the delay waited:
 A hedge does not take a second slot from `AdaptiveConcurrencyLimiter`: the budget bounds the extra
 load, and a second permit could deadlock a limit of one. Streams, transfers, and WebSockets are never
 hedged.
+
+## The query cache survives a relaunch
+
+`QueryClient` kept server state in memory only, so every cold start began with empty screens until
+the first fetch came back. It can now keep values on disk and put them back on screen the moment the
+app launches:
+
+```swift
+let queries = QueryClient(
+    persistence: QueryPersistence(
+        store: try FileQueryPersistenceStore.inCachesDirectory(),
+        version: 1,                       // bump after a model change
+        maximumAge: 7 * 24 * 60 * 60,     // older records are not shown
+        onEvent: { print($0) }            // restored / discarded / writeFailed
+    )
+)
+let feed: Feed = try await queries.persistedValue(for: "feed") { try await api.feed() }
+```
+
+- **Per query, not per client.** Only `Codable` values read through `persistedValue(for:)` are
+  written. `value(for:)` never touches the store, so nothing lands on disk that you did not ask for.
+- **Lazy restore.** A key is read from the store the first time it is asked for after launch. Its
+  age is the time it was saved, and the usual `staleTime` decides: a fresh value is returned with no
+  fetch, a stale one is returned at once and refreshed in the background.
+- **Distrust by default.** A record written under another `version`, for another type
+  (`String(reflecting:)`, so module-qualified), older than `maximumAge`, or that fails to decode is
+  discarded and deleted. `onEvent` receives `.discarded(key:reason:)` with the reason.
+- **Never a guess.** Optimistic values from `mutate` are not written. `setValue` is.
+- **Sign-out.** `remove(_:)` and `removeAll()` remove from the store too.
+- **Ordered writes.** Writes run in the background, one at a time, in the order they were made.
+  `flushPersistence()` waits for them, for `scenePhase == .background` or a test.
+- **Stores.** `FileQueryPersistenceStore` keeps one atomically written JSON file per key;
+  `InMemoryQueryPersistenceStore` is for previews and tests. Anything else — encryption, an app
+  group — is a `QueryPersistenceStore` of your own.
+
+A store that refuses writes reports `.writeFailed(key:)` and never fails the query.

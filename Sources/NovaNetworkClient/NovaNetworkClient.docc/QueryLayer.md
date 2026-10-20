@@ -105,6 +105,24 @@ normal.
 The cache holds 100 entries by default and evicts the least recently used entry **that nobody is
 subscribed to**, so a screen's data cannot disappear from under it.
 
+## A warm start (3.7)
+
+A screen that showed data yesterday can show it again the moment the app launches, marked stale and
+refreshed behind it:
+
+```swift
+let queries = QueryClient(
+    persistence: QueryPersistence(store: try FileQueryPersistenceStore.inCachesDirectory(), version: 1)
+)
+let feed: Feed = try await queries.persistedValue(for: "feed") { try await api.feed() }
+```
+
+Only queries read through `persistedValue(for:)` are written, and only `Codable` values. A key is
+restored the first time it is read after launch; a record written under another `version`, for
+another type, older than `maximumAge`, or that fails to decode is discarded, and
+`QueryPersistence.onEvent` says which. Optimistic values are never written. `removeAll()` empties
+the store too — call it on sign-out.
+
 ## If you already have a local store
 
 `QueryClient` caches server state **you do not persist**. When SwiftData, Core Data, or GRDB already
@@ -121,8 +139,9 @@ screens your store does not cover — a search, a feed, anything refetched rathe
 - **A replacement for `NetworkClient`.** It sits above and calls it.
 - **A normalized entity cache.** Values are stored by key, not merged into a graph. Normalization is
   a different product with different failure modes.
-- **Persistence.** The cache is in memory. Durable writes belong either to the offline queue or to
-  your own store — <doc:OfflineFirst> says which.
+- **Durable storage.** `persistedValue` is a warm start for screens, which the system may clear with
+  the caches directory. Durable writes belong either to the offline queue or to your own store —
+  <doc:OfflineFirst> says which.
 - **A view framework.** One observable model is provided; layout, navigation, and error presentation
   belong to the app.
 
@@ -131,6 +150,8 @@ screens your store does not cover — a search, a feed, anything refetched rathe
 `QueryClient` holds everything; `QueryKey` identifies it; `QueryState` is what a screen renders.
 `QueryConfiguration` sets staleness and capacity, `QueryError` reports a key read as the wrong type,
 `PagedQuery` and `QueryPage` handle lists, and `ObservableQuery` bridges to SwiftUI.
+`QueryPersistence`, `QueryPersistenceStore`, `FileQueryPersistenceStore`, and
+`InMemoryQueryPersistenceStore` keep values across launches.
 
 They live in the `NovaNetworkQuery` module.
 

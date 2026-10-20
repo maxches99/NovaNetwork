@@ -14,6 +14,10 @@ convention; not every one is a tagged release — see [Releases](#releases).
     an `Idempotency-Key`) a second time once it has run longer than the host's recent p95, takes the
     first success, and cancels the other — within a budget of 5% of eligible requests.
     `NetworkTelemetryHooks.onRequestHedged` reports `fired`, `won`, and `budget_exhausted`.
+  - *The query cache survives a relaunch.* `QueryClient(persistence:)` with
+    `persistedValue(for:)` writes `Codable` values to a `FileQueryPersistenceStore` and restores
+    them on the first read after launch, discarding records from another schema version or type,
+    or older than `maximumAge`. Optimistic values are never written; `removeAll()` empties the store.
 
 - [3.6](docs/WHATS_NEW_v3.6.md) — **A WebSocket reconnect no longer loses what happened while it was
   down.** Re-sent subscriptions used to start from "now". With an `eventResume` policy,

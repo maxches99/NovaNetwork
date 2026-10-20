@@ -764,8 +764,24 @@ let feed = PagedQuery<Post, String>(key: "feed", client: queries) { cursor in
 let posts = try await feed.loadNextPage()   // everything so far, not just the new page
 ```
 
-**Not included:** a normalized entity cache (values are stored by key, not merged into a graph) and
-persistence (the offline queue remains the durable path for writes).
+### A warm start (v3.7)
+
+```swift
+let queries = QueryClient(
+    persistence: QueryPersistence(store: try FileQueryPersistenceStore.inCachesDirectory(), version: 1)
+)
+let feed: Feed = try await queries.persistedValue(for: "feed") { try await api.feed() }
+
+await queries.removeAll()   // on sign-out: also empties the store
+```
+
+After a relaunch the first read restores the key from disk: a fresh value is returned with no fetch,
+a stale one is returned at once and refreshed behind it. Only `Codable` values read through
+`persistedValue` are written; optimistic values never are. Bump `version` after a model change and
+every old record is discarded.
+
+**Not included:** a normalized entity cache (values are stored by key, not merged into a graph).
+The offline queue remains the durable path for writes.
 
 A runnable demo is in [`Examples/Query`](Examples/Query).
 

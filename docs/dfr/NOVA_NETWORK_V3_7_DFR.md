@@ -186,3 +186,130 @@ Negative tests: a `POST` without a key is never hedged (T-18.5); a hedge that fa
 
 E2E: not applicable. A hedge needs a request that is reliably slower than the delay, which no
 public API provides on demand, and the E2E policy forbids a fake one.
+
+---
+
+## B. Persisting the query cache across launches
+
+### B.1 Goal
+
+A screen that showed data yesterday shows it again the moment the app launches, marked stale and
+refreshed in the background, instead of a spinner until the network answers.
+
+### B.2 User value
+
+`QueryClient` keeps server state in memory only. On a cold start every screen is empty until its
+first fetch returns — on a subway platform that is the whole session. Apps that want a warm start
+write a second cache next to the query layer, and the two disagree about what is current.
+
+### B.3 Scope split
+
+- MVP / required for 3.7:
+  - opt-in `QueryPersistence` on `QueryClient`, holding a store, a schema version, and a maximum age;
+  - an explicit `persistedValue(for:...)` for `Codable` values — only queries that ask are written;
+  - restoring a key lazily, the first time it is read after launch;
+  - a file store (one file per key, atomic writes) and an in-memory store for previews and tests;
+  - removing a key or everything removes it from the store too (sign-out);
+  - events for restored, discarded (with the reason), and failed writes.
+- Nice-to-have after MVP:
+  - restoring every key eagerly at launch;
+  - encrypting the store (the app can pass its own store today).
+
+### B.4 Non-goals
+
+- Persisting values that are not `Codable`, or queries read through `value(for:)`. Persisting is a
+  decision per query, because a cache on disk outlives the session that filled it.
+- Persisting optimistic values. They are a guess about a mutation's outcome; a crash before the
+  mutation finishes would resurrect the guess as fact.
+- Replacing a database. This is a warm start for screens, not offline storage of record.
+
+### B.5 Risks and mitigations
+
+- **A model changes shape between releases.** Decoding fails, or worse, succeeds wrongly. Records
+  carry the schema version and the value's type name; either differing discards the record, and a
+  record that fails to decode is discarded too. Bumping `version` invalidates everything.
+- **Another user's data after sign-out.** `removeAll()` clears the store, asserted; the README's
+  sign-out example calls it.
+- **Out-of-order writes leave an older value on disk.** All writes from one client go through one
+  serial chain in call order, asserted.
+- **A full disk or unwritable directory.** Writes never throw into the query; they are reported as
+  `writeFailed` and the in-memory value is unaffected.
+
+### B.6 Requirements
+
+#### Functional (FR)
+
+- **FR-QPERSIST-1** `QueryClient(configuration:persistence:now:)`; `persistence` is `nil` by default,
+  and with `nil` nothing is read or written.
+- **FR-QPERSIST-2** `persistedValue(for:staleTime:fetch:)` behaves like `value(for:staleTime:fetch:)`
+  and additionally writes each fetched value to the store.
+- **FR-QPERSIST-3** When `persistedValue` finds nothing in memory, it restores the key from the store
+  before deciding whether to fetch. A restored value's age is the time it was saved; it follows the
+  same fresh/stale rules as any other value, so a stale one is returned at once and refreshed.
+- **FR-QPERSIST-4** A record is discarded, and removed from the store, when its schema version or
+  type name differs from the reader's, when it is older than `maximumAge`, or when it cannot be
+  decoded.
+- **FR-QPERSIST-5** `setValue` on a key read through `persistedValue` writes the value; optimistic
+  values from `mutate` are never written.
+- **FR-QPERSIST-6** `remove(_:)` removes the key from the store; `removeAll()` empties it.
+- **FR-QPERSIST-7** `FileQueryPersistenceStore` keeps one file per key under a directory, written
+  atomically; `InMemoryQueryPersistenceStore` keeps records in memory.
+- **FR-QPERSIST-8** Writes from one client reach the store in the order they were made.
+
+#### Edge cases (EC)
+
+- **EC-QPERSIST-1** A key with nothing stored fetches exactly as without persistence.
+- **EC-QPERSIST-2** A key already in memory is never overwritten by a restore.
+- **EC-QPERSIST-3** A store that throws on write leaves the query's result and in-memory state intact.
+- **EC-QPERSIST-4** Two keys whose file names would collide are told apart by the key stored inside
+  the record.
+
+#### Analytics (AR)
+
+- **AR-QPERSIST-1** `QueryPersistence.onEvent` receives `.restored(key:age:)` when a record is used.
+- **AR-QPERSIST-2** `.discarded(key:reason:)` with `versionMismatch`, `typeMismatch`, `expired`, or
+  `unreadable`; no `restored` for that key.
+- **AR-QPERSIST-3** `.writeFailed(key:)` when the store throws.
+
+### B.7 State machine
+
+Per key, on the first `persistedValue` read after launch:
+
+| In memory | In store | Result | Report |
+|---|---|---|---|
+| value | — | in-memory rules, store untouched | — |
+| none | none | fetch | — |
+| none | valid, fresh | return it, no fetch | restored |
+| none | valid, stale | return it, fetch in background | restored |
+| none | wrong version / type, expired, unreadable | delete record, fetch | discarded(reason) |
+
+### B.8 Engineering notes
+
+`NovaNetworkQuery` depends on Foundation alone, so the file store names files with a 64-bit FNV-1a
+hash of the key rather than SHA-256, and stores the key inside the record to rule out a collision.
+
+Restore is lazy because a launch should not decode every screen the user has ever opened; the cost
+lands on the first read of each key, where a warm value is what the read wants anyway.
+
+The type name check uses `String(reflecting:)`, which includes the module, so two `User` types in two
+modules do not read each other's records.
+
+### B.9 Test matrix
+
+| Requirement ID | Test IDs | Type | Owner |
+|---|---|---|---|
+| FR-QPERSIST-2, FR-QPERSIST-3, AR-QPERSIST-1 | T-19.1 | unit | Engineering |
+| FR-QPERSIST-3 | T-19.2 | unit | Engineering |
+| FR-QPERSIST-4, AR-QPERSIST-2 | T-19.3 | unit | Engineering |
+| FR-QPERSIST-5 | T-19.4 | unit | Engineering |
+| FR-QPERSIST-6 | T-19.5 | unit | Engineering |
+| FR-QPERSIST-7, EC-QPERSIST-4 | T-19.6 | unit | Engineering |
+| FR-QPERSIST-8 | T-19.7 | unit | Engineering |
+| EC-QPERSIST-3, AR-QPERSIST-3 | T-19.8 | unit | Engineering |
+| EC-QPERSIST-1, EC-QPERSIST-2 | T-19.9 | unit | Engineering |
+| FR-QPERSIST-1 (regression) | T-19.10 | unit | Engineering |
+
+Negative tests: an optimistic value is not on disk after a crash-equivalent (a new client on the same
+store) (T-19.4); each discard reason produces no `restored` (T-19.3).
+
+E2E: not applicable — nothing here touches the network.
