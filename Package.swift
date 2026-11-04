@@ -15,6 +15,7 @@ let package = Package(
         .library(name: "NovaNetworkCassette", targets: ["NovaNetworkCassette"]),
         .library(name: "NovaNetworkAuth", targets: ["NovaNetworkAuth"]),
         .library(name: "NovaNetworkQuery", targets: ["NovaNetworkQuery"]),
+        .library(name: "NovaNetworkGraphQL", targets: ["NovaNetworkGraphQL"]),
         .library(name: "NovaNetworkOpenAPI", targets: ["NovaNetworkOpenAPI"]),
         .library(name: "NovaNetworkDiagnostics", targets: ["NovaNetworkDiagnostics"]),
         .executable(name: "nova-openapi", targets: ["NovaNetworkOpenAPIGenerator"]),
@@ -80,7 +81,10 @@ let package = Package(
             path: "Sources/NovaNetworkMacros"
         ),
         .target(
+            // Core only for `NetworkMiddleware.openAPIContract`: the transport-neutral layer that
+            // generated code already imports.
             name: "NovaNetworkOpenAPI",
+            dependencies: ["NovaNetworkCore"],
             path: "Sources/NovaNetworkOpenAPI"
         ),
         .executableTarget(
@@ -124,6 +128,13 @@ let package = Package(
             // to require the HTTP client.
             name: "NovaNetworkQuery",
             path: "Sources/NovaNetworkQuery"
+        ),
+        .target(
+            // A GraphQL operation is an ordinary request to the client, so it gets coalescing,
+            // retries, hedging, and auth refresh without a second network stack.
+            name: "NovaNetworkGraphQL",
+            dependencies: ["NovaNetworkClient"],
+            path: "Sources/NovaNetworkGraphQL"
         ),
         .target(
             name: "NovaNetworkClientTestSupport",
@@ -173,6 +184,11 @@ let package = Package(
             name: "NovaNetworkQueryTests",
             dependencies: ["NovaNetworkQuery", "NovaNetworkClient"],
             path: "Tests/NovaNetworkQueryTests"
+        ),
+        .testTarget(
+            name: "NovaNetworkGraphQLTests",
+            dependencies: ["NovaNetworkGraphQL"],
+            path: "Tests/NovaNetworkGraphQLTests"
         ),
         .testTarget(
             name: "NovaNetworkOpenAPITests",

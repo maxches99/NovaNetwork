@@ -142,6 +142,12 @@ final class DemoSession {
         lastAction = "Cleared the recorder"
     }
 
+    /// Sends a recorded request again, the way the panel's Replay button does.
+    func replay(_ record: RequestDiagnostic) async {
+        _ = try? await client.replay(record)
+        await refresh()
+    }
+
     /// Writes a HAR next to the app's documents, the way a support build would.
     func exportHAR() async -> String {
         guard let data = try? await recorder.exportHAR() else { return "Export failed" }

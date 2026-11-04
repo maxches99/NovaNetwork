@@ -41,6 +41,7 @@ When multiple callers ask for the same resource at the same time, only one under
 - [NovaNetwork v3.4 DFR](docs/dfr/NOVA_NETWORK_V3_4_DFR.md)
 - [NovaNetwork v3.5 DFR](docs/dfr/NOVA_NETWORK_V3_5_DFR.md)
 - [NovaNetwork v3.6 DFR](docs/dfr/NOVA_NETWORK_V3_6_DFR.md)
+- [NovaNetwork v3.7 DFR](docs/dfr/NOVA_NETWORK_V3_7_DFR.md)
 - [v1.19 Traceability Pack](docs/TRACEABILITY_PACK_v1.19.md)
 - [v2.0 Traceability Pack](docs/TRACEABILITY_PACK_v2.0.md)
 - [v2.1 Traceability Pack](docs/TRACEABILITY_PACK_v2.1.md)
@@ -55,6 +56,7 @@ When multiple callers ask for the same resource at the same time, only one under
 - [v3.4 Traceability Pack](docs/TRACEABILITY_PACK_v3.4.md)
 - [v3.5 Traceability Pack](docs/TRACEABILITY_PACK_v3.5.md)
 - [v3.6 Traceability Pack](docs/TRACEABILITY_PACK_v3.6.md)
+- [v3.7 Traceability Pack](docs/TRACEABILITY_PACK_v3.7.md)
 
 ## Product Delivery Templates
 
@@ -147,7 +149,14 @@ Generating endpoints from an OpenAPI document needs neither the trait nor the ma
   `stale-if-error`, and safe `Vary: *` handling.
 - Query layer (`NovaNetworkQuery`): server state by key for the screens that render it, with
   stale-while-revalidate reads, shared in-flight fetches, subscriptions, optimistic mutations with
-  rollback, hierarchical invalidation, and paged queries.
+  rollback, hierarchical invalidation, and paged queries; values can be kept across launches (v3.7).
+- GraphQL (`NovaNetworkGraphQL`, v3.7): typed operations through `NetworkClient`, partial results
+  kept beside their errors, automatic persisted queries, and queries over `GET`.
+- Hedged requests (v3.7): a slow, repeatable request is sent a second time within a budget, and the
+  first answer wins.
+- OpenAPI contract checks (v3.7): real responses compared with the spec, with a JSON pointer to each
+  difference.
+- Request body compression (v3.7): gzip or deflate for the hosts that accept it.
 - Coalesces concurrent requests by stable fingerprint key.
 - Optional short-lived in-memory response cache (`cacheFirst`, `staleWhileRevalidate`).
 - Optional pluggable response cache (`MemoryResponseCache`, `DiskResponseCache`, custom `ResponseCache`).
@@ -450,6 +459,31 @@ guessed at. Credentials from `securitySchemes` never reach generated code.
 A complete worked example — spec, checked-in output, and a runnable program — is in
 [`Examples/OpenAPIPetstore`](Examples/OpenAPIPetstore).
 
+### Checking real responses against the spec (v3.7)
+
+The spec the code was generated from can also check what the server actually sends:
+
+```swift
+import NovaNetworkOpenAPI
+
+let contract = try OpenAPIContract(specText: String(contentsOf: specURL, encoding: .utf8))
+configuration.addMiddleware(
+    .openAPIContract(contract, sampleRate: 0.05) { report in
+        for violation in report.violations {
+            logger.warning("\(report.method) \(report.operationPath ?? report.path) \(violation)")
+            // breaking: /id: expected integer, got string
+            // drift: body: field 'color' is not in the spec
+        }
+    }
+)
+```
+
+*Breaking* violations would fail a decode or mean wrong data — a changed type, a missing `required`
+field, `null` where it is not allowed, an unknown `enum` value, no matching `oneOf` member. *Drift*
+is what the spec does not mention: an extra field, a status code, an operation. Each distinct
+violation is reported once; `failOnBreaking: true` turns a breaking one into an error for debug
+builds and tests. Only successful JSON responses are checked.
+
 ## Record and Replay (v2.12)
 
 Capture real traffic once, replay it forever. A cassette is a fixture with the fidelity of the real
@@ -501,6 +535,25 @@ re-saving an unchanged recording produces identical bytes and a real change show
 `NovaNetworkCassette` is its own product depending only on `NovaNetworkCore`, so a preview or demo
 build links it without a test-support module. Only completed HTTP exchanges are recorded — a
 throwing transport is not an exchange — and streaming, SSE, and managed transfers are out of scope.
+
+### A cassette from a HAR (v3.7)
+
+A HAR attached to a bug report — from `HARExporter`, Safari, Chrome, Charles, or Proxyman — becomes a
+cassette, so the responses someone else saw replay in a test:
+
+```swift
+let conversion = try Cassette.fromHAR(
+    Data(contentsOf: harURL),
+    include: { _, url in url.host == "api.example.com" }   // a browser HAR holds every image too
+)
+try conversion.cassette.write(to: cassetteURL)
+for entry in conversion.skipped { print(entry.index, entry.url ?? "", entry.reason) }
+```
+
+Redaction runs during conversion, because browsers export cookies and tokens verbatim. Entries that
+would not replay faithfully — aborted, or with a body the HAR kept only the size of, or truncated —
+are skipped and listed. `Content-Encoding`, `Content-Length`, and HTTP/2 pseudo-headers are dropped:
+HAR stores the decoded body they no longer describe.
 
 A runnable end-to-end demo is in [`Examples/Cassette`](Examples/Cassette).
 
@@ -594,6 +647,25 @@ await recorder.load(try HARImporter().import(Data(contentsOf: url)))
 
 [`Inspector`](Inspector) is a macOS app built on those two lines: drop a HAR on it and read it with
 the same panel a live app embeds.
+
+### Copy as cURL, and replay (v3.7)
+
+```swift
+print(record.curlCommand())
+// curl -X 'POST' 'https://api.example.com/items' \
+//   -H 'Authorization: <redacted>' \
+//   -H 'Content-Type: application/json' \
+//   --data-raw '{"name":"lamp"}'
+
+try await client.replay(record)   // uncoalesced, past the cache; middleware adds fresh credentials
+
+NetworkDiagnosticsView(recorder: recorder, onReplay: { try? await client.replay($0) })
+```
+
+Both start from the record, which was redacted when it was made: a redacted header shows the
+placeholder in the command, and is left out of a replay so the client's middleware supplies a fresh
+one. A body that was not captured, or was truncated, makes replay fail with `ReplayUnavailable`
+rather than send something else. The panel's request detail has both buttons.
 
 ## Authentication (v2.14)
 
@@ -762,10 +834,81 @@ let feed = PagedQuery<Post, String>(key: "feed", client: queries) { cursor in
 let posts = try await feed.loadNextPage()   // everything so far, not just the new page
 ```
 
-**Not included:** a normalized entity cache (values are stored by key, not merged into a graph) and
-persistence (the offline queue remains the durable path for writes).
+### Prefetching rows as they appear (v3.7)
+
+```swift
+List(posts) { post in
+    PostRow(post)
+        .onAppear { Task { await queries.prefetchWhileVisible(QueryKey("post", post.id)) {
+            try await api.postDetail(post.id)
+        } } }
+        .onDisappear { Task { await queries.cancelPrefetch(QueryKey("post", post.id)) } }
+}
+```
+
+At most `QueryConfiguration.maximumConcurrentPrefetches` (4) run at once; the rest wait, most recent
+first. A row that leaves the screen is dropped from the queue, or its fetch cancelled — unless a
+read or a subscriber is already waiting on it. `prefetchEvents()` reports each decision.
+
+### A warm start (v3.7)
+
+```swift
+let queries = QueryClient(
+    persistence: QueryPersistence(store: try FileQueryPersistenceStore.inCachesDirectory(), version: 1)
+)
+let feed: Feed = try await queries.persistedValue(for: "feed") { try await api.feed() }
+
+await queries.removeAll()   // on sign-out: also empties the store
+```
+
+After a relaunch the first read restores the key from disk: a fresh value is returned with no fetch,
+a stale one is returned at once and refreshed behind it. Only `Codable` values read through
+`persistedValue` are written; optimistic values never are. Bump `version` after a model change and
+every old record is discarded.
+
+**Not included:** a normalized entity cache (values are stored by key, not merged into a graph).
+The offline queue remains the durable path for writes.
 
 A runnable demo is in [`Examples/Query`](Examples/Query).
+
+## GraphQL (v3.7)
+
+A GraphQL operation is an ordinary request to `NetworkClient`, so coalescing, retries, hedging, auth
+refresh, and diagnostics all apply — without a second network stack.
+
+```swift
+import NovaNetworkGraphQL
+
+struct CountryQuery: GraphQLOperation {
+    static let document = "query Country($code: ID!) { country(code: $code) { name capital } }"
+    static let operationName: String? = "Country"
+
+    struct Variables: Encodable, Sendable { let code: String }
+    struct Data: Decodable, Sendable {
+        struct Country: Decodable, Sendable { let name: String; let capital: String? }
+        let country: Country?
+    }
+    let variables: Variables
+}
+
+let graphQL = GraphQLClient(
+    endpoint: URL(string: "https://api.example.com/graphql")!,
+    client: client,
+    persistedQueries: .automatic   // send the hash; the document only when the server asks
+)
+let data = try await graphQL.data(for: CountryQuery(variables: .init(code: "NO")))
+```
+
+`data(for:)` throws `GraphQLResponseError` — with the errors *and* whatever partial data came back.
+`response(for:)` returns both without throwing, for a screen that can render part of itself. Errors
+carry `message`, `path`, `locations`, and `extensions` (`error.code` reads `extensions.code`).
+
+Identical concurrent queries share one request; mutations (`static let kind = .mutation`) never do.
+`usesGETForQueries: true` sends queries as `GET` so the HTTP cache or a CDN can answer them. A 4xx
+whose body is a GraphQL response is returned as one. A server that does not support persisted
+queries turns them off for that client after one round trip.
+
+**Not included:** subscriptions, a normalized cache, and code generation from `.graphql` files.
 
 ## Preset Quick Start (v1.15)
 
@@ -1072,6 +1215,26 @@ let client = NetworkClient(
     middlewares: [authMiddleware]
 )
 ```
+
+### Compressing request bodies (v3.7)
+
+`URLSession` decompresses responses; nothing compressed request bodies. For a server that accepts
+compressed bodies:
+
+```swift
+configuration.middlewares = [
+    .compressingRequestBodies(
+        RequestCompressionPolicy(hosts: ["sync.example.com"]),   // gzip, bodies ≥ 1 KB
+        onEvent: { print($0) }                                   // compressed / skipped(reason)
+    ),
+    signingMiddleware,   // after compression, so the signature covers the bytes sent
+]
+```
+
+Hosts are named because most servers do not decompress request bodies unless configured to;
+`.anyHost()` is the explicit alternative. Only JSON, text, XML, and form bodies are compressed, only
+when the result is smaller, and never a request that already has a `Content-Encoding`. `.deflate`
+is available too. On Linux, which has no compressor in Foundation, bodies are sent unchanged.
 
 ## Rate Limiting
 
@@ -1439,6 +1602,26 @@ let snapshot = await client.concurrencySnapshot()   // limit, in flight, waiting
 One limiter per client, not per host; a retrying request holds its slot while it waits out backoff;
 and every launch starts at `initialLimit`. Those are the known edges, listed in
 [What's New 3.2](docs/WHATS_NEW_v3.2.md).
+
+## Hedged Requests (v3.7)
+
+A retry starts after an attempt fails; most of a mobile p99 is requests that are not failing, just
+slow. A hedge sends a slow, repeatable request a second time and takes whichever answer comes first:
+
+```swift
+var configuration = NetworkClientConfiguration()
+configuration.hedging = HedgingPolicy(
+    delay: .percentile(0.95),   // p95 of recent latencies to the same host
+    maximumHedgeRatio: 0.05     // never hedge more than 5% of eligible requests
+)
+configuration.telemetryHooks = NetworkTelemetryHooks(
+    onRequestHedged: { print($0.type, $0.delayMilliseconds) }   // fired / won / budget_exhausted
+)
+```
+
+Only `GET`, `HEAD`, `OPTIONS`, and requests with an `Idempotency-Key` are hedged, unless
+`isEligible:` says otherwise. The loser is cancelled; a request that fails before the delay goes to
+the retry policy as before. Off by default. Details in [What's New 3.7](docs/WHATS_NEW_v3.7.md).
 
 ## Benchmark Baseline Check
 

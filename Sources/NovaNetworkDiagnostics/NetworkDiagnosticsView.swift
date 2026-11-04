@@ -1,5 +1,10 @@
 #if canImport(SwiftUI)
 import SwiftUI
+#if os(iOS)
+import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
 
 /// A panel showing what the client has been doing: live requests, a summary, and one request's
 /// timeline.
@@ -16,10 +21,13 @@ import SwiftUI
 public struct NetworkDiagnosticsView: View {
     private let recorder: DiagnosticsRecorder
     private let onExportHAR: (@Sendable (Data) -> Void)?
+    private let onReplay: (@Sendable (RequestDiagnostic) async -> Void)?
 
     @State private var state = DiagnosticsPanelState(records: [])
     @State private var timeline = DiagnosticsTimeline(records: [], now: Date())
     @State private var mode = Mode.list
+    /// What the last Replay did: sent, or why it could not be.
+    @State private var replayStatus: String?
 
     /// The two ways to read the same snapshot.
     private enum Mode: String, CaseIterable, Identifiable {
@@ -38,8 +46,24 @@ public struct NetworkDiagnosticsView: View {
     ///   - onExportHAR: Called with an exported HAR when the export button is used. Presenting a
     ///     share sheet or writing the file is left to the app, which knows where its files go.
     public init(recorder: DiagnosticsRecorder, onExportHAR: (@Sendable (Data) -> Void)? = nil) {
+        self.init(recorder: recorder, onExportHAR: onExportHAR, onReplay: nil)
+    }
+
+    /// Creates the panel with a Replay action on each request.
+    ///
+    /// - Parameters:
+    ///   - recorder: The recorder to read from.
+    ///   - onExportHAR: Called with an exported HAR when the export button is used.
+    ///   - onReplay: Sends a recorded request again — usually `{ try? await client.replay($0) }`.
+    ///     The panel refreshes when it returns, so the replay's own record appears.
+    public init(
+        recorder: DiagnosticsRecorder,
+        onExportHAR: (@Sendable (Data) -> Void)? = nil,
+        onReplay: (@Sendable (RequestDiagnostic) async -> Void)?
+    ) {
         self.recorder = recorder
         self.onExportHAR = onExportHAR
+        self.onReplay = onReplay
     }
 
     public var body: some View {
@@ -316,6 +340,32 @@ public struct NetworkDiagnosticsView: View {
 
             headerSection("Request headers", record.requestHeaders)
             headerSection("Response headers", record.responseHeaders)
+
+            Section("Share") {
+                #if os(iOS) || os(macOS)
+                Button("Copy as cURL", systemImage: "doc.on.doc") {
+                    Self.copyToPasteboard(record.curlCommand())
+                }
+                #endif
+                if let onReplay {
+                    Button("Replay \(record.method)", systemImage: "arrow.uturn.forward") {
+                        switch record.replayRequest() {
+                        case .success:
+                            replayStatus = "Sending…"
+                            Task {
+                                await onReplay(record)
+                                await refresh()
+                                replayStatus = "Sent again. The replay is at the top of the list."
+                            }
+                        case let .failure(problem):
+                            replayStatus = problem.description
+                        }
+                    }
+                    if let replayStatus {
+                        Text(replayStatus).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
         // The method alone does not identify the request when several share it.
         .navigationTitle("\(record.method) \(URL(string: record.url)?.path ?? record.url)")
@@ -332,6 +382,17 @@ public struct NetworkDiagnosticsView: View {
             }
         }
     }
+
+    #if os(iOS) || os(macOS)
+    private static func copyToPasteboard(_ text: String) {
+        #if os(iOS)
+        UIPasteboard.general.string = text
+        #else
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #endif
+    }
+    #endif
 
     private func color(for kind: DiagnosticsPanelState.StatusKind) -> Color {
         switch kind {

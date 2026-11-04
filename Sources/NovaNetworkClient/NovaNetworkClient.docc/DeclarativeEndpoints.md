@@ -206,6 +206,31 @@ comments, and a leading `---`. Anchors, aliases, tags, merge keys, and multi-doc
 **rejected with a located error** rather than guessed at — a generator that misreads a spec is worse
 than one that stops and says which line it stopped on.
 
+## Checking responses against the spec
+
+`OpenAPIContract` reads the same document and checks real responses against it, so drift between the
+server and its spec shows up from traffic instead of from a decode failure on a user's device:
+
+```swift
+import NovaNetworkOpenAPI
+
+let contract = try OpenAPIContract(specText: String(contentsOf: specURL, encoding: .utf8))
+configuration.addMiddleware(
+    .openAPIContract(contract, sampleRate: 0.05) { report in
+        for violation in report.violations {
+            logger.warning("\(report.method) \(report.operationPath ?? report.path) \(violation)")
+            // breaking: /id: expected integer, got string
+            // drift: body: field 'color' is not in the spec
+        }
+    }
+)
+```
+
+Violations are *breaking* (types, `required`, null, `enum`, `oneOf`/`anyOf`) or *drift* (fields,
+status codes, and operations the spec does not mention), each with a JSON pointer to the field. Each
+distinct violation is reported once per middleware; `failOnBreaking` throws `ContractViolationError`.
+Bounds, patterns, and formats are not checked.
+
 ## Writing a definition by hand
 
 Neither front end is required. ``EndpointDefinition`` is a normal protocol, and using the builder

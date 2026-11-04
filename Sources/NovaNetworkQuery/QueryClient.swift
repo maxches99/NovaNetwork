@@ -28,6 +28,16 @@ public actor QueryClient {
         var task: Task<any Sendable, any Error>?
         var refetch: (@Sendable () async throws -> any Sendable)?
         var subscribers: [UUID: @Sendable (Snapshot) -> Void] = [:]
+        /// Set once the key is read through `persistedValue`: how to write its value to the store.
+        var persist: Persister?
+        /// The running visibility prefetch for this key, while nobody else is waiting on it.
+        var prefetchID: UUID?
+    }
+
+    /// Turns a key's value into a record, for a key whose values are written to the store.
+    private struct Persister: Sendable {
+        let typeName: String
+        let encode: @Sendable (any Sendable) -> Data?
     }
 
     /// The type-erased state handed to subscribers, which each one casts to its own value type.
@@ -43,6 +53,14 @@ public actor QueryClient {
 
     private var entries: [QueryKey: Entry] = [:]
     private let now: @Sendable () -> Date
+    private let persistence: QueryPersistence?
+    /// The last store write, which the next one waits for, so writes land in the order they were made.
+    private var pendingWrite: Task<Void, Never>?
+    /// Keys waiting for a prefetch slot, oldest first.
+    private var prefetchQueue: [QueryKey] = []
+    /// Keys whose prefetch is running.
+    private var runningPrefetches: Set<QueryKey> = []
+    private var prefetchObservers: [UUID: AsyncStream<QueryPrefetchEvent>.Continuation] = [:]
 
     /// Creates a query client.
     ///
@@ -55,6 +73,25 @@ public actor QueryClient {
     ) {
         self.configuration = configuration
         self.now = now
+        self.persistence = nil
+    }
+
+    /// Creates a query client that keeps values across launches.
+    ///
+    /// Only queries read through ``persistedValue(for:staleTime:fetch:)`` are written to the store.
+    ///
+    /// - Parameters:
+    ///   - configuration: Default stale time and cache capacity.
+    ///   - persistence: Where and how values are kept between launches.
+    ///   - now: Clock used for staleness and record age. Injectable so tests do not sleep.
+    public init(
+        configuration: QueryConfiguration = QueryConfiguration(),
+        persistence: QueryPersistence,
+        now: @escaping @Sendable () -> Date = Date.init
+    ) {
+        self.configuration = configuration
+        self.now = now
+        self.persistence = persistence
     }
 
     // MARK: - Reading
@@ -77,6 +114,7 @@ public actor QueryClient {
     ) async throws -> Value {
         let window = staleTime ?? configuration.staleTime
         touch(key)
+        promote(key)
         entries[key, default: newEntry()].refetch = { try await fetch() }
 
         if let cached = try cachedValue(for: key, as: Value.self) {
@@ -89,6 +127,44 @@ public actor QueryClient {
         }
 
         return try await awaitFetch(key, fetch: fetch)
+    }
+
+    /// The value for a key, kept across launches.
+    ///
+    /// Behaves like ``value(for:staleTime:fetch:)``, and also writes every value it fetches to the
+    /// client's ``QueryPersistence`` store. The first read after a launch restores the key from the
+    /// store before deciding whether to fetch: a restored value is as old as when it was saved, so a
+    /// stale one is returned at once and refreshed in the background, and the screen never starts
+    /// empty.
+    ///
+    /// A record written under another schema version or for another type, older than the maximum
+    /// age, or that cannot be decoded is discarded and removed from the store.
+    ///
+    /// Without a persistence configuration this is exactly ``value(for:staleTime:fetch:)``.
+    @discardableResult
+    public func persistedValue<Value: Codable & Sendable>(
+        for key: QueryKey,
+        staleTime: TimeInterval? = nil,
+        fetch: @escaping @Sendable () async throws -> Value
+    ) async throws -> Value {
+        if let persistence {
+            entries[key, default: newEntry()].persist = Persister(
+                typeName: String(reflecting: Value.self),
+                encode: { value in (value as? Value).flatMap { try? JSONEncoder().encode($0) } }
+            )
+            if entries[key]?.value == nil, entries[key]?.task == nil {
+                await restore(key, as: Value.self, from: persistence)
+            }
+        }
+        return try await value(for: key, staleTime: staleTime, fetch: fetch)
+    }
+
+    /// Waits until every store write made so far has finished.
+    ///
+    /// Writes happen in the background. Call this before the process may be suspended for good — on
+    /// `scenePhase` becoming `.background`, say — or in a test before reading the store.
+    public func flushPersistence() async {
+        await pendingWrite?.value
     }
 
     /// The cached value for a key, without fetching anything.
@@ -112,6 +188,7 @@ public actor QueryClient {
         _ key: QueryKey,
         fetch: @escaping @Sendable () async throws -> Value
     ) async throws -> Value {
+        promote(key)
         entries[key, default: newEntry()].refetch = { try await fetch() }
         return try await awaitFetch(key, fetch: fetch)
     }
@@ -125,6 +202,146 @@ public actor QueryClient {
         guard !isFresh(key, within: staleTime ?? configuration.staleTime) else { return }
         entries[key, default: newEntry()].refetch = { try await fetch() }
         startFetch(key, fetch: fetch)
+    }
+
+    // MARK: - Prefetching what is about to be visible
+
+    /// Warms a key for a row coming into view, within a limit on how many such fetches run at once.
+    ///
+    /// Call it from `onAppear` and ``cancelPrefetch(_:)`` from `onDisappear`. A fresh key, or one
+    /// already being fetched, is left alone. Otherwise the key waits for one of
+    /// ``QueryConfiguration/maximumConcurrentPrefetches`` slots; waiting keys start most recent first,
+    /// because in a scrolling list the row that appeared last is the one nearest the user.
+    ///
+    /// A read of the key while it waits fetches it at once; a read while it runs waits for it, and
+    /// from then on cancelling the prefetch no longer cancels the fetch.
+    public func prefetchWhileVisible<Value: Sendable>(
+        _ key: QueryKey,
+        staleTime: TimeInterval? = nil,
+        fetch: @escaping @Sendable () async throws -> Value
+    ) {
+        if isFresh(key, within: staleTime ?? configuration.staleTime) {
+            emitPrefetch(.skippedFresh(key))
+            return
+        }
+        touch(key)
+        entries[key, default: newEntry()].refetch = { try await fetch() }
+        guard entries[key]?.task == nil, !prefetchQueue.contains(key) else { return }
+
+        prefetchQueue.append(key)
+        emitPrefetch(.queued(key))
+        startQueuedPrefetches()
+    }
+
+    /// Calls off a prefetch for a row that left the screen.
+    ///
+    /// A waiting prefetch is dropped. A running one is cancelled, and the key left as it was —
+    /// unless a read or a subscriber is waiting on it, in which case it finishes.
+    public func cancelPrefetch(_ key: QueryKey) {
+        if let index = prefetchQueue.firstIndex(of: key) {
+            prefetchQueue.remove(at: index)
+            emitPrefetch(.cancelled(key, wasRunning: false))
+            return
+        }
+        guard runningPrefetches.contains(key), let entry = entries[key], entry.prefetchID != nil,
+              entry.subscribers.isEmpty, let task = entry.task else { return }
+
+        entries[key]?.prefetchID = nil
+        entries[key]?.task = nil
+        entries[key]?.isLoading = false
+        runningPrefetches.remove(key)
+        task.cancel()
+        publish(key)
+        emitPrefetch(.cancelled(key, wasRunning: true))
+        startQueuedPrefetches()
+    }
+
+    /// Prefetch decisions as they happen, for diagnostics and tests.
+    public func prefetchEvents() -> AsyncStream<QueryPrefetchEvent> {
+        AsyncStream { continuation in
+            let id = UUID()
+            prefetchObservers[id] = continuation
+            continuation.onTermination = { [weak self] _ in
+                Task { await self?.removePrefetchObserver(id) }
+            }
+        }
+    }
+
+    /// How many visibility prefetches are running and waiting.
+    public func prefetchCounts() -> (running: Int, queued: Int) {
+        (runningPrefetches.count, prefetchQueue.count)
+    }
+
+    private func startQueuedPrefetches() {
+        while runningPrefetches.count < max(1, configuration.maximumConcurrentPrefetches),
+              let key = prefetchQueue.popLast() {
+            guard let refetch = entries[key]?.refetch, entries[key]?.task == nil else { continue }
+
+            let id = UUID()
+            runningPrefetches.insert(key)
+            entries[key]?.prefetchID = id
+            entries[key]?.isLoading = true
+            publish(key)
+            emitPrefetch(.started(key))
+
+            entries[key]?.task = Task<any Sendable, any Error> { [weak self] in
+                do {
+                    let value = try await refetch()
+                    await self?.finishPrefetch(key, id: id, value: value)
+                    return value
+                } catch {
+                    await self?.failPrefetch(key, id: id, error: error)
+                    throw error
+                }
+            }
+        }
+    }
+
+    private func finishPrefetch(_ key: QueryKey, id: UUID, value: any Sendable) {
+        guard runningPrefetches.contains(key), isCurrentPrefetch(key, id: id) else { return }
+        runningPrefetches.remove(key)
+        entries[key]?.prefetchID = nil
+        finishFetch(key, value: value, typeName: String(describing: Swift.type(of: value)))
+        emitPrefetch(.completed(key))
+        startQueuedPrefetches()
+    }
+
+    private func failPrefetch(_ key: QueryKey, id: UUID, error: any Error) {
+        guard runningPrefetches.contains(key), isCurrentPrefetch(key, id: id) else { return }
+        runningPrefetches.remove(key)
+        entries[key]?.prefetchID = nil
+        failFetch(key, error: error)
+        emitPrefetch(.failed(key))
+        startQueuedPrefetches()
+    }
+
+    /// Whether `id` is still the key's prefetch, or the prefetch was promoted to a fetch that a read
+    /// is waiting on — either way its result is wanted. A cancelled prefetch is neither.
+    private func isCurrentPrefetch(_ key: QueryKey, id: UUID) -> Bool {
+        let current = entries[key]?.prefetchID
+        return current == id || (current == nil && entries[key]?.task != nil)
+    }
+
+    /// Marks a key as wanted by a reader: a waiting prefetch is dropped so the read fetches at once,
+    /// and a running one can no longer be cancelled.
+    private func promote(_ key: QueryKey) {
+        if let index = prefetchQueue.firstIndex(of: key) {
+            prefetchQueue.remove(at: index)
+            emitPrefetch(.promoted(key))
+        } else if entries[key]?.prefetchID != nil {
+            entries[key]?.prefetchID = nil
+            emitPrefetch(.promoted(key))
+        }
+    }
+
+    private func emitPrefetch(_ event: QueryPrefetchEvent) {
+        for continuation in prefetchObservers.values {
+            continuation.yield(event)
+        }
+    }
+
+    private func removePrefetchObserver(_ id: UUID) {
+        prefetchObservers.removeValue(forKey: id)
     }
 
     // MARK: - Observing
@@ -167,11 +384,15 @@ public actor QueryClient {
         entry.lastAccess = now()
         entries[key] = entry
         publish(key)
+        persist(key)
         evictIfNeeded()
     }
 
     /// Removes a key's value, leaving any subscribers to see an empty state.
+    ///
+    /// With persistence, the key's record is removed from the store too.
     public func remove(_ key: QueryKey) {
+        enqueueWrite(for: key) { try await $0.remove(key) }
         guard var entry = entries[key] else { return }
         entry.value = nil
         entry.valueTypeName = nil
@@ -201,7 +422,14 @@ public actor QueryClient {
     }
 
     /// Drops everything.
+    ///
+    /// With persistence, the store is emptied too — call this on sign-out, so the next user does not
+    /// launch into the previous one's data.
     public func removeAll() {
+        enqueueWrite(for: nil) { try await $0.removeAll() }
+        // The tasks are cancelled below; their slots go with them.
+        prefetchQueue.removeAll()
+        runningPrefetches.removeAll()
         for (key, entry) in entries {
             entry.task?.cancel()
             entries[key]?.value = nil
@@ -320,6 +548,7 @@ public actor QueryClient {
         entry.lastAccess = now()
         entries[key] = entry
         publish(key)
+        persist(key)
         evictIfNeeded()
     }
 
@@ -350,6 +579,92 @@ public actor QueryClient {
             }
         }
         entries[key]?.task = task
+    }
+
+    // MARK: - Persistence
+
+    /// Puts a key's stored value back in the cache, if there is one worth using.
+    private func restore<Value: Codable & Sendable>(
+        _ key: QueryKey,
+        as type: Value.Type,
+        from persistence: QueryPersistence
+    ) async {
+        let record: PersistedQueryRecord?
+        do {
+            record = try await persistence.store.record(for: key)
+        } catch {
+            discard(key, reason: .unreadable, in: persistence)
+            return
+        }
+        guard let record else { return }
+
+        if record.version != persistence.version {
+            return discard(key, reason: .versionMismatch, in: persistence)
+        }
+        if record.typeName != String(reflecting: Value.self) {
+            return discard(key, reason: .typeMismatch, in: persistence)
+        }
+        let age = now().timeIntervalSince(record.savedAt)
+        if age > persistence.maximumAge {
+            return discard(key, reason: .expired, in: persistence)
+        }
+        guard let value = try? JSONDecoder().decode(Value.self, from: record.payload) else {
+            return discard(key, reason: .unreadable, in: persistence)
+        }
+        // Another caller may have filled the key while the store was being read; what is in memory
+        // is newer than anything on disk.
+        guard entries[key]?.value == nil else { return }
+
+        var entry = entries[key] ?? newEntry()
+        entry.value = value
+        entry.valueTypeName = String(describing: Value.self)
+        entry.updatedAt = record.savedAt
+        entry.isStale = false
+        entries[key] = entry
+        publish(key)
+        persistence.onEvent?(.restored(key: key, age: age))
+    }
+
+    private func discard(_ key: QueryKey, reason: QueryPersistenceEvent.DiscardReason, in persistence: QueryPersistence) {
+        persistence.onEvent?(.discarded(key: key, reason: reason))
+        enqueueWrite(for: key) { try await $0.remove(key) }
+    }
+
+    /// Writes a key's current value, when the key is one whose values are kept.
+    private func persist(_ key: QueryKey) {
+        guard let persistence, let entry = entries[key], let persister = entry.persist,
+              let value = entry.value, let updatedAt = entry.updatedAt else { return }
+        guard let payload = persister.encode(value) else {
+            persistence.onEvent?(.writeFailed(key: key))
+            return
+        }
+        let record = PersistedQueryRecord(
+            key: key.components,
+            typeName: persister.typeName,
+            version: persistence.version,
+            savedAt: updatedAt,
+            payload: payload
+        )
+        enqueueWrite(for: key) { try await $0.save(record, for: key) }
+    }
+
+    /// Runs a store operation after every one enqueued before it.
+    private func enqueueWrite(
+        for key: QueryKey?,
+        _ operation: @escaping @Sendable (any QueryPersistenceStore) async throws -> Void
+    ) {
+        guard let persistence else { return }
+        let previous = pendingWrite
+        pendingWrite = Task {
+            await previous?.value
+            do {
+                try await operation(persistence.store)
+            } catch {
+                if let key {
+                    persistence.onEvent?(.writeFailed(key: key))
+                }
+            }
+        }
     }
 
     // MARK: - Entry maintenance
